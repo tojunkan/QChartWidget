@@ -11,12 +11,11 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{3C608608-A336-4CC4-AD21-7A48D5BAA570}</ProjectGuid>
+    <ProjectGuid>{7395872D-3732-49E8-813E-B55123C7B5E1}</ProjectGuid>
     <Keyword>QtVS_v304</Keyword>
     <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">10.0</WindowsTargetPlatformVersion>
     <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
-    <ProjectName>QChartWidget</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
@@ -38,15 +37,13 @@
   </ImportGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
     <QtInstall>6.11.1_msvc2022_64</QtInstall>
-    <QtModules>core;gui;qml;quick;widgets;graphs;graphswidgets;designer;graphs;gui;widgets;designer</QtModules>
+    <QtModules>core;gui;widgets</QtModules>
     <QtBuildConfig>debug</QtBuildConfig>
-    <QtPlugin>true</QtPlugin>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
     <QtInstall>6.11.1_msvc2022_64</QtInstall>
-    <QtModules>core;gui;qml;quick;widgets;graphs;graphswidgets;designer;gui;widgets;designer</QtModules>
+    <QtModules>core;gui;widgets</QtModules>
     <QtBuildConfig>release</QtBuildConfig>
-    <QtPlugin>true</QtPlugin>
   </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
     <Message Importance="High" Text="QtMsBuild: could not locate qt.targets, qt.props; project may not build correctly." />
@@ -84,7 +81,7 @@
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
@@ -98,72 +95,34 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="QAngleAxis.cpp" />
-    <ClCompile Include="QBarCategoryAxis.cpp" />
-    <ClCompile Include="QCartesianGeometry.cpp" />
-    <ClCompile Include="QDateTimeAxis.cpp" />
-    <ClCompile Include="QLogAxis.cpp" />
-    <ClCompile Include="QPolarGeometry.cpp" />
-    <ClCompile Include="QRadialAxis.cpp" />
-    <ClCompile Include="QValueAxis.cpp" />
-    <QtMoc Include="QChartAxis.h" />
-    <QtMoc Include="QChartGeometry.h" />
-    <QtMoc Include="QChartSeries.h" />
-    <QtMoc Include="QLineSeries.h" />
-    <QtMoc Include="QScatterSeries.h" />
-    <QtMoc Include="QBarSeries.h" />
-    <QtMoc Include="QPieSeries.h" />
-    <QtMoc Include="QHistogramSeries.h" />
-    <QtMoc Include="QChartWidget.h" />
-    <QtMoc Include="QPieWidget.h" />
-    <QtMoc Include="QBarWidget.h" />
-    <QtMoc Include="QHistogramWidget.h" />
-    <QtMoc Include="QLineWidget.h" />
-    <QtMoc Include="QScatterWidget.h" />
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="QChartAxis.cpp" />
-    <ClCompile Include="QChartGeometry.cpp" />
-    <ClCompile Include="QChartSeries.cpp" />
-    <ClCompile Include="QLineSeries.cpp" />
-    <ClCompile Include="QScatterSeries.cpp" />
-    <ClCompile Include="QBarSeries.cpp" />
-    <ClCompile Include="QPieSeries.cpp" />
-    <ClCompile Include="QHistogramSeries.cpp" />
-    <ClCompile Include="QChartWidget.cpp" />
-    <ClCompile Include="QPieWidget.cpp" />
-    <ClCompile Include="QBarWidget.cpp" />
-    <ClCompile Include="QHistogramWidget.cpp" />
-    <ClCompile Include="QLineWidget.cpp" />
-    <ClCompile Include="QScatterWidget.cpp" />
+    <QtMoc Include="..\QChartAxis.h" />
   </ItemGroup>
   <ItemGroup>
-    <Text Include="debug.log" />
+    <QtMoc Include="..\QChartGeometry.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="Reconstruct.md">
-      <SubType>
-      </SubType>
-    </None>
+    <QtMoc Include="..\QChartSeries.h" />
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="QAngleAxis.h" />
-    <QtMoc Include="QBarCagegoryAxis.h" />
-    <QtMoc Include="QDateTimeAxis.h" />
-    <QtMoc Include="QLogAxis.h" />
-    <QtMoc Include="QRadialAxis.h" />
-    <QtMoc Include="QValueAxis.h" />
+    <QtMoc Include="..\QChartWidget.h" />
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="QCartesianGeometry.h" />
-    <ClInclude Include="QChartProjection.h" />
-    <QtMoc Include="QPolarGeometry.h" />
+    <ClCompile Include="..\QChartAxis.cpp" />
+    <ClCompile Include="..\QChartGeometry.cpp" />
+    <ClCompile Include="..\QChartSeries.cpp" />
+    <ClCompile Include="..\QChartWidget.cpp" />
+    <ClCompile Include="..\QValueAxis.cpp" />
+    <ClCompile Include="test.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QValueAxis.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

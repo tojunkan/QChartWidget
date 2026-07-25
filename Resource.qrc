@@ -1,5 +1,0 @@
-<RCC>
-    <qresource prefix="/">
-        <file>PieGraph.qml</file>
-    </qresource>
-</RCC>

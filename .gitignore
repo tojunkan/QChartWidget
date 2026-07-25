@@ -1,0 +1,33 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Build output
+x64/
+Debug/
+Release/
+*.exe
+*.ilk
+*.pdb
+*.lib
+*.obj
+*.tlog
+*.recipe
+*.log
+*.ipch
+Browse.VC.db
+
+# Qt generated
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# Debug log
+debug.log
+
+# Build scripts
+build_qchart.bat
+
+# QtMsBuild
+QtMsBuild/

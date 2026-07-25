@@ -1,55 +1,27 @@
 #ifndef QHISTOGRAMWIDGET_H
 #define QHISTOGRAMWIDGET_H
-
 #include "QBarWidget.h"
+#include <QVector>
 
-class QHistogramWidget : public QBarWidget
-{
+class QHistogramWidget : public QBarWidget {
     Q_OBJECT
 public:
-    enum BinMethod { Sturges, FreedmanDiaconis, Scott, Fixed };
-
-    explicit QHistogramWidget(QWidget* parent = nullptr);
-
-    // 输入原始数据，自动分箱
+    explicit QHistogramWidget(QWidget* p=nullptr);
     void setRawData(const QVector<qreal>& data);
-    QVector<qreal> rawData() const { return m_rawData; }
-
-    // 分箱控制
-    void setBinCount(int n);   // 0 = auto
-    int binCount() const { return m_binCount; }
-    void setBinWidth(qreal w); // 0 = auto
-    qreal binWidth() const;
-    void setBinMethod(BinMethod m);
-    void computeBins();
-
-    // 曲线叠加
-    void setDensityCurveVisible(bool v) { m_densityVisible = v; update(); }
-    bool isDensityCurveVisible() const { return m_densityVisible; }
-    void setNormalCurveVisible(bool v) { m_normalVisible = v; update(); }
-    bool isNormalCurveVisible() const { return m_normalVisible; }
-    void setDensityCurveColor(const QColor& c) { m_densityColor = c; update(); }
-    void setNormalCurveColor(const QColor& c) { m_normalColor = c; update(); }
-
+    void setHorizontal(bool on);
+    bool isHorizontal() const { return m_horizontal; }
+    // curve overlay (Widget 层)
+    void setDensityCurveVisible(bool v);
+    void setNormalCurveVisible(bool v);
+    void setBinCountHint(int n) { m_binCountHint=n; }
 protected:
-    void paintOverlay(QPainter* p, const QRectF& plotArea) override;
-
+    void paintEvent(QPaintEvent*) override;
 private:
-    QVector<qreal> computeBinEdges() const;
-    QVector<qreal> computeBinCenters() const;
-    QVector<qreal> computeDensity() const;
-    void drawCurve(QPainter* p, const QRectF& area,
-                   const QVector<QPointF>& points, const QColor& color);
-
+    void drawCurves(QPainter* p);
     QVector<qreal> m_rawData;
-    int m_binCount = 0;
-    qreal m_binWidth = 0;
-    BinMethod m_binMethod = FreedmanDiaconis;
-
-    bool m_densityVisible = false;
-    bool m_normalVisible = false;
-    QColor m_densityColor = Qt::red;
-    QColor m_normalColor = Qt::blue;
+    bool m_horizontal=false;
+    bool m_densityVisible=false, m_normalVisible=false;
+    int m_binCountHint=0;
+    QColor m_densityColor=Qt::red, m_normalColor=Qt::blue;
 };
-
-#endif // QHISTOGRAMWIDGET_H
+#endif

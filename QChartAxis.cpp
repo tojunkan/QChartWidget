@@ -1,280 +1,236 @@
 #include "QChartAxis.h"
+#include <QFontMetrics>
 #include <QtMath>
 #include <QDebug>
-#include <cmath>
 
-// ========== QChartAxis 基类 ==========
-QChartAxis::QChartAxis(QObject* parent) : QObject(parent) {}
-
-void QChartAxis::setTickCount(int n)
-{
-    if (n < 2) n = 2;
-    m_tickCount = n;
-    emit tickCountChanged();
+// ===== base =====
+QChartAxis::QChartAxis(QObject* p, Qt::Alignment alignment)
+    : QObject(p), m_alignment(alignment) {
 }
 
-// ========== QValueAxis ==========
-QValueAxis::QValueAxis(QObject* parent) : QChartAxis(parent)
-{
-    m_min = 0;
-    m_max = 10;
+QSizeF QChartAxis::sizeHint(const QFont& font) const {
+    QFontMetrics fm(font);
+    bool isHoriz = (m_alignment == Qt::AlignBottom || m_alignment == Qt::AlignTop || m_alignment == Qt::AlignCenter);
+
+    if (isHoriz) {
+        return QSizeF(10, fm.height() + AXIS_MARGIN);
+    }
+    else {
+        qreal w = 0;
+        for (const auto& l : tickLabels())
+            w = qMax(w, (qreal)fm.horizontalAdvance(l));
+        return QSizeF(w + AXIS_MARGIN, 10);
+    }
 }
 
-qreal QValueAxis::mapToPixel(qreal value, qreal axisLength) const
-{
-    if (qFuzzyCompare(m_max, m_min)) return 0;
-    return (value - m_min) / (m_max - m_min) * axisLength;
-}
+void QChartAxis::draw(QPainter* painter, const QRectF& plotArea) const {
+    if (!m_visible) return;
 
-qreal QValueAxis::pixelToValue(qreal pixel, qreal axisLength) const
-{
-    if (axisLength <= 0) return m_min;
-    return m_min + pixel / axisLength * (m_max - m_min);
-}
+    // 检查是否合法方向（基类只处理四种）
+    if (!(m_alignment == Qt::AlignTop || m_alignment == Qt::AlignBottom ||
+        m_alignment == Qt::AlignLeft || m_alignment == Qt::AlignRight)) {
+        return;
+    }
 
-qreal QValueAxis::niceStep(qreal range) const
-{
-    // 把范围缩放到 1~10 量级，取 nice 步长
-    qreal exponent = std::floor(std::log10(range));
-    qreal fraction = range / std::pow(10.0, exponent);
-    qreal nice;
-    if (fraction <= 1.5)       nice = 1.0;
-    else if (fraction <= 3.5)  nice = 2.0;
-    else if (fraction <= 7.5)  nice = 5.0;
-    else                       nice = 10.0;
-    return nice * std::pow(10.0, exponent);
-}
+    painter->save();
+    painter->setPen(m_color);
 
-void QValueAxis::setTickInterval(qreal v)
-{
-    m_tickInterval = (v > 0) ? v : 0;
-}
+    QFont f = painter->font();
+    f.setPointSize(f.pointSize());
+    painter->setFont(f);
 
-QVector<qreal> QValueAxis::tickValues() const
-{
-    QVector<qreal> ticks;
-    qreal range = m_max - m_min;
-    if (range <= 0) return ticks;
-
-    qreal step = (m_tickInterval > 0) ? m_tickInterval
-                                      : niceStep(range / (m_tickCount - 1));
-
-    // 从 tickAnchor（=min 向下取整到 step）开始
-    qreal start = std::floor(m_min / step) * step;
-    if (start < m_min) start += step;
-
-    for (qreal v = start; v <= m_max + step * 0.001; v += step)
-        ticks.append(v);
-
-    qDebug() << "[QValueAxis] ticks: min=" << m_min << "max=" << m_max
-             << "step=" << step << "count=" << ticks.size();
-    return ticks;
-}
-
-QStringList QValueAxis::tickLabels() const
-{
-    QStringList labels;
     QVector<qreal> ticks = tickValues();
-    for (qreal v : ticks) {
-        QString label;
-        if (!m_labelFormat.isEmpty()) {
-            label = QString::asprintf(qPrintable(m_labelFormat), v);
-        } else {
-            int decimals = m_labelDecimals;
-            if (decimals < 0) {
-                // 自动精度
-                qreal step = ticks.size() > 1 ? ticks[1] - ticks[0] : 1;
-                decimals = (step >= 1) ? 0 : qMax(0, (int)std::ceil(-std::log10(step)));
+    QStringList labels = tickLabels();
+    if (ticks.isEmpty() || labels.isEmpty() || ticks.size() != labels.size()) {
+        qWarning() << "Tick data invalid.";
+        painter->restore();
+        return;
+    }
+
+    // ---------- 1. 在 switch 中一次性确定所有方向参数 ----------
+    bool isHoriz;          // 是否水平轴
+    qreal fixedCoord;      // 轴线固定的坐标（Y 或 X）
+    QPointF tickDir;       // 刻度线方向（指向 plotArea 内）
+    QPointF labelDir;      // 文字偏移方向（指向 plotArea 外）
+    Qt::Alignment textAlign; // 文字对齐方式
+
+    switch (m_alignment) {
+    case Qt::AlignTop:
+        isHoriz = true;
+        fixedCoord = plotArea.top();
+        tickDir = { 0, 1 };          // 向下（进入图表）
+        labelDir = { 0, -1 };        // 向上（外部）
+        textAlign = Qt::AlignHCenter | Qt::AlignTop;
+        break;
+    case Qt::AlignBottom:
+        isHoriz = true;
+        fixedCoord = plotArea.bottom();
+        tickDir = { 0, -1 };
+        labelDir = { 0, 1 };
+        textAlign = Qt::AlignHCenter | Qt::AlignBottom;
+        break;
+    case Qt::AlignLeft:
+        isHoriz = false;
+        fixedCoord = plotArea.left();
+        tickDir = { 1, 0 };
+        labelDir = { -1, 0 };
+        textAlign = Qt::AlignRight | Qt::AlignVCenter;
+        break;
+    case Qt::AlignRight:
+        isHoriz = false;
+        fixedCoord = plotArea.right();
+        tickDir = { -1, 0 };
+        labelDir = { 1, 0 };
+        textAlign = Qt::AlignLeft | Qt::AlignVCenter;
+        break;
+    default:
+        painter->restore();
+        return;
+    }
+
+    // ---------- 2. 绘制主轴线 ----------
+    QPointF axisStart, axisEnd;
+    if (isHoriz) {
+        axisStart = QPointF(plotArea.left(), fixedCoord);
+        axisEnd = QPointF(plotArea.right(), fixedCoord);
+    }
+    else {
+        axisStart = QPointF(fixedCoord, plotArea.top());
+        axisEnd = QPointF(fixedCoord, plotArea.bottom());
+    }
+    painter->drawLine(axisStart, axisEnd);
+
+    // ---------- 3. 准备绘制参数 ----------
+    const qreal tickLen = 4.0;
+    const qreal subTickLen = 2.0;
+    const qreal labelOffset = 8.0;
+    const int subTickCount = m_subTickCount; // 每个主刻度之间的次刻度数量
+
+    // 获取主刻度值
+    QVector<qreal> mainTicks = ticks;
+    QVector<qreal> subTicks = subTickValues(); // 直接调用纯虚函数！
+
+    //// 在 draw 函数开头或刻度循环前
+    //qDebug() << "=== Axis draw ===";
+    //qDebug() << "Alignment:" << m_alignment;
+    //qDebug() << "PlotArea:" << plotArea;
+    //qDebug() << "Ticks count:" << ticks.size() << "Labels count:" << labels.size();
+    //for (int i = 0; i < qMin(ticks.size(), labels.size()); ++i) {
+    //    qDebug() << "Tick" << i << ":" << ticks[i] << "Label:" << labels[i];
+    //}
+    //qDebug() << "subTickCount:" << m_subTickCount;
+    //qDebug() << "subTicks count:" << subTicks.size();
+
+    // ---------- 4. 先画次刻度（直接使用子类提供的 subTickValues） ----------
+    if (m_subTickCount > 0) {
+        for (qreal subVal : subTicks) {
+            qreal norm = valueToNormalized(subVal);
+            qreal clampedNorm = qBound(0.0, norm, 1.0);
+            if (norm != clampedNorm) {
+                qWarning() << "doesn't match. Norm is " << norm << "while clamped version is:" << clampedNorm;
             }
-            label = QString::number(v, 'f', decimals);
+
+            QPointF pos;
+            if (isHoriz) {
+                qreal x = plotArea.left() + clampedNorm * plotArea.width();
+                pos = QPointF(x, fixedCoord);
+            }
+            else {
+                qreal y = plotArea.bottom() - clampedNorm * plotArea.height();
+                pos = QPointF(fixedCoord, y);
+            }
+            // 次刻度线（更短）
+            painter->drawLine(pos, pos + tickDir * subTickLen);
         }
-        labels.append(label);
     }
-    return labels;
-}
 
-// ========== QBarCategoryAxis ==========
-QBarCategoryAxis::QBarCategoryAxis(QObject* parent) : QChartAxis(parent)
-{
-    m_min = 0;
-    m_max = 1;  // 等间距后范围是 0~catCount
-}
+    // ---------- 5. 画主刻度和标签 ----------
+    for (int i = 0; i < mainTicks.size(); ++i) {
+        qreal norm = valueToNormalized(mainTicks[i]);
+        qreal clampedNorm = qBound(0.0, norm, 1.0);
 
-qreal QBarCategoryAxis::mapToPixel(qreal value, qreal axisLength) const
-{
-    int n = m_categories.size();
-    if (n == 0) return 0;
-    // value = category index (0-based)，居中放在槽内
-    qreal step = axisLength / n;
-    return (value + 0.5) * step;
-}
+        QPointF pos;
+        if (isHoriz) {
+            qreal x = plotArea.left() + clampedNorm * plotArea.width();
+            pos = QPointF(x, fixedCoord);
+        }
+        else {
+            qreal y = plotArea.bottom() - clampedNorm * plotArea.height();
+            pos = QPointF(fixedCoord, y);
+        }
 
-qreal QBarCategoryAxis::pixelToValue(qreal pixel, qreal axisLength) const
-{
-    int n = m_categories.size();
-    if (n == 0 || axisLength <= 0) return 0;
-    qreal step = axisLength / n;
-    return std::floor(pixel / step);
-}
+        // 主刻度线
+        painter->drawLine(pos, pos + tickDir * tickLen);
 
-void QBarCategoryAxis::setCategories(const QStringList& cats)
-{
-    m_categories = cats;
-    m_max = qMax(1, cats.size());
-    emit categoriesChanged();
-}
+        // ---------- 文字部分：完全基于字体度量动态计算 ----------
+        QString label = labels[i];
+        QFontMetrics fm(painter->font());
 
-void QBarCategoryAxis::append(const QString& cat)
-{
-    m_categories.append(cat);
-    m_max = m_categories.size();
-    emit categoriesChanged();
-}
+        // 精确获取文本的像素宽高
+        qreal textWidth = fm.horizontalAdvance(label);
+        qreal textHeight = fm.height();
 
-void QBarCategoryAxis::insert(int index, const QString& cat)
-{
-    m_categories.insert(index, cat);
-    m_max = m_categories.size();
-    emit categoriesChanged();
-}
+        // 文字锚点：从刻度线终点再往外偏移（间距 = AXIS_MARGIN - TICK_LENGTH）
+        // 因为 AXIS_MARGIN 是"轴线到文字外边缘"的总距离，扣掉刻度线占的 4px，剩下的留给文字偏移
+        qreal offset = AXIS_MARGIN - TICK_LENGTH;
+        QPointF textPos = pos + labelDir * offset;
 
-void QBarCategoryAxis::remove(const QString& cat)
-{
-    m_categories.removeAll(cat);
-    m_max = qMax(1, m_categories.size());
-    emit categoriesChanged();
-}
-
-void QBarCategoryAxis::clear()
-{
-    m_categories.clear();
-    m_max = 1;
-    emit categoriesChanged();
-}
-
-QVector<qreal> QBarCategoryAxis::tickValues() const
-{
-    QVector<qreal> ticks;
-    for (int i = 0; i < m_categories.size(); ++i)
-        ticks.append(i);
-    return ticks;
-}
-
-QStringList QBarCategoryAxis::tickLabels() const
-{
-    return m_categories;
-}
-
-// ========== QLogAxis ==========
-QLogAxis::QLogAxis(QObject* parent) : QChartAxis(parent)
-{
-    m_min = 1;  // log(0) 无意义
-    m_max = 1000;
-}
-
-void QLogAxis::setBase(qreal b)
-{
-    if (b <= 1) return;
-    m_base = b;
-}
-
-qreal QLogAxis::mapToPixel(qreal value, qreal axisLength) const
-{
-    if (value <= 0 || m_min <= 0) return 0;
-    qreal logMin = std::log(m_min) / std::log(m_base);
-    qreal logMax = std::log(m_max) / std::log(m_base);
-    qreal logVal = std::log(value) / std::log(m_base);
-    if (qFuzzyCompare(logMax, logMin)) return 0;
-    return (logVal - logMin) / (logMax - logMin) * axisLength;
-}
-
-qreal QLogAxis::pixelToValue(qreal pixel, qreal axisLength) const
-{
-    if (axisLength <= 0 || m_min <= 0) return m_min;
-    qreal logMin = std::log(m_min) / std::log(m_base);
-    qreal logMax = std::log(m_max) / std::log(m_base);
-    qreal logVal = logMin + pixel / axisLength * (logMax - logMin);
-    return std::pow(m_base, logVal);
-}
-
-QVector<qreal> QLogAxis::tickValues() const
-{
-    QVector<qreal> ticks;
-    if (m_min <= 0) return ticks;
-
-    // 对数轴上取 m_base 的整数幂
-    qreal logMin = std::floor(std::log(m_min) / std::log(m_base));
-    qreal logMax = std::ceil(std::log(m_max) / std::log(m_base));
-    for (qreal e = logMin; e <= logMax; e += 1.0) {
-        qreal v = std::pow(m_base, e);
-        if (v >= m_min && v <= m_max)
-            ticks.append(v);
+        QRectF textRect;
+        if (isHoriz) {
+            // 水平轴：文字水平居中，垂直方向紧贴 textPos
+            qreal w = textWidth + TEXT_PADDING * 2;
+            qreal h = textHeight + TEXT_PADDING * 2;
+            qreal x = textPos.x() - w / 2.0;
+            qreal y = textPos.y() - h / 2.0 + (labelDir.y() * h) / 2.0;
+                    //(labelDir.y() < 0) ? textPos.y() - h : textPos.y()
+            // labelDir.y() < 0 表示朝上（顶部轴），矩形底部对齐 textPos
+            textRect = QRectF(x, y, w, h);
+        }
+        else {
+            // 垂直轴：文字垂直居中，水平方向紧贴 textPos
+            qreal w = textWidth + TEXT_PADDING * 2;
+            qreal h = textHeight + TEXT_PADDING * 2;
+            qreal x = textPos.x() - w / 2.0 + (labelDir.x() * w) / 2.0;
+                    //(labelDir.x() < 0) ? textPos.x() - w : textPos.x();
+            qreal y = textPos.y() - h / 2.0;
+            textRect = QRectF(x, y, w, h);
+        }
+        painter->save();
+        painter->setPen(Qt::red);
+        painter->drawRect(textRect);  // 绘制标签边界
+        painter->restore();
+        // 然后绘制文字（用原来的颜色）
+        painter->drawText(textRect, Qt::AlignCenter, label);
     }
-    qDebug() << "[QLogAxis] ticks: base=" << m_base << "values=" << ticks;
-    return ticks;
+
+    painter->restore();
 }
 
-QStringList QLogAxis::tickLabels() const
-{
-    QStringList labels;
-    for (qreal v : tickValues()) {
-        // 大数用科学计数，小数用正常
-        if (v >= 1e6 || v <= 1e-3)
-            labels.append(QString::number(v, 'e', 1));
-        else
-            labels.append(QString::number(v, 'g', 4));
+void QChartAxis::pan(qreal deltaNorm) {
+    qreal span = m_max - m_min;
+    qreal shift =  - deltaNorm * span;
+    //这里加一个负号是因为拖动的时候，控件的移动效果和数据的效果是反过来的。
+    //举个例子，比如一个左侧的，以上为正方向的轴，如果你鼠标从上往下划（不需要考虑y增大的问题，因为虽然Qt中y正方向向下，但这个问题在QChartProjection中已经被纳入考虑了）
+    // //那么有两种可能：
+    //平移模式：数据就随着增大，也就是不加负号的情况
+    //滚轮模式：控件的观感从上同步往下，也就是加负号的情况
+    setMin(m_min + shift);
+    setMax(m_max + shift);
+}
+
+void QChartAxis::zoom(qreal centerNorm, qreal factor) {
+    if (factor <= 0) return;
+    qreal centerVal = normalizedToValue(centerNorm);
+    qreal halfSpan = (m_max - m_min) * factor / 2.0;
+    qreal newMin = centerVal - halfSpan;
+    qreal newMax = centerVal + halfSpan;
+    if (qAbs(newMax - newMin) > 0.001) {
+        setMin(newMin);
+        setMax(newMax);
     }
-    return labels;
 }
 
-// ========== QDateTimeAxis ==========
-QDateTimeAxis::QDateTimeAxis(QObject* parent) : QChartAxis(parent)
-{
-    m_dtMin = QDateTime::currentDateTime();
-    m_dtMax = m_dtMin.addSecs(86400);  // +1 天
-    m_min = toEpoch(m_dtMin);
-    m_max = toEpoch(m_dtMax);
-}
-
-void QDateTimeAxis::setRange(QDateTime min, QDateTime max)
-{
-    m_dtMin = min;
-    m_dtMax = max;
-    m_min = toEpoch(min);
-    m_max = toEpoch(max);
-    emit rangeChanged(m_min, m_max);
-}
-
-qreal QDateTimeAxis::mapToPixel(qreal value, qreal axisLength) const
-{
-    if (qFuzzyCompare(m_max, m_min)) return 0;
-    return (value - m_min) / (m_max - m_min) * axisLength;
-}
-
-qreal QDateTimeAxis::pixelToValue(qreal pixel, qreal axisLength) const
-{
-    if (axisLength <= 0) return m_min;
-    return m_min + pixel / axisLength * (m_max - m_min);
-}
-
-QVector<qreal> QDateTimeAxis::tickValues() const
-{
-    // 使用 QValueAxis 的线性逻辑（epoch 秒）
-    QValueAxis helper;
-    helper.setMin(m_min);
-    helper.setMax(m_max);
-    helper.setTickCount(m_tickCount);
-    return helper.tickValues();
-}
-
-QStringList QDateTimeAxis::tickLabels() const
-{
-    QStringList labels;
-    for (qreal v : tickValues()) {
-        qint64 secs = qint64(v);
-        QDateTime dt = QDateTime::fromSecsSinceEpoch(secs);
-        labels.append(dt.toString(m_format));
-    }
-    qDebug() << "[QDateTimeAxis] ticks:" << labels;
-    return labels;
+// ===== 次刻度标签（基类默认返回空，绝大多数子类无需重写） =====
+QStringList QChartAxis::subTickLabels() const {
+    return QStringList(); // 默认不画文字
 }
