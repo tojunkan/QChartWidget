@@ -10,6 +10,8 @@ class QAngleAxis : public QChartAxis {
 public:
     explicit QAngleAxis(QObject* parent = nullptr);
 
+    CoordinateSystem coordinateSystem() const override;
+
     // ---------- 坐标映射（线性） ----------
     qreal valueToNormalized(qreal value) const override;
     qreal normalizedToValue(qreal norm) const override;
