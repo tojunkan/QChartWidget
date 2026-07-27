@@ -1,4 +1,5 @@
 #include "QValueAxis.h"
+#include "QCartesianProjection.h"
 #include <QtMath>
 #include <QDebug>
 
@@ -10,6 +11,8 @@ QValueAxis::QValueAxis(QObject* p, Qt::Alignment alignment)
     m_min = 0.0;
     m_max = 10.0;
 }
+
+CoordinateSystem QValueAxis::coordinateSystem() const { return CoordinateSystem::Cartesian; }
 
 // ===== 坐标映射（线性） =====
 qreal QValueAxis::valueToNormalized(qreal value) const {

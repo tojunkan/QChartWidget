@@ -1,6 +1,7 @@
 #ifndef QCHARTAXIS_H
 #define QCHARTAXIS_H
 
+#include "QChartProjection.h"
 #include <QObject>
 #include <QVector>
 #include <QString>
@@ -94,7 +95,9 @@ public:
 
     // 绘制背景层（轴、刻度线、刻度标签、标题）
     // plotArea 是绘图区矩形（像素坐标），轴根据自身的 alignment 决定画在哪条边上
-    virtual void draw(QPainter* painter, const QRectF& plotArea) const;
+    virtual void draw(QPainter* painter, 
+        const QRectF& plotArea,
+        const QChartProjection* projection) const;
 
     // ---------- 样式 ----------
     bool isVisible() const { return m_visible; }
@@ -107,6 +110,9 @@ public:
     void setTitle(const QString& t) { m_title = t; }
     QColor color() const { return m_color; }
     void setColor(const QColor& c) { m_color = c; }
+
+    // ---------- 坐标系标识 ---------
+    virtual CoordinateSystem coordinateSystem() const = 0;
 
     // ---------- 边距/对齐（笛卡尔专用，极轴可忽略）----------
     Qt::Alignment alignment() const { return m_alignment; }

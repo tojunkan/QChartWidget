@@ -1,10 +1,19 @@
 #include "QChartWidget.h"
 #include "QChartSeries.h"
 #include "QChartProjection.h"
+#include "QChartProjectionFactory.h"
+#include "QChartDebug.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QDebug>
+#include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(logAxis, "chart.axis")
+Q_LOGGING_CATEGORY(logWidget, "chart.widget")
+Q_LOGGING_CATEGORY(logGeometry, "chart.geometry")
+Q_LOGGING_CATEGORY(logSeries, "chart.series")
+
 
 QChartWidget::QChartWidget(QWidget* p) : QWidget(p) {
     setMouseTracking(true);
@@ -18,6 +27,13 @@ QChartWidget::~QChartWidget() {
 
 void QChartWidget::addGeometry(QChartGeometry* g) {
     if (!g) return;
+    if (m_projection == nullptr) {
+        m_projection = QChartProjectionFactory::create(g->coordinateSystem());
+    }
+    else if (m_projection->type() != g->coordinateSystem()) {
+        qWarning() << "Projection mismatched with the Geometry.";
+        return;
+    }
     g->setParent(this);
     m_geometries.append(g);
     // 如果已有轴，且几何体已绑定轴，无需额外操作（轴不再需要 setGeometry）
@@ -32,6 +48,13 @@ void QChartWidget::removeGeometry(QChartGeometry* g) {
 
 void QChartWidget::addAxis(QChartAxis* a) {
     if (!a) return;
+    if (m_projection == nullptr) {
+        m_projection = QChartProjectionFactory::create(a->coordinateSystem());
+    }
+    else if (m_projection->type() != a->coordinateSystem()) {
+        qWarning() << "Projection mismatched with the Axis.";
+        return;
+    }
     a->setParent(this);
     m_axes.append(a);
     // 连接范围变化信号，刷新背景和前景
@@ -40,12 +63,17 @@ void QChartWidget::addAxis(QChartAxis* a) {
             invalidateBackground();
             invalidateForeground();
         });
+    // 连接范围变化信号到请求布局
+    connect(a, &QChartAxis::rangeChanged, this, &QChartWidget::invalidateLayout);
+    // 添加后立即请求一次布局
+    invalidateLayout();
     invalidateBackground();
 }
 
 void QChartWidget::removeAxis(QChartAxis* a) {
     m_axes.removeAll(a);
     delete a;
+    invalidateLayout();
     invalidateBackground();
 }
 
@@ -53,18 +81,61 @@ void QChartWidget::invalidateBackground() {
     m_bgDirty = true;
     update();
 }
+
 void QChartWidget::invalidateForeground() {
     m_fgDirty = true;
     update();
 }
 
+void QChartWidget::invalidateLayout() {
+    m_layoutDirty = true;
+    update();
+}
+
 void QChartWidget::layoutAxes() {
-    // 简化布局：硬编码边距，子类可重写
-    qreal left = 50, right = 20, top = 20, bottom = 40;
-    // TODO: 根据 axis sizeHint 动态计算
-    m_plotArea = QRectF(left, top,
+    // 1. 先以默认边距为基准（或用户设置的值）
+    qreal left = m_marginLeft;
+    qreal top = m_marginTop;
+    qreal right = m_marginRight;
+    qreal bottom = m_marginBottom;
+
+    // 2. 遍历所有轴，根据对齐方式累加 sizeHint
+    QFont font = this->font(); // 使用当前字体
+    for (auto* axis : m_axes) {
+        if (!axis->isVisible()) continue;
+        Qt::Alignment align = axis->alignment();
+        QSizeF hint = axis->sizeHint(font);
+        switch (align) {
+        case Qt::AlignLeft:
+            left = qMax(left, hint.width());
+            break;
+        case Qt::AlignRight:
+            right = qMax(right, hint.width());
+            break;
+        case Qt::AlignTop:
+            top = qMax(top, hint.height());
+            break;
+        case Qt::AlignBottom:
+            bottom = qMax(bottom, hint.height());
+            break;
+        case Qt::AlignCenter:
+            // 极轴不占外边距，忽略
+            break;
+        default:
+            break;
+        }
+    }
+
+
+
+    // 3. 计算绘图区
+    m_plotArea = QRectF(
+        left,
+        top,
         width() - left - right,
-        height() - top - bottom);
+        height() - top - bottom
+    );
+    qCDebug(logWidget) << "updated layout: " << m_plotArea;
 }
 
 void QChartWidget::resizeEvent(QResizeEvent*) {
@@ -73,6 +144,16 @@ void QChartWidget::resizeEvent(QResizeEvent*) {
 }
 
 void QChartWidget::paintEvent(QPaintEvent*) {
+
+    //在paintEvent处理是为了保证性能，如果每pan或者zoom一次就处理的话太过耗时了。
+    if (m_layoutDirty) {
+        layoutAxes();
+        m_layoutDirty = false;
+        // 布局变化必然导致背景和前景失效
+        m_bgDirty = true;
+        m_fgDirty = true;
+    }
+
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
@@ -116,18 +197,25 @@ void QChartWidget::drawBackground(QPainter* p) {
 
     for (auto* a : m_axes) {
         if (a && a->isVisible())
-            a->draw(p, m_plotArea);
+            a->draw(p, m_plotArea, m_projection.get());
     }
     // 绘制网格（取最后一个几何体，或遍历全部）
     if (!m_geometries.isEmpty())
-        m_geometries.last()->drawGrid(p);
+        m_geometries.last()->drawGrid(p, m_projection.get());
+
+    if (logWidget().isDebugEnabled()) {
+        p->save();
+        p->setPen(Qt::yellow);
+        p->drawRect(plotArea());
+        p->restore();
+    }
 }
 
 void QChartWidget::drawForeground(QPainter* p) {
     for (auto* g : m_geometries) {
         p->save();
         p->setClipRect(m_plotArea);
-        g->drawAllSeries(p);
+        g->drawAllSeries(p, m_projection.get());
         p->restore();
     }
 }
@@ -146,8 +234,8 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
     if (m_panning) {
         QPointF currentPos = e->pos();
         // 将像素坐标转为归一化坐标（0~1，Y轴向上）
-        QPointF normStart = QCartesianProjection::mapToNormalized(m_panStart, m_plotArea);
-        QPointF normCurrent = QCartesianProjection::mapToNormalized(currentPos, m_plotArea);
+        QPointF normStart = m_projection->mapToNormalized(m_panStart, m_plotArea);
+        QPointF normCurrent = m_projection->mapToNormalized(currentPos, m_plotArea);
 
         // 计算归一化位移
         qreal deltaNormX = normCurrent.x() - normStart.x();
@@ -204,14 +292,30 @@ void QChartWidget::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void QChartWidget::wheelEvent(QWheelEvent* e) {
-    if (!m_zoomEnabled) return;
+    if (!m_zoomEnabled || !m_projection) return;
     QPointF pos = e->position();
     if (!m_plotArea.contains(pos)) return;
 
-    // 将鼠标位置转为归一化坐标
-    QPointF normPos = QCartesianProjection::mapToNormalized(pos, m_plotArea);
+    // 获取滚动角度（通常 y 方向）
+    int delta = e->angleDelta().y();
+    if (delta == 0) return;
 
-    qreal factor = (e->angleDelta().y() > 0) ? 0.9 : 1.1;
+    // 将角度转换为缩放因子：滚动向上（正）放大，向下（负）缩小
+    static constexpr qreal SCALE_SENSITIVITY = 0.1; // 可调参数
+    qreal factor = std::exp(-delta * SCALE_SENSITIVITY / 120.0);
+    // 限制范围防止过激
+    if (factor < 0.8 || factor > 1.25)qWarning() << "too fast. Clamp.";
+    factor = qBound(0.8, factor, 1.25); // 可选
+
+    // 归一化坐标
+    QPointF normPos = m_projection->mapToNormalized(pos, m_plotArea);
+
+    // 🔥 调试输出
+    qCDebug(logWidget) << "wheelEvent: pos =" << pos
+        << "normPos =" << normPos
+        << "plotArea =" << m_plotArea
+        << "normPos =" << normPos
+        << "factor =" << factor;
 
     for (auto* axis : m_axes) {
         if (!axis->isZoomEnabled()) continue;
@@ -220,7 +324,11 @@ void QChartWidget::wheelEvent(QWheelEvent* e) {
             axis->zoom(normPos.x(), factor);
         }
         else if (align == Qt::AlignLeft || align == Qt::AlignRight) {
-            axis->zoom(normPos.y(), factor); // 同样，Y轴已反转
+            axis->zoom(normPos.y(), factor);
+        }
+        else if (align == Qt::AlignCenter) {
+            // 极轴：固定中心缩放，中心归一化值为 0（原点是中心）
+            axis->zoom(0.0, factor);
         }
     }
 }

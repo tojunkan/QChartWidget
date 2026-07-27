@@ -40,9 +40,6 @@
     <ClCompile Include="QLogAxis.cpp">
       <Filter>源文件\Axes</Filter>
     </ClCompile>
-    <ClCompile Include="QBarCategoryAxis.cpp">
-      <Filter>源文件\Axes</Filter>
-    </ClCompile>
     <ClCompile Include="QDateTimeAxis.cpp">
       <Filter>源文件\Axes</Filter>
     </ClCompile>
@@ -114,9 +111,6 @@
     <QtMoc Include="QLogAxis.h">
       <Filter>头文件\Axes</Filter>
     </QtMoc>
-    <QtMoc Include="QBarCagegoryAxis.h">
-      <Filter>头文件\Axes</Filter>
-    </QtMoc>
     <QtMoc Include="QValueAxis.h">
       <Filter>头文件\Axes</Filter>
     </QtMoc>
@@ -137,6 +131,12 @@
     </QtMoc>
     <QtMoc Include="QChartWidget.h">
       <Filter>头文件\Core</Filter>
+    </QtMoc>
+    <QtMoc Include="QBarCategoryAxis.h">
+      <Filter>头文件\Axes</Filter>
+    </QtMoc>
+    <QtMoc Include="QBarCategoryAxis.cpp">
+      <Filter>源文件\Axes</Filter>
     </QtMoc>
   </ItemGroup>
   <ItemGroup>
@@ -194,8 +194,20 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="QChartProjection.h">
+    <ClInclude Include="QCartesianProjection.h">
       <Filter>头文件\Projection</Filter>
+    </ClInclude>
+    <ClInclude Include="QPolarProjection.h">
+      <Filter>头文件\Projection</Filter>
+    </ClInclude>
+    <ClInclude Include="QChartProjection.h">
+      <Filter>头文件\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="QChartProjectionFactory.h">
+      <Filter>头文件\Projection</Filter>
+    </ClInclude>
+    <ClInclude Include="QChartDebug.h">
+      <Filter>头文件\Core</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

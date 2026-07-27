@@ -13,6 +13,8 @@ class QValueAxis : public QChartAxis {
 public:
     explicit QValueAxis(QObject* p = nullptr, Qt::Alignment alignment = Qt::AlignBottom);
 
+    CoordinateSystem coordinateSystem() const override;
+
     // 坐标映射
     qreal valueToNormalized(qreal value) const override;
     qreal normalizedToValue(qreal norm) const override;

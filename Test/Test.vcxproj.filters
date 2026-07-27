@@ -35,7 +35,7 @@
     <QtMoc Include="..\QChartWidget.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="..\QValueAxis.h">
+    <QtMoc Include="..\QBarCategoryAxis.h">
       <Filter>Header Files</Filter>
     </QtMoc>
   </ItemGroup>
@@ -55,7 +55,7 @@
     <ClCompile Include="test.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\QValueAxis.cpp">
+    <ClCompile Include="..\QBarCategoryAxis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

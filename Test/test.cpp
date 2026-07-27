@@ -1,20 +1,23 @@
 #include <QApplication>
 #include "../QChartWidget.h"
-#include "../QValueAxis.h"
+#include "../QBarCategoryAxis.h"
 
 int main(int argc, char* argv[]) {
 	QApplication app(argc, argv);
 	QChartWidget w;
 
-	QValueAxis* valueAxisx = new QValueAxis(&w, Qt::AlignBottom);
+	QBarCategoryAxis* valueAxisx = new QBarCategoryAxis(&w, Qt::AlignRight);
 	valueAxisx->setColor(Qt::white);
-	valueAxisx->setSubTickCount(4);
+	valueAxisx->append("hello");
+	valueAxisx->append("world");
+	//valueAxisx->setSubTickCount(4);
 	w.addAxis(valueAxisx);
 
-	QValueAxis* valueAxisy = new QValueAxis(&w, Qt::AlignLeft);
-	valueAxisy->setColor(Qt::white);
-	valueAxisy->setSubTickCount(4);
-	w.addAxis(valueAxisy);
+	//QBarCategoryAxis* valueAxisy = new QBarCategoryAxis(&w, Qt::AlignLeft);
+	//valueAxisy->setColor(Qt::white);
+	//valueAxisy->setSubTickCount(4);
+	//valueAxisy->setBase(2);
+	//w.addAxis(valueAxisy);
 
 	qDebug() << "Program Started.";
 

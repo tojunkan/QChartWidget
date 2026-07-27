@@ -106,7 +106,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="QAngleAxis.cpp" />
-    <ClCompile Include="QBarCategoryAxis.cpp" />
+    <QtMoc Include="QBarCategoryAxis.cpp">
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Filename).moc</QtMocFileName>
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Release|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
+    </QtMoc>
     <ClCompile Include="QCartesianGeometry.cpp" />
     <ClCompile Include="QDateTimeAxis.cpp" />
     <ClCompile Include="QLogAxis.cpp" />
@@ -154,14 +159,18 @@
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="QAngleAxis.h" />
-    <QtMoc Include="QBarCagegoryAxis.h" />
     <QtMoc Include="QDateTimeAxis.h" />
     <QtMoc Include="QLogAxis.h" />
     <QtMoc Include="QRadialAxis.h" />
     <QtMoc Include="QValueAxis.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="QChartDebug.h" />
+    <ClInclude Include="QChartProjectionFactory.h" />
+    <ClInclude Include="QPolarProjection.h" />
     <QtMoc Include="QCartesianGeometry.h" />
+    <QtMoc Include="QBarCategoryAxis.h" />
+    <ClInclude Include="QCartesianProjection.h" />
     <ClInclude Include="QChartProjection.h" />
     <QtMoc Include="QPolarGeometry.h" />
   </ItemGroup>

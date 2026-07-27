@@ -114,15 +114,20 @@
     <QtMoc Include="..\QChartWidget.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\QBarCategoryAxis.cpp">
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Release|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Filename).moc</QtMocFileName>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
+    </ClCompile>
     <ClCompile Include="..\QChartAxis.cpp" />
     <ClCompile Include="..\QChartGeometry.cpp" />
     <ClCompile Include="..\QChartSeries.cpp" />
     <ClCompile Include="..\QChartWidget.cpp" />
-    <ClCompile Include="..\QValueAxis.cpp" />
     <ClCompile Include="test.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="..\QValueAxis.h" />
+    <QtMoc Include="..\QBarCategoryAxis.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

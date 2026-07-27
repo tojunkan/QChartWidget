@@ -1,7 +1,0 @@
-<Solution>
-  <Configurations>
-    <Platform Name="x64" />
-  </Configurations>
-  <Project Path="QChartWidget.vcxproj" />
-  <Project Path="Test/Test.vcxproj" />
-</Solution>

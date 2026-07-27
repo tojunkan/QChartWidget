@@ -1,5 +1,6 @@
 #ifndef QCHARTSERIES_H
 #define QCHARTSERIES_H
+#include "QChartProjection.h"
 #include <QObject>
 #include <QString>
 #include <QColor>
@@ -21,6 +22,8 @@ public:
     explicit QChartSeries(const QString& name={}, QObject* parent=nullptr);
     virtual ~QChartSeries() = default;
 
+    virtual CoordinateSystem coordinateSystem() const = 0;
+
     QString name() const { return m_name; }
     void setName(const QString& n);
     bool isVisible() const { return m_visible; }
@@ -41,7 +44,8 @@ public:
     virtual void draw(QPainter* painter,
         const QChartGeometry* geometry,
         const QChartAxis* axisX,
-        const QChartAxis* axisY) const = 0;
+        const QChartAxis* axisY, 
+        const QChartProjection* projection) const = 0;
 
 signals:
     void nameChanged(const QString&);

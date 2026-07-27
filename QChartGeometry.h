@@ -20,6 +20,8 @@ public:
     explicit QChartGeometry(QObject* parent=nullptr);
     ~QChartGeometry() override;
 
+    virtual CoordinateSystem coordinateSystem() const = 0;
+
     QChartAxis* axisX() const { return m_axisX; }
     QChartAxis* axisY() const { return m_axisY; }
     void setAxisX(QChartAxis* a);
@@ -41,7 +43,7 @@ public:
         m_gridColor=c; 
         emit gridChanged();
     }
-    virtual void drawGrid(QPainter* p) const;
+    virtual void drawGrid(QPainter* p, QChartProjection* projection) const;
 
     virtual QPointF mapToPixel(qreal x, qreal y) const = 0;
     virtual QPointF mapFromPixel(const QPointF& p) const = 0;
@@ -51,8 +53,8 @@ public:
     void removeSeries(QChartSeries* s);
     QList<QChartSeries*> seriesList() const { return m_series; }
     void clearSeries();
-    void drawAllSeries(QPainter* p);
-    virtual void drawSeries(QPainter* p, QChartSeries* s);
+    void drawAllSeries(QPainter* p, QChartProjection* projection);
+    virtual void drawSeries(QPainter* p, QChartSeries* s, QChartProjection* projection);
     virtual int hitTestSeries(QChartSeries* s, const QPointF& pixelPos) const;
     QPair<QChartSeries*,int> hitTest(const QPointF& pixelPos) const;
 

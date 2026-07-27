@@ -23,7 +23,7 @@ QRectF QChartGeometry::plotArea() const {
     return cw ? cw->plotArea() : QRectF();
 }
 
-void QChartGeometry::drawGrid(QPainter*) const {
+void QChartGeometry::drawGrid(QPainter* p, QChartProjection* projection) const {
     // 基类空实现，子类重写
 }
 
@@ -46,18 +46,18 @@ void QChartGeometry::clearSeries() {
     m_series.clear();
 }
 
-void QChartGeometry::drawAllSeries(QPainter* p) {
+void QChartGeometry::drawAllSeries(QPainter* p, QChartProjection* projection) {
     for (auto* s : m_series) {
         if (s->isVisible()) {
             p->save();
             p->setOpacity(s->opacity());
-            drawSeries(p, s);
+            drawSeries(p, s, projection);
             p->restore();
         }
     }
 }
 
-void QChartGeometry::drawSeries(QPainter* p, QChartSeries* s) {
+void QChartGeometry::drawSeries(QPainter* p, QChartSeries* s, QChartProjection* projection) {
     // 基类空实现，子类可重写
     Q_UNUSED(p);
     Q_UNUSED(s);

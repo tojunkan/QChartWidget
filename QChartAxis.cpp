@@ -1,7 +1,10 @@
 #include "QChartAxis.h"
+#include "QCartesianProjection.h"
+#include "QChartDebug.h"
 #include <QFontMetrics>
 #include <QtMath>
 #include <QDebug>
+#include <qLoggingCategory>
 
 // ===== base =====
 QChartAxis::QChartAxis(QObject* p, Qt::Alignment alignment)
@@ -23,7 +26,7 @@ QSizeF QChartAxis::sizeHint(const QFont& font) const {
     }
 }
 
-void QChartAxis::draw(QPainter* painter, const QRectF& plotArea) const {
+void QChartAxis::draw(QPainter* painter, const QRectF& plotArea, const QChartProjection* projection) const {
     if (!m_visible) return;
 
     // 检查是否合法方向（基类只处理四种）
@@ -42,7 +45,7 @@ void QChartAxis::draw(QPainter* painter, const QRectF& plotArea) const {
     QVector<qreal> ticks = tickValues();
     QStringList labels = tickLabels();
     if (ticks.isEmpty() || labels.isEmpty() || ticks.size() != labels.size()) {
-        qWarning() << "Tick data invalid.";
+        qWarning() << "Tick data invalid."<<"ticks have size of "<<ticks.size()<<" while labels have size of "<<labels.size();
         painter->restore();
         return;
     }
@@ -110,16 +113,15 @@ void QChartAxis::draw(QPainter* painter, const QRectF& plotArea) const {
     QVector<qreal> mainTicks = ticks;
     QVector<qreal> subTicks = subTickValues(); // 直接调用纯虚函数！
 
-    //// 在 draw 函数开头或刻度循环前
-    //qDebug() << "=== Axis draw ===";
-    //qDebug() << "Alignment:" << m_alignment;
-    //qDebug() << "PlotArea:" << plotArea;
-    //qDebug() << "Ticks count:" << ticks.size() << "Labels count:" << labels.size();
+    //qCDebug(logAxis) << "=== Axis draw ===";
+    //qCDebug(logAxis) << "Alignment:" << m_alignment;
+    //qCDebug(logAxis) << "PlotArea:" << plotArea;
+    //qCDebug(logAxis) << "Ticks count:" << ticks.size() << "Labels count:" << labels.size();
     //for (int i = 0; i < qMin(ticks.size(), labels.size()); ++i) {
-    //    qDebug() << "Tick" << i << ":" << ticks[i] << "Label:" << labels[i];
+    //    qCDebug(logAxis) << "Tick" << i << ":" << ticks[i] << "Label:" << labels[i];
     //}
-    //qDebug() << "subTickCount:" << m_subTickCount;
-    //qDebug() << "subTicks count:" << subTicks.size();
+    //qCDebug(logAxis) << "subTickCount:" << m_subTickCount;
+    //qCDebug(logAxis) << "subTicks count:" << subTicks.size();
 
     // ---------- 4. 先画次刻度（直接使用子类提供的 subTickValues） ----------
     if (m_subTickCount > 0) {
@@ -195,12 +197,38 @@ void QChartAxis::draw(QPainter* painter, const QRectF& plotArea) const {
             qreal y = textPos.y() - h / 2.0;
             textRect = QRectF(x, y, w, h);
         }
-        painter->save();
-        painter->setPen(Qt::red);
-        painter->drawRect(textRect);  // 绘制标签边界
-        painter->restore();
+        
+        if (logAxis().isDebugEnabled()) {
+            painter->save();
+            painter->setPen(Qt::red);
+            painter->drawRect(textRect);  // 绘制标签边界
+            painter->restore();
+        }
         // 然后绘制文字（用原来的颜色）
         painter->drawText(textRect, Qt::AlignCenter, label);
+    }
+    
+    if (logAxis().isDebugEnabled()) {
+        QRectF axisArea;
+        switch (m_alignment) {
+        case Qt::AlignBottom:
+            axisArea = QRectF(plotArea.left(), plotArea.bottom(), plotArea.width(), sizeHint(f).height());
+            break;
+        case Qt::AlignTop:
+            axisArea = QRectF(plotArea.left(), plotArea.top() - sizeHint(f).height(), plotArea.width(), sizeHint(f).height());
+            break;
+        case Qt::AlignLeft:
+            axisArea = QRectF(plotArea.left() - sizeHint(f).width(), plotArea.top(), sizeHint(f).width(), plotArea.height());
+            break;
+        case Qt::AlignRight:
+            axisArea = QRectF(plotArea.right(), plotArea.top(), sizeHint(f).width(), plotArea.height());
+            break;
+        default:
+            axisArea = QRectF();
+        }
+        painter->setPen(Qt::blue);
+        qCDebug(logAxis) << "axis area :" << axisArea;
+        painter->drawRect(axisArea);
     }
 
     painter->restore();
@@ -220,11 +248,22 @@ void QChartAxis::pan(qreal deltaNorm) {
 
 void QChartAxis::zoom(qreal centerNorm, qreal factor) {
     if (factor <= 0) return;
+
     qreal centerVal = normalizedToValue(centerNorm);
-    qreal halfSpan = (m_max - m_min) * factor / 2.0;
-    qreal newMin = centerVal - halfSpan;
-    qreal newMax = centerVal + halfSpan;
-    if (qAbs(newMax - newMin) > 0.001) {
+    qreal span = m_max - m_min;
+    qreal newSpan = span * factor;
+
+    qreal newMin = centerVal - centerNorm * newSpan;
+    qreal newMax = centerVal + (1.0 - centerNorm) * newSpan;
+
+    //qCDebug(logAxis) << "zoom: centerNorm=" << centerNorm
+    //    << "centerVal=" << centerVal
+    //    << "oldMin=" << m_min
+    //    << "oldMax=" << m_max
+    //    << "newMin=" << newMin
+    //    << "newMax=" << newMax;
+
+    if (newMax - newMin > 0.001) {
         setMin(newMin);
         setMax(newMax);
     }

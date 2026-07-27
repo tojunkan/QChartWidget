@@ -6,6 +6,7 @@
 #include <QPoint>
 #include <QRectF>
 #include "QChartGeometry.h"
+#include "QChartProjection.h"
 
 class QChartWidget : public QWidget {
     Q_OBJECT
@@ -40,6 +41,13 @@ public:
 
     void invalidateBackground();
     void invalidateForeground();
+    void invalidateLayout();
+
+    void setMargins(qreal left, qreal top, qreal right, qreal bottom) {
+        m_marginLeft = left; m_marginTop = top; m_marginRight = right; m_marginBottom = bottom;
+        layoutAxes();
+        update();
+    }
 
 signals:
     void seriesHovered(QChartSeries*,int,bool);
@@ -58,16 +66,30 @@ protected:
     virtual void drawBackground(QPainter* p);
     virtual void drawForeground(QPainter* p);
 
+    std::unique_ptr<QChartProjection> m_projection;
+    CoordinateSystem m_coordType = CoordinateSystem::Cartesian;
+
     QList<QChartGeometry*> m_geometries;
     QList<QChartAxis*> m_axes;
     QRectF m_plotArea;
     QPixmap m_bgCache, m_fgCache;
-    bool m_bgDirty = true, m_fgDirty = true, m_cachingEnabled = true;
+    bool m_bgDirty = true, m_fgDirty = true, m_layoutDirty = true, m_cachingEnabled = true;
     bool m_panEnabled = true, m_zoomEnabled = true;
     QPointF m_panStart; 
     bool m_panning = false;
     QChartSeries* m_hoverSeries = nullptr;
     int m_hoverIndex = -1;
+
+    // 默认值作为静态常量（可编译期优化）
+    static constexpr qreal DEFAULT_MARGIN_LEFT = 20;
+    static constexpr qreal DEFAULT_MARGIN_TOP = 20;
+    static constexpr qreal DEFAULT_MARGIN_RIGHT = 20;
+    static constexpr qreal DEFAULT_MARGIN_BOTTOM = 20;
+
+    qreal m_marginLeft = DEFAULT_MARGIN_LEFT;
+    qreal m_marginTop = DEFAULT_MARGIN_TOP;
+    qreal m_marginRight = DEFAULT_MARGIN_RIGHT;
+    qreal m_marginBottom = DEFAULT_MARGIN_BOTTOM;
 };
 
 #endif

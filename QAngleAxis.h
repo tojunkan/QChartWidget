@@ -3,15 +3,21 @@
 #define QANGLEAXIS_H
 
 #include "QChartAxis.h"
-// ===== QAngleAxis =====
+
 class QAngleAxis : public QChartAxis {
     Q_OBJECT
-public: explicit QAngleAxis(QObject* p = nullptr);
-    qreal mapToPixel(qreal v, qreal len) const override;
-    qreal pixelToValue(qreal p, qreal len) const override;
+
+public:
+    explicit QAngleAxis(QObject* parent = nullptr);
+
+    // ---------- 坐标映射（线性） ----------
+    qreal valueToNormalized(qreal value) const override;
+    qreal normalizedToValue(qreal norm) const override;
+
+    // ---------- 刻度 ----------
     QVector<qreal> tickValues() const override;
     QStringList tickLabels() const override;
+    QVector<qreal> subTickValues() const override;
 };
 
-
-#endif // !QANGLEAXIS_H
+#endif // QANGLEAXIS_H
