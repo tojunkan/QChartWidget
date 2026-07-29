@@ -45,9 +45,6 @@ public:
     }
     virtual void drawGrid(QPainter* p, QChartProjection* projection) const;
 
-    virtual QPointF mapToPixel(qreal x, qreal y) const = 0;
-    virtual QPointF mapFromPixel(const QPointF& p) const = 0;
-
     // Series
     void addSeries(QChartSeries* s);
     void removeSeries(QChartSeries* s);
