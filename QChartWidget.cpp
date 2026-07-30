@@ -197,7 +197,8 @@ void QChartWidget::drawBackground(QPainter* p) {
 
     for (auto* a : m_axes) {
         if (a && a->isVisible())
-            a->draw(p, m_plotArea, m_projection.get());
+            if (a->coordinateSystem() == CoordinateSystem::Cartesian)a->QChartAxis::draw(p, m_plotArea, m_projection.get());
+            else a->draw(p, m_plotArea, m_projection.get(), 0);
     }
     // 绘制网格（取最后一个几何体，或遍历全部）
     if (!m_geometries.isEmpty())

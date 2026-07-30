@@ -8,7 +8,9 @@
 
 // ===== base =====
 QChartAxis::QChartAxis(QObject* p, Qt::Alignment alignment)
-    : QObject(p), m_alignment(alignment) {
+    : QObject(p), m_alignment(Qt::AlignCenter) {
+    if (isAlignmentValid(alignment))m_alignment = alignment;
+    //如果传入参数不正确，自动置为aligncenter
 }
 
 QSizeF QChartAxis::sizeHint(const QFont& font) const {
@@ -26,10 +28,32 @@ QSizeF QChartAxis::sizeHint(const QFont& font) const {
     }
 }
 
-void QChartAxis::draw(QPainter* painter, const QRectF& plotArea, const QChartProjection* projection) const {
+
+/// <summary>
+/// 轴类的绘制函数，由widget类的drawBackground函数调用。
+/// 轴本身有两种语义：
+/// 一种是在特定坐标系下从原点出发的，其中一坐标不变的“直线”，我们用Qt::AlignCenter来表示，因为它画在plotArea的内部；
+/// 另一种是画在plotArea的侧面供使用者快速知道plotArea视窗的范围，我们用上下左右的对齐来表示。
+/// 虽然第二种语义是更为特化的版本，但因为使用情况非常广泛，而且实现起来比较固定，我们在基类的方法中实现它，
+/// 而第一种语义则交给各子类实现，因为它直接和各种坐标映射挂钩，甚至可能不是直线，更特化。
+/// </summary>
+/// <param name="painter">绘画的输出</param>
+/// <param name="plotArea">绘制轴类所参考的plotArea，每个Widget只有一个</param>
+/// <param name="projection">所用的坐标映射</param>
+/// <param name="offset">偏移量是为了留给drawGrid使用的，对于AlignCenter的轴，我们确定位置的时候需要知道该轴的另一个坐标是多少（默认0）</param>
+/// <param name="drawAxisLine">是否绘制轴线</param>
+/// <param name="drawLabels">是否绘制刻度标签</param>
+/// <param name="drawTicks">是否绘制（大、小）标签</param>
+void QChartAxis::draw(QPainter* painter, 
+    const QRectF& plotArea, 
+    const QChartProjection* projection,
+    qreal offset,
+    bool drawAxisLine,
+    bool drawLabels, 
+    bool drawTicks) const {
     if (!m_visible) return;
 
-    // 检查是否合法方向（基类只处理四种）
+    // 检查是否合法方向（基类只处理四种，不处理AlignCenter）
     if (!(m_alignment == Qt::AlignTop || m_alignment == Qt::AlignBottom ||
         m_alignment == Qt::AlignLeft || m_alignment == Qt::AlignRight)) {
         return;
@@ -92,16 +116,18 @@ void QChartAxis::draw(QPainter* painter, const QRectF& plotArea, const QChartPro
     }
 
     // ---------- 2. 绘制主轴线 ----------
-    QPointF axisStart, axisEnd;
-    if (isHoriz) {
-        axisStart = QPointF(plotArea.left(), fixedCoord);
-        axisEnd = QPointF(plotArea.right(), fixedCoord);
+    if (drawAxisLine) {
+        QPointF axisStart, axisEnd;
+        if (isHoriz) {
+            axisStart = QPointF(plotArea.left(), fixedCoord);
+            axisEnd = QPointF(plotArea.right(), fixedCoord);
+        }
+        else {
+            axisStart = QPointF(fixedCoord, plotArea.top());
+            axisEnd = QPointF(fixedCoord, plotArea.bottom());
+        }
+        painter->drawLine(axisStart, axisEnd);
     }
-    else {
-        axisStart = QPointF(fixedCoord, plotArea.top());
-        axisEnd = QPointF(fixedCoord, plotArea.bottom());
-    }
-    painter->drawLine(axisStart, axisEnd);
 
     // ---------- 3. 准备绘制参数 ----------
     const qreal tickLen = 4.0;
@@ -124,7 +150,7 @@ void QChartAxis::draw(QPainter* painter, const QRectF& plotArea, const QChartPro
     //qCDebug(logAxis) << "subTicks count:" << subTicks.size();
 
     // ---------- 4. 先画次刻度（直接使用子类提供的 subTickValues） ----------
-    if (m_subTickCount > 0) {
+    if (drawTicks && m_subTickCount > 0) {
         for (qreal subVal : subTicks) {
             qreal norm = valueToNormalized(subVal);
             qreal clampedNorm = qBound(0.0, norm, 1.0);
@@ -162,50 +188,52 @@ void QChartAxis::draw(QPainter* painter, const QRectF& plotArea, const QChartPro
         }
 
         // 主刻度线
-        painter->drawLine(pos, pos + tickDir * tickLen);
+        if(drawTicks)painter->drawLine(pos, pos + tickDir * tickLen);
 
         // ---------- 文字部分：完全基于字体度量动态计算 ----------
-        QString label = labels[i];
-        QFontMetrics fm(painter->font());
+        if (drawLabels) {
+            QString label = labels[i];
+            QFontMetrics fm(painter->font());
 
-        // 精确获取文本的像素宽高
-        qreal textWidth = fm.horizontalAdvance(label);
-        qreal textHeight = fm.height();
+            // 精确获取文本的像素宽高
+            qreal textWidth = fm.horizontalAdvance(label);
+            qreal textHeight = fm.height();
 
-        // 文字锚点：从刻度线终点再往外偏移（间距 = AXIS_MARGIN - TICK_LENGTH）
-        // 因为 AXIS_MARGIN 是"轴线到文字外边缘"的总距离，扣掉刻度线占的 4px，剩下的留给文字偏移
-        qreal offset = AXIS_MARGIN - TICK_LENGTH;
-        QPointF textPos = pos + labelDir * offset;
+            // 文字锚点：从刻度线终点再往外偏移（间距 = AXIS_MARGIN - TICK_LENGTH）
+            // 因为 AXIS_MARGIN 是"轴线到文字外边缘"的总距离，扣掉刻度线占的 4px，剩下的留给文字偏移
+            qreal offset = AXIS_MARGIN - TICK_LENGTH;
+            QPointF textPos = pos + labelDir * offset;
 
-        QRectF textRect;
-        if (isHoriz) {
-            // 水平轴：文字水平居中，垂直方向紧贴 textPos
-            qreal w = textWidth + TEXT_PADDING * 2;
-            qreal h = textHeight + TEXT_PADDING * 2;
-            qreal x = textPos.x() - w / 2.0;
-            qreal y = textPos.y() - h / 2.0 + (labelDir.y() * h) / 2.0;
-                    //(labelDir.y() < 0) ? textPos.y() - h : textPos.y()
+            QRectF textRect;
+            if (isHoriz) {
+                // 水平轴：文字水平居中，垂直方向紧贴 textPos
+                qreal w = textWidth + TEXT_PADDING * 2;
+                qreal h = textHeight + TEXT_PADDING * 2;
+                qreal x = textPos.x() - w / 2.0;
+                qreal y = textPos.y() - h / 2.0 + (labelDir.y() * h) / 2.0;
+                //(labelDir.y() < 0) ? textPos.y() - h : textPos.y()
             // labelDir.y() < 0 表示朝上（顶部轴），矩形底部对齐 textPos
-            textRect = QRectF(x, y, w, h);
+                textRect = QRectF(x, y, w, h);
+            }
+            else {
+                // 垂直轴：文字垂直居中，水平方向紧贴 textPos
+                qreal w = textWidth + TEXT_PADDING * 2;
+                qreal h = textHeight + TEXT_PADDING * 2;
+                qreal x = textPos.x() - w / 2.0 + (labelDir.x() * w) / 2.0;
+                //(labelDir.x() < 0) ? textPos.x() - w : textPos.x();
+                qreal y = textPos.y() - h / 2.0;
+                textRect = QRectF(x, y, w, h);
+            }
+
+            if (logAxis().isDebugEnabled()) {
+                painter->save();
+                painter->setPen(Qt::red);
+                painter->drawRect(textRect);  // 绘制标签边界
+                painter->restore();
+            }
+            // 然后绘制文字（用原来的颜色）
+            painter->drawText(textRect, Qt::AlignCenter, label);
         }
-        else {
-            // 垂直轴：文字垂直居中，水平方向紧贴 textPos
-            qreal w = textWidth + TEXT_PADDING * 2;
-            qreal h = textHeight + TEXT_PADDING * 2;
-            qreal x = textPos.x() - w / 2.0 + (labelDir.x() * w) / 2.0;
-                    //(labelDir.x() < 0) ? textPos.x() - w : textPos.x();
-            qreal y = textPos.y() - h / 2.0;
-            textRect = QRectF(x, y, w, h);
-        }
-        
-        if (logAxis().isDebugEnabled()) {
-            painter->save();
-            painter->setPen(Qt::red);
-            painter->drawRect(textRect);  // 绘制标签边界
-            painter->restore();
-        }
-        // 然后绘制文字（用原来的颜色）
-        painter->drawText(textRect, Qt::AlignCenter, label);
     }
     
     if (logAxis().isDebugEnabled()) {
@@ -272,4 +300,11 @@ void QChartAxis::zoom(qreal centerNorm, qreal factor) {
 // ===== 次刻度标签（基类默认返回空，绝大多数子类无需重写） =====
 QStringList QChartAxis::subTickLabels() const {
     return QStringList(); // 默认不画文字
+}
+
+bool QChartAxis::isAlignmentValid(Qt::Alignment alignment) const {
+    if (coordinateSystem() == CoordinateSystem::Cartesian)return true;
+    else if (alignment == Qt::AlignCenter)return true;
+    qWarning() << "input alignment is not valid.";
+    return false;
 }

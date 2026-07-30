@@ -97,7 +97,11 @@ public:
     // plotArea 是绘图区矩形（像素坐标），轴根据自身的 alignment 决定画在哪条边上
     virtual void draw(QPainter* painter, 
         const QRectF& plotArea,
-        const QChartProjection* projection) const;
+        const QChartProjection* projection,
+        qreal offset = 0,
+        bool drawAxisLine = true,
+        bool drawLabels = true,
+        bool drawTicks = true) const;
 
     // ---------- 样式 ----------
     bool isVisible() const { return m_visible; }
@@ -117,6 +121,8 @@ public:
     // ---------- 边距/对齐（笛卡尔专用，极轴可忽略）----------
     Qt::Alignment alignment() const { return m_alignment; }
     void setAlignment(Qt::Alignment alignment) { m_alignment = alignment; }
+
+    virtual bool isAlignmentValid(Qt::Alignment alignment) const;
 
 signals:
     void rangeChanged(qreal min, qreal max);
