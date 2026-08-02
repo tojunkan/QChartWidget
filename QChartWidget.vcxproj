@@ -167,6 +167,7 @@
   <ItemGroup>
     <ClInclude Include="QChartDebug.h" />
     <ClInclude Include="QChartProjectionFactory.h" />
+    <ClInclude Include="QFunctionalProjection.h" />
     <ClInclude Include="QPolarProjection.h" />
     <QtMoc Include="QCartesianGeometry.h" />
     <QtMoc Include="QBarCategoryAxis.h" />

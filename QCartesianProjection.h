@@ -1,5 +1,6 @@
-#pragma once
-// QCartesianProjection.h
+// QCartesianProjection.h —— 笛卡尔坐标投影
+// toCartesian/fromCartesian: 恒等映射，Numeric 空间 ≡ View Cartesian 空间
+// computeDataBounds/computeViewRect: 恒等，dataBounds ≡ viewRect
 #pragma once
 #include "QChartProjection.h"
 
@@ -7,17 +8,25 @@ class QCartesianProjection : public QChartProjection {
 public:
     CoordinateSystem type() const override { return CoordinateSystem::Cartesian; }
 
-    QPointF mapToPixel(qreal normX, qreal normY, const QRectF& plotArea) const override {
-        return QPointF(
-            plotArea.left() + normX * plotArea.width(),
-            plotArea.top() + (1.0 - normY) * plotArea.height()
-        );
+    // ── Numeric ↔ View Cartesian：恒等 ──
+    QPointF toCartesian(qreal num0, qreal num1) const override {
+        return QPointF(num0, num1);
     }
 
-    QPointF mapToNormalized(const QPointF& pixel, const QRectF& plotArea) const override {
-        return QPointF(
-            (pixel.x() - plotArea.left()) / plotArea.width(),
-            (plotArea.bottom() - pixel.y()) / plotArea.height()
-        );
+    QPointF fromCartesian(qreal x, qreal y) const override {
+        return QPointF(x, y);
+    }
+
+    // ── 包络：恒等（Cartesian 下两种空间同构）──
+    QRectF computeDataBounds(const QRectF& viewRect) const override {
+        return viewRect;   // Numeric 范围 == View Cartesian 范围
+    }
+
+    QRectF computeViewRect(const QRectF& dataBounds) const override {
+        return dataBounds; // 反过来也恒等
+    }
+
+    QRectF defaultDataBounds() const override {
+        return QRectF(0, 0, 10, 10); // 初始默认范围
     }
 };

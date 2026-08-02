@@ -1,3 +1,7 @@
+// QChartAxis.h —— 轴基类
+// 职责：数值化（Data↔Numeric）+ 刻度生成 + 标签格式化 + 绘制
+// 不负责：坐标映射（Projection 的事）、视窗变换（Widget 的事）
+// 五空间链中：Axis 掌管 Data ↔ Numeric 这一环
 #ifndef QCHARTAXIS_H
 #define QCHARTAXIS_H
 
@@ -10,146 +14,123 @@
 #include <QPainter>
 #include <Qt>
 #include <QFont>
+#include <QVariant>
+
+// ===== 前置声明 =====
+struct DrawContext;
+
+// ===== DrawContext：每次 draw 调用时传递的上下文 =====
+struct DrawContext {
+    QRectF plotArea;                   // 绘图区像素矩形
+    QRectF dataBounds;                 // 当前可见 Numeric 范围: (dim0Min, dim1Min, dim0Span, dim1Span)
+    QRectF viewRect;                   // 当前 View Cartesian 窗口
+    const QChartProjection* projection = nullptr;
+};
 
 class QChartAxis : public QObject
 {
     Q_OBJECT
-        Q_PROPERTY(qreal min READ min WRITE setMin NOTIFY rangeChanged)
-        Q_PROPERTY(qreal max READ max WRITE setMax NOTIFY rangeChanged)
-        Q_PROPERTY(bool visible READ isVisible WRITE setVisible NOTIFY visibleChanged)
-        Q_PROPERTY(QString title READ title WRITE setTitle)
-        Q_PROPERTY(QColor color READ color WRITE setColor)
-        Q_PROPERTY(int tickCount READ tickCount WRITE setTickCount NOTIFY tickCountChanged)
-        Q_PROPERTY(int subTickCount READ subTickCount WRITE setSubTickCount NOTIFY subTickCountChanged)
-        Q_PROPERTY(Qt::Alignment alignment READ alignment WRITE setAlignment)
-        Q_PROPERTY(bool dragEnabled READ isDragEnabled WRITE setDragEnabled)
-        Q_PROPERTY(bool zoomEnabled READ isZoomEnabled WRITE setZoomEnabled)
+    Q_PROPERTY(bool visible READ isVisible WRITE setVisible NOTIFY visibleChanged)
+    Q_PROPERTY(QString title READ title WRITE setTitle)
+    Q_PROPERTY(QColor color READ color WRITE setColor)
+    Q_PROPERTY(int tickCount READ tickCount WRITE setTickCount NOTIFY tickCountChanged)
+    Q_PROPERTY(int subTickCount READ subTickCount WRITE setSubTickCount NOTIFY subTickCountChanged)
+    Q_PROPERTY(Qt::Alignment alignment READ alignment WRITE setAlignment)
 
 public:
-    // 构造函数中传入对齐方式（笛卡尔轴用），AngleAxis/RadialAxis可传入AlignCenter或不处理
-    explicit QChartAxis(QObject* parent = nullptr, Qt::Alignment alignment = Qt::AlignBottom);
+    explicit QChartAxis(QObject* parent = nullptr,
+                        Qt::Alignment alignment = Qt::AlignBottom);
     virtual ~QChartAxis() = default;
 
-    // ---------- 范围管理 ----------
-    qreal min() const { return m_min; }
-    qreal max() const { return m_max; }
-    virtual void setMin(qreal v) {
-        if (qFuzzyCompare(m_min, v)) return;
-        m_min = v;
-        emit rangeChanged(m_min, m_max);
-    }
-    virtual void setMax(qreal v) {
-        if (qFuzzyCompare(m_max, v)) return;
-        m_max = v;
-        emit rangeChanged(m_min, m_max);
-    }
-    void setRange(qreal min, qreal max) {
-        if (qFuzzyCompare(m_min, min) && qFuzzyCompare(m_max, max)) return;
-        m_min = min;
-        m_max = max;
-        emit rangeChanged(m_min, m_max);
-    }
+    // ===== 数值化（纯虚）—— 跨类型统一的数字中间层 =====
+    /// Data → Numeric。非法 data 返回 NaN 并 qWarning
+    virtual qreal toNumeric(QVariant data) const = 0;
+    /// Numeric → Data。NaN/Inf 按子类策略处理
+    virtual QVariant fromNumeric(qreal num) const = 0;
 
-    // ---------- 核心映射（纯数学）----------
-    // 将数据原始值 -> 归一化 [0.0, 1.0]
-    virtual qreal valueToNormalized(qreal value) const = 0;
-    // 将归一化 [0.0, 1.0] -> 数据原始值
-    virtual qreal normalizedToValue(qreal norm) const = 0;
+    // ===== 刻度生成（纯虚）—— 在给定 Numeric 区间内生成合适刻度 =====
+    /// 在 [numericMin, numericMax] 区间内生成主刻度位置（Numeric 空间的值）
+    virtual QVector<qreal> tickValues(qreal numericMin, qreal numericMax) const = 0;
+    /// 给定刻度数值（Numeric 空间），返回格式化标签字符串
+    virtual QStringList tickLabels(const QVector<qreal>& ticks) const = 0;
+    /// 次刻度位置，默认返回空。子类可覆盖
+    virtual QVector<qreal> subTickValues(qreal numericMin, qreal numericMax) const;
 
-    // ---------- 交互权限 ----------
-    bool isDragEnabled() const { return m_panEnabled; }
-    virtual void setDragEnabled(bool enabled) { m_panEnabled = enabled; }
+    // ===== 绘制 =====
+    /// 边框轴模式：画在 plotArea 对应边缘（仅 Cartesian 有效）
+    /// 不依赖 Projection，直接用 plotArea 边缘坐标线性插值
+    void drawAtEdge(QPainter* painter, const DrawContext& ctx,
+                    bool drawAxisLine, bool drawLabels, bool drawTicks) const;
 
-    bool isZoomEnabled() const { return m_zoomEnabled; }
-    virtual void setZoomEnabled(bool enabled) { m_zoomEnabled = enabled; }
+    /// 数据主脊模式：画在 offset 指定的 Numeric 位置（所有坐标系有效）
+    /// offset 是另一维度的 Numeric 值（由调用者 Geometry 提供）
+    void drawAtPosition(QPainter* painter, const DrawContext& ctx, qreal offset,
+                        bool drawAxisLine, bool drawLabels, bool drawTicks) const;
 
-    virtual void pan(qreal deltaNorm);
-    virtual void zoom(qreal centerNorm, qreal factor);
-
-    // ---------- 刻度 ----------
-    int tickCount() const { return m_tickCount; }
-    void setTickCount(int n) { 
-        if (n < 2)n = 2;
-        if (n == m_tickCount) return;
-        m_tickCount = n; 
-        emit tickCountChanged();
-    }
-    int subTickCount() const { return m_subTickCount; }
-    void setSubTickCount(int n) {
-        if (n == m_subTickCount) return;
-        emit subTickCountChanged();
-        m_subTickCount = n;
-    }
-
-    // 子类必须根据自身的 min/max 和刻度策略，返回原始数据值的刻度位置（数据坐标） 
-    virtual QVector<qreal> tickValues() const = 0;
-    // 子类根据 tickValues 返回格式化的字符串（日期/数字/对数符号等）
-    virtual QStringList tickLabels() const = 0;
-
-    virtual QVector<qreal> subTickValues() const = 0;
-    virtual QStringList subTickLabels() const;
-
-    // ---------- 布局 & 绘制（负责背景层的轴线和刻度标签）----------
-    // 轴根据 alignment 和 plotArea 计算自己所需的空间（用于上层布局预留位置）
+    /// 边框轴占用空间估算；数据主脊返回 {0, 0}
     virtual QSizeF sizeHint(const QFont& font) const;
 
-    // 绘制背景层（轴、刻度线、刻度标签、标题）
-    // plotArea 是绘图区矩形（像素坐标），轴根据自身的 alignment 决定画在哪条边上
-    virtual void draw(QPainter* painter, 
-        const QRectF& plotArea,
-        const QChartProjection* projection,
-        qreal offset = 0,
-        bool drawAxisLine = true,
-        bool drawLabels = true,
-        bool drawTicks = true) const;
+    // ===== 语法糖（仅 Cartesian，内部转发给 Widget）=====
+    /// setRange / min / max 仅在 Cartesian 下有意义
+    /// 内部存储语法糖字段，通过 rangeChanged 信号由 Widget 连接后
+    /// 映射到 Widget::setDataRangeDim0/Dim1
+    void setRange(qreal min, qreal max);
+    qreal min() const { return m_sugarMin; }
+    qreal max() const { return m_sugarMax; }
 
-    // ---------- 样式 ----------
+    // ===== 样式 / 查询 =====
+    Qt::Alignment alignment() const { return m_alignment; }
+    void setAlignment(Qt::Alignment a) { m_alignment = a; }
+
     bool isVisible() const { return m_visible; }
-    void setVisible(bool v) {
-        if (m_visible == v) return;
-        m_visible = v;
-        emit visibleChanged();
-    }
+    void setVisible(bool v);
+
     QString title() const { return m_title; }
     void setTitle(const QString& t) { m_title = t; }
+
     QColor color() const { return m_color; }
     void setColor(const QColor& c) { m_color = c; }
 
-    // ---------- 坐标系标识 ---------
-    virtual CoordinateSystem coordinateSystem() const = 0;
+    int tickCount() const { return m_tickCount; }
+    void setTickCount(int n);
 
-    // ---------- 边距/对齐（笛卡尔专用，极轴可忽略）----------
-    Qt::Alignment alignment() const { return m_alignment; }
-    void setAlignment(Qt::Alignment alignment) { m_alignment = alignment; }
+    int subTickCount() const { return m_subTickCount; }
+    void setSubTickCount(int n);
 
-    virtual bool isAlignmentValid(Qt::Alignment alignment) const;
+    /// 是否为水平方向（Top / Bottom / HCenter）
+    bool isHorizontal() const {
+        return (m_alignment == Qt::AlignBottom || m_alignment == Qt::AlignTop
+                || m_alignment == Qt::AlignHCenter);
+    }
 
 signals:
+    /// setRange 语法糖触发，Widget 连接后映射到 setDataRangeDim0/Dim1
     void rangeChanged(qreal min, qreal max);
     void visibleChanged();
+    void styleChanged();
     void tickCountChanged();
     void subTickCountChanged();
 
 protected:
-    // 基础成员
-    qreal m_min = 0.0;
-    qreal m_max = 10.0;
-    int m_tickCount = 5;
-    int m_subTickCount = 0;
-    bool m_visible = true;
-    bool m_panEnabled = true;       // 默认允许拖动，子类可修改
-    bool m_zoomEnabled = true;       // 默认允许缩放，子类可修改
+    // ── 语法糖字段（仅 Cartesian 有效，非映射基准）──
+    qreal m_sugarMin = 0.0;
+    qreal m_sugarMax = 0.0;
 
+    // ── 刻度参数 ──
+    int m_tickCount = 5;         // 目标主刻度数（供 niceStep 参考）
+    int m_subTickCount = 0;      // 每个主刻度间的次刻度数
+
+    // ── 样式 ──
+    bool m_visible = true;
     QString m_title;
     QColor m_color = Qt::black;
-
-    // 对齐方式：用于笛卡尔轴(左/右/上/下)，Radial/Angle轴可忽略
     Qt::Alignment m_alignment = Qt::AlignBottom;
 
-    static constexpr qreal AXIS_MARGIN = 8.0;  // 轴线到文字外侧的总边距
-    static constexpr qreal TICK_LENGTH = 4.0;  // 主刻度线长度
-    static constexpr qreal SUB_TICK_LENGTH = 2.0;
-    static constexpr qreal TEXT_PADDING = 3.0; // 文字周围的微小呼吸空间
+    // ── 常量 ──
+    static constexpr qreal AXIS_MARGIN = 8.0;   // 轴线到文字外侧的总边距
+    static constexpr qreal TICK_LENGTH = 4.0;   // 主刻度线长度
+    static constexpr qreal SUB_TICK_LENGTH = 2.0; // 次刻度线长度
+    static constexpr qreal TEXT_PADDING = 3.0;   // 文字周围的微小呼吸空间
 };
 
 #endif // QCHARTAXIS_H

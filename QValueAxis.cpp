@@ -1,36 +1,42 @@
+// QValueAxis.cpp —— 数值轴实现
 #include "QValueAxis.h"
-#include "QCartesianProjection.h"
+#include "QChartDebug.h"
 #include <QtMath>
 #include <QDebug>
+#include <cmath>
 
-// ===== 构造函数 =====
-QValueAxis::QValueAxis(QObject* p, Qt::Alignment alignment)
-    : QChartAxis(p, alignment) // 父类默认底部对齐
+Q_LOGGING_CATEGORY(logValueAxis, "chart.axis.value")
+
+QValueAxis::QValueAxis(QObject* parent, Qt::Alignment alignment)
+    : QChartAxis(parent, alignment)
 {
-    // 设置一个合理的默认范围
-    m_min = 0.0;
-    m_max = 10.0;
+    // 数值轴无特殊初始化——刻度生成依赖调用者传入的 numericMin/numericMax
+    qCDebug(logValueAxis) << "QValueAxis created, alignment:" << alignment;
 }
 
-CoordinateSystem QValueAxis::coordinateSystem() const { return CoordinateSystem::Cartesian; }
-
-// ===== 坐标映射（线性） =====
-qreal QValueAxis::valueToNormalized(qreal value) const {
-    if (qFuzzyCompare(m_max, m_min))
-        return 0.0;
-    return (value - m_min) / (m_max - m_min);
+// ===== 数值化：恒等 =====
+qreal QValueAxis::toNumeric(QVariant data) const {
+    bool ok = false;
+    qreal val = data.toDouble(&ok);
+    if (!ok) {
+        qWarning() << "QValueAxis::toNumeric: invalid data —" << data
+                   << "— returning NaN";
+        return qQNaN();
+    }
+    return val;
 }
 
-qreal QValueAxis::normalizedToValue(qreal norm) const {
-    return m_min + norm * (m_max - m_min);
+QVariant QValueAxis::fromNumeric(qreal num) const {
+    // 直通：NaN→NaN, Inf→Inf, 正常值→正常值
+    // 调用方负责在绘制前检查 NaN 并跳过
+    return QVariant::fromValue(num);
 }
 
-// ===== 漂亮步长算法（核心） =====
+// ===== niceStep 算法 =====
 qreal QValueAxis::niceStep(qreal range) const {
-    if (range <= 0 || !std::isfinite(range))
+    if (range <= 0.0 || !std::isfinite(range))
         return 1.0;
 
-    // 目标刻度数：使用 m_tickCount，但至少为 2
     int targetTicks = qMax(2, m_tickCount);
     qreal roughStep = range / targetTicks;
 
@@ -41,102 +47,102 @@ qreal QValueAxis::niceStep(qreal range) const {
     // 归一化到 [1, 10)
     qreal normalized = roughStep / magnitude;
 
-    // 选择“漂亮”的整数因子：1, 2, 5, 10
-    qreal multiplier;
-    if (normalized < 1.5)
-        multiplier = 1.0;
-    else if (normalized < 3.5)
-        multiplier = 2.0;
-    else if (normalized < 7.5)
-        multiplier = 5.0;
-    else
-        multiplier = 10.0;
+    // 漂亮因子候选表（按升序排列）
+    static const qreal factors[] = { 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 8.0, 10.0 };
 
-    return multiplier * magnitude;
+    // 找最接近 normalized 的因子
+    qreal bestFactor = factors[0];
+    qreal bestDist = std::abs(normalized - factors[0]);
+    for (const qreal& f : factors) {
+        qreal dist = std::abs(normalized - f);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestFactor = f;
+        }
+    }
+
+    return bestFactor * magnitude;
 }
 
-// ===== 设置固定步长 =====
 void QValueAxis::setTickInterval(qreal v) {
-    if (v <= 0) {
-        m_tickInterval = 0;
-        emit tickCountChanged(); // 通知更新
-    }
-    else {
+    if (v <= 0.0) {
+        m_tickInterval = 0.0;
+        qCDebug(logValueAxis) << "tickInterval reset to auto";
+    } else {
         m_tickInterval = v;
-        emit tickCountChanged();
+        qCDebug(logValueAxis) << "tickInterval set to" << v;
     }
+    emit tickCountChanged();
 }
 
 // ===== 生成主刻度值 =====
-QVector<qreal> QValueAxis::tickValues() const {
+QVector<qreal> QValueAxis::tickValues(qreal numericMin, qreal numericMax) const {
     QVector<qreal> result;
-    if (!m_visible || qFuzzyCompare(m_max, m_min)) {
-        result.append(m_min);
+    if (qFuzzyCompare(numericMin, numericMax)) {
+        qCDebug(logValueAxis) << "tickValues: degenerate range [" << numericMin
+                              << "," << numericMax << "] — returning single tick";
+        result.append(numericMin);
         return result;
     }
 
+    qreal range = numericMax - numericMin;
     qreal step;
-    if (m_tickInterval > 0) {
+    if (m_tickInterval > 0.0) {
         step = m_tickInterval;
-    }
-    else {
-        step = niceStep(m_max - m_min);
-        // 确保步长不会因为浮点误差产生0
-        if (step <= 0) step = (m_max - m_min) / qMax(1, m_tickCount - 1);
+    } else {
+        step = niceStep(range);
+        if (step <= 0.0 || !std::isfinite(step))
+            step = range / qMax(1, m_tickCount - 1);
     }
 
     // 对齐起始值（向上取整到 step 的倍数）
-    qreal first = std::ceil(m_min / step) * step;
-    qreal last = std::floor(m_max / step) * step;
+    qreal first = std::ceil(numericMin / step) * step;
+    qreal last  = std::floor(numericMax / step) * step;
 
-    // 如果对齐后区间为空（比如范围太小），退化为直接等分
+    // 如果对齐后区间为空（范围太小），退化为等分
     if (first > last) {
         int count = qMax(2, m_tickCount);
         for (int i = 0; i < count; ++i) {
             qreal t = static_cast<qreal>(i) / (count - 1);
-            result.append(m_min + t * (m_max - m_min));
+            result.append(numericMin + t * range);
         }
+        qCDebug(logValueAxis) << "tickValues: degenerate range, using" << count
+                              << "equal divisions";
         return result;
     }
 
     // 填充刻度
     for (qreal v = first; v <= last + step * 0.0001; v += step) {
-        // 防止浮点误差导致超出范围
-        if (v > m_max + step * 0.0001) break;
+        if (v > numericMax + step * 0.0001) break;
         result.append(v);
     }
 
-    // 如果结果太少（<2），补全首尾
+    // 保障至少有 2 个刻度
     if (result.size() < 2) {
         result.clear();
-        result.append(m_min);
-        result.append(m_max);
+        result.append(numericMin);
+        result.append(numericMax);
     }
 
+    qCDebug(logValueAxis) << "tickValues: [" << numericMin << "," << numericMax
+                          << "] step=" << step << " count=" << result.size();
     return result;
 }
 
-// ===== 生成主刻度标签 =====
-QStringList QValueAxis::tickLabels() const {
+// ===== 标签格式化 =====
+QStringList QValueAxis::tickLabels(const QVector<qreal>& ticks) const {
     QStringList labels;
-    QVector<qreal> values = tickValues();
-    if (values.isEmpty())
-        return labels;
-
-    for (qreal v : values) {
+    for (qreal v : ticks) {
         QString label;
         if (!m_labelFormat.isEmpty()) {
-            // 用户自定义格式（如 "%.2f cm"）
+            // 用户自定义 printf 格式（如 "%.2f°"）
             label = QString::asprintf(m_labelFormat.toUtf8().constData(), v);
-        }
-        else if (m_labelDecimals >= 0) {
-            // 用户指定小数位数
-            label = QString::number(v, 'f', m_labelDecimals);
-        }
-        else {
-            // 自动去零（保留有效位数）
+        } else if (m_labelPrecision >= 0) {
+            // 固定小数位数
+            label = QString::number(v, 'f', m_labelPrecision);
+        } else {
+            // 自动去零
             QString str = QString::number(v, 'f', 8);
-            // 去除末尾多余的 '0' 和可能的小数点
             while (str.endsWith('0'))
                 str.chop(1);
             if (str.endsWith('.'))
@@ -148,44 +154,33 @@ QStringList QValueAxis::tickLabels() const {
     return labels;
 }
 
-// ===== 生成次刻度值（线性插值） =====
-QVector<qreal> QValueAxis::subTickValues() const {
+// ===== 次刻度 =====
+QVector<qreal> QValueAxis::subTickValues(qreal numericMin, qreal numericMax) const {
     QVector<qreal> result;
     if (m_subTickCount <= 0)
         return result;
 
-    QVector<qreal> mains = tickValues();
+    QVector<qreal> mains = tickValues(numericMin, numericMax);
     if (mains.size() < 2)
         return result;
 
+    qreal step = (mains[1] - mains[0]) / (m_subTickCount + 1);
 
-    qreal v1 = mains[0];
-    qreal v2 = mains[1];
-    qreal step = (v2 - v1) / (m_subTickCount + 1);
-
-    // 从第一个主刻度向左补充次刻度
+    // 从第一个主刻度向左补充
     qreal firstMain = mains.first();
-    for (qreal v = firstMain - step; v > m_min; v -= step) {
+    for (qreal v = firstMain - step; v > numericMin; v -= step)
         result.append(v);
-    }
 
+    // 主刻度之间
     for (int i = 0; i < mains.size() - 1; ++i) {
-        for (int j = 1; j <= m_subTickCount; ++j) {
+        for (int j = 1; j <= m_subTickCount; ++j)
             result.append(mains[i] + j * step);
-        }
     }
 
-    // 从最后一个主刻度向右补充次刻度
+    // 从最后一个主刻度向右补充
     qreal lastMain = mains.last();
-    for (qreal v = lastMain + step; v < m_max; v += step) {
+    for (qreal v = lastMain + step; v < numericMax; v += step)
         result.append(v);
-    }
 
     return result;
-}
-
-// ===== 次刻度标签（默认无文字） =====
-QStringList QValueAxis::subTickLabels() const {
-    // 次刻度一般不显示标签，返回空列表
-    return QStringList();
 }

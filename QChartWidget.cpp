@@ -1,6 +1,7 @@
+// QChartWidget.cpp —— 图表控件实现
+// 持有唯一 Projection、管理 viewRect、协调 Axis/Geometry 绘制
 #include "QChartWidget.h"
 #include "QChartSeries.h"
-#include "QChartProjection.h"
 #include "QChartProjectionFactory.h"
 #include "QChartDebug.h"
 #include <QPainter>
@@ -9,15 +10,16 @@
 #include <QDebug>
 #include <QLoggingCategory>
 
-Q_LOGGING_CATEGORY(logAxis, "chart.axis")
 Q_LOGGING_CATEGORY(logWidget, "chart.widget")
-Q_LOGGING_CATEGORY(logGeometry, "chart.geometry")
-Q_LOGGING_CATEGORY(logSeries, "chart.series")
+Q_LOGGING_CATEGORY(logProjection, "chart.projection")
+Q_LOGGING_CATEGORY(logFactory, "chart.projection.factory")
+Q_LOGGING_CATEGORY(logRender, "chart.render")
 
-
-QChartWidget::QChartWidget(QWidget* p) : QWidget(p) {
+// ===== 构造 & 析构 =====
+QChartWidget::QChartWidget(QWidget* parent) : QWidget(parent) {
     setMouseTracking(true);
     setMinimumSize(200, 150);
+    qCDebug(logWidget) << "QChartWidget created";
 }
 
 QChartWidget::~QChartWidget() {
@@ -25,19 +27,31 @@ QChartWidget::~QChartWidget() {
     qDeleteAll(m_axes);
 }
 
+// ===== 组件管理 =====
 void QChartWidget::addGeometry(QChartGeometry* g) {
     if (!g) return;
-    if (m_projection == nullptr) {
+
+    // 如果还没有 Projection，用 Geometry 的坐标系类型创建（默认 Cartesian）
+    if (!m_projection) {
         m_projection = QChartProjectionFactory::create(g->coordinateSystem());
+        if (!m_viewInitialized && m_projection) {
+            m_dataBounds = m_projection->defaultDataBounds();
+            m_viewRect = m_projection->computeViewRect(m_dataBounds);
+            m_viewInitialized = true;
+            qCDebug(logWidget) << "viewRect initialized from defaultDataBounds:"
+                               << m_viewRect;
+            fitViewRectToPlotArea(FitStrategy::KeepCenter);
+        }
     }
-    else if (m_projection->type() != g->coordinateSystem()) {
-        qWarning() << "Projection mismatched with the Geometry.";
-        return;
-    }
+
+    // Widget 的 projection 是权威来源 → 同步给 Geometry
+    if (m_projection)
+        g->setCoordinateSystem(m_projection->type());
+
     g->setParent(this);
     m_geometries.append(g);
-    // 如果已有轴，且几何体已绑定轴，无需额外操作（轴不再需要 setGeometry）
     invalidateForeground();
+    qCDebug(logWidget) << "Geometry added, total:" << m_geometries.size();
 }
 
 void QChartWidget::removeGeometry(QChartGeometry* g) {
@@ -48,26 +62,34 @@ void QChartWidget::removeGeometry(QChartGeometry* g) {
 
 void QChartWidget::addAxis(QChartAxis* a) {
     if (!a) return;
-    if (m_projection == nullptr) {
-        m_projection = QChartProjectionFactory::create(a->coordinateSystem());
-    }
-    else if (m_projection->type() != a->coordinateSystem()) {
-        qWarning() << "Projection mismatched with the Axis.";
+
+    // Axis 没有 coordinateSystem()——如果 Projection 尚未创建，报错
+    if (!m_projection) {
+        qWarning() << "QChartWidget::addAxis: no projection set — call addGeometry() or setProjection() first";
         return;
     }
+
     a->setParent(this);
     m_axes.append(a);
-    // 连接范围变化信号，刷新背景和前景
-    connect(a, &QChartAxis::rangeChanged,
-        this, [this]() {
-            invalidateBackground();
-            invalidateForeground();
-        });
-    // 连接范围变化信号到请求布局
-    connect(a, &QChartAxis::rangeChanged, this, &QChartWidget::invalidateLayout);
-    // 添加后立即请求一次布局
+
+    // 语法糖：rangeChanged 信号 → setDataRangeDim0/Dim1
+    connect(a, &QChartAxis::rangeChanged, this, [this, a](qreal min, qreal max) {
+        Qt::Alignment align = a->alignment();
+        if (align == Qt::AlignBottom || align == Qt::AlignTop || align == Qt::AlignHCenter) {
+            setDataRangeDim0(min, max);
+        } else if (align == Qt::AlignLeft || align == Qt::AlignRight || align == Qt::AlignVCenter) {
+            setDataRangeDim1(min, max);
+        }
+    });
+
+    // 可见性/样式变化 → 刷新背景
+    connect(a, &QChartAxis::visibleChanged, this, [this]() { invalidateBackground(); });
+    connect(a, &QChartAxis::styleChanged,  this, [this]() { invalidateBackground(); });
+    connect(a, &QChartAxis::tickCountChanged, this, [this]() { invalidateBackground(); });
+
     invalidateLayout();
     invalidateBackground();
+    qCDebug(logWidget) << "Axis added, total:" << m_axes.size();
 }
 
 void QChartWidget::removeAxis(QChartAxis* a) {
@@ -77,79 +99,273 @@ void QChartWidget::removeAxis(QChartAxis* a) {
     invalidateBackground();
 }
 
-void QChartWidget::invalidateBackground() {
-    m_bgDirty = true;
-    update();
+// ===== viewRect ↔ plotArea 长宽比同步 =====
+void QChartWidget::setViewRectFitMode(ViewRectFitMode mode) {
+    if (m_fitMode == mode) return;
+    m_fitMode = mode;
+    qCDebug(logWidget) << "viewRectFitMode:" << (int)mode;
+    // 立即按新模式重排
+    fitViewRectToPlotArea(FitStrategy::KeepCenter);
+    invalidateBackground();
+    invalidateForeground();
 }
 
-void QChartWidget::invalidateForeground() {
-    m_fgDirty = true;
-    update();
+void QChartWidget::setFixedAspectRatio(qreal ratio) {
+    if (ratio <= 0.0) {
+        qWarning() << "setFixedAspectRatio: ratio must be > 0, ignoring" << ratio;
+        return;
+    }
+    m_fixedAspectRatio = ratio;
+    qCDebug(logWidget) << "fixedAspectRatio:" << ratio;
+    fitViewRectToPlotArea(FitStrategy::KeepCenter);
+    invalidateBackground();
+    invalidateForeground();
 }
 
-void QChartWidget::invalidateLayout() {
-    m_layoutDirty = true;
+void QChartWidget::fitViewRectToPlotArea(FitStrategy strategy) {
+    if (!m_projection) return;
+
+    // Stretch 模式：不调整 viewRect，直接拉伸
+    if (m_fitMode == ViewRectFitMode::Stretch) return;
+
+    if (m_plotArea.width() <= 0.0 || m_plotArea.height() <= 0.0) return;
+
+    // 目标长宽比：Fixed 模式用用户指定的，否则用 plotArea 的
+    qreal targetAspect = (m_fitMode == ViewRectFitMode::Fixed)
+        ? m_fixedAspectRatio
+        : m_plotArea.width() / m_plotArea.height();
+
+    qreal viewAspect = m_viewRect.width() / m_viewRect.height();
+
+    // 长宽比已经匹配（1% 容差）→ 跳过
+    if (qAbs(targetAspect - viewAspect) < 0.01 * targetAspect) return;
+
+    qCDebug(logWidget) << "fitViewRectToPlotArea: before" << m_viewRect
+                       << "mode=" << (int)m_fitMode
+                       << "strategy=" << (int)strategy
+                       << "targetAspect=" << targetAspect << "viewAspect=" << viewAspect;
+
+    bool expand; // true=扩张，false=收缩
+    if (m_fitMode == ViewRectFitMode::Crop) {
+        // Crop：收缩较大维度，裁掉超出部分
+        expand = false;
+    } else {
+        // Fit / Fixed：扩张较小维度，数据完整
+        expand = true;
+    }
+
+    if (expand) {
+        switch (strategy) {
+        case FitStrategy::KeepWidth:
+            // 用户设了 dim0 → 锁宽度，只调高度
+            {
+                qreal newH = m_viewRect.width() / targetAspect;
+                qreal d = (newH - m_viewRect.height()) / 2.0;
+                m_viewRect.adjust(0.0, -d, 0.0, d);
+            }
+            break;
+        case FitStrategy::KeepHeight:
+            // 用户设了 dim1 → 锁高度，只调宽度
+            {
+                qreal newW = m_viewRect.height() * targetAspect;
+                qreal d = (newW - m_viewRect.width()) / 2.0;
+                m_viewRect.adjust(-d, 0.0, d, 0.0);
+            }
+            break;
+        case FitStrategy::KeepCenter:
+            // 初始化/布局变化 → 双向均等扩张
+            if (targetAspect > viewAspect) {
+                qreal newW = m_viewRect.height() * targetAspect;
+                qreal d = (newW - m_viewRect.width()) / 2.0;
+                m_viewRect.adjust(-d, 0.0, d, 0.0);
+            } else {
+                qreal newH = m_viewRect.width() / targetAspect;
+                qreal d = (newH - m_viewRect.height()) / 2.0;
+                m_viewRect.adjust(0.0, -d, 0.0, d);
+            }
+            break;
+        }
+    } else {
+        // Crop：收缩较大维度
+        if (viewAspect > targetAspect) {
+            // 太宽 → 收缩宽度
+            qreal newW = m_viewRect.height() * targetAspect;
+            qreal d = (m_viewRect.width() - newW) / 2.0;
+            m_viewRect.adjust(d, 0.0, -d, 0.0);
+        } else {
+            // 太高 → 收缩高度
+            qreal newH = m_viewRect.width() / targetAspect;
+            qreal d = (m_viewRect.height() - newH) / 2.0;
+            m_viewRect.adjust(0.0, d, 0.0, -d);
+        }
+    }
+
+    // 反算可见数据范围
+    m_dataBounds = m_projection->computeDataBounds(m_viewRect);
+
+    qCDebug(logWidget) << "fitViewRectToPlotArea: after" << m_viewRect
+                       << "dataBounds=" << m_dataBounds;
+}
+
+// ===== 坐标转换（对所有投影类型通用）=====
+QPointF QChartWidget::cartesianToPixel(qreal cx, qreal cy) const {
+    // View Cartesian → ViewNorm → Pixel（线性）
+	// c就是Cartesian；n就是Normalized；p就是Pixel
+    qreal nx = (cx - m_viewRect.left()) / m_viewRect.width();
+    qreal ny = (cy - m_viewRect.top())  / m_viewRect.height();
+    qreal px = m_plotArea.left() + nx * m_plotArea.width();
+    qreal py = m_plotArea.bottom() - ny * m_plotArea.height();
+
+    static bool first = true;
+    if (first) {
+        qCDebug(logRender) << "cartesianToPixel: (cx,cy)=(" << cx << "," << cy
+            << ") → (nx,ny)=(" << nx << "," << ny
+            << ") → (px,py)=(" << px << "," << py << ")";
+        first = false;
+    }
+
+    return QPointF(px, py);
+}
+
+QPointF QChartWidget::pixelToCartesian(const QPointF& pixel) const {
+    // Pixel → ViewNorm → View Cartesian（逆线性）
+    qreal nx = (pixel.x() - m_plotArea.left()) / m_plotArea.width();
+    qreal ny = (m_plotArea.bottom() - pixel.y()) / m_plotArea.height();
+    return QPointF(
+        m_viewRect.left() + nx * m_viewRect.width(),
+        m_viewRect.top()  + ny * m_viewRect.height()
+    );
+}
+
+// ===== 视窗操作 =====
+void QChartWidget::panViewCartesian(qreal dx, qreal dy) {
+    m_viewRect.translate(dx, dy);
+    // 重算 dataBounds
+    if (m_projection)
+        m_dataBounds = m_projection->computeDataBounds(m_viewRect);
+    qCDebug(logWidget) << "panViewCartesian: dx=" << dx << "dy=" << dy
+                       << "→ viewRect=" << m_viewRect
+                       << "dataBounds=" << m_dataBounds;
+    invalidateBackground();
+    invalidateForeground();
+    emit viewChanged();
+}
+
+void QChartWidget::zoomViewCartesian(qreal cx, qreal cy, qreal factor) {
+    if (factor <= 0.0 || !m_projection) return;
+    // 以 (cx, cy) 为中心缩放 viewRect
+    qreal newW = m_viewRect.width()  * factor;
+    qreal newH = m_viewRect.height() * factor;
+    qreal newLeft = cx - (cx - m_viewRect.left()) * factor;
+    qreal newTop  = cy - (cy - m_viewRect.top())  * factor;
+    m_viewRect = QRectF(newLeft, newTop, newW, newH);
+    m_dataBounds = m_projection->computeDataBounds(m_viewRect);
+    fitViewRectToPlotArea(FitStrategy::KeepCenter);
+    qCDebug(logWidget) << "zoomViewCartesian: factor=" << factor
+                       << "→ viewRect=" << m_viewRect
+                       << "dataBounds=" << m_dataBounds;
+    invalidateBackground();
+    invalidateForeground();
+    emit viewChanged();
+}
+
+void QChartWidget::setDataRangeDim0(qreal min, qreal max) {
+    m_dataBounds.setLeft(min);
+    m_dataBounds.setWidth(max - min);
+    if (m_projection) {
+        m_viewRect = m_projection->computeViewRect(m_dataBounds);
+        qCDebug(logWidget) << "setDataRangeDim0:" << min << "→" << max
+                           << "viewRect=" << m_viewRect;
+        fitViewRectToPlotArea(FitStrategy::KeepWidth);
+    }
+    invalidateBackground();
+    invalidateForeground();
+    emit viewChanged();
+}
+
+void QChartWidget::setDataRangeDim1(qreal min, qreal max) {
+    m_dataBounds.setTop(min);
+    m_dataBounds.setHeight(max - min);
+    if (m_projection) {
+        m_viewRect = m_projection->computeViewRect(m_dataBounds);
+        qCDebug(logWidget) << "setDataRangeDim1:" << min << "→" << max
+                           << "viewRect=" << m_viewRect;
+        fitViewRectToPlotArea(FitStrategy::KeepHeight);
+    }
+    invalidateBackground();
+    invalidateForeground();
+    emit viewChanged();
+}
+
+void QChartWidget::setProjection(std::unique_ptr<QChartProjection> proj) {
+    m_projection = std::move(proj);
+    if (m_projection && !m_viewInitialized) {
+        m_dataBounds = m_projection->defaultDataBounds();
+        m_viewRect = m_projection->computeViewRect(m_dataBounds);
+        m_viewInitialized = true;
+        qCDebug(logWidget) << "setProjection: viewRect initialized from defaultDataBounds:"
+                           << m_viewRect;
+        fitViewRectToPlotArea(FitStrategy::KeepCenter);
+    }
+    // 同步 projection 类型给所有 Geometry
+    if (m_projection) {
+        auto type = m_projection->type();
+        for (auto* g : m_geometries)
+            g->setCoordinateSystem(type);
+    }
+    invalidateBackground();
+    invalidateForeground();
+}
+
+// ===== 布局 =====
+void QChartWidget::setMargins(qreal l, qreal t, qreal r, qreal b) {
+    m_marginLeft = l; m_marginTop = t;
+    m_marginRight = r; m_marginBottom = b;
+    layoutAxes();
     update();
 }
 
 void QChartWidget::layoutAxes() {
-    // 1. 先以默认边距为基准（或用户设置的值）
-    qreal left = m_marginLeft;
-    qreal top = m_marginTop;
-    qreal right = m_marginRight;
+    qreal left   = m_marginLeft;
+    qreal top    = m_marginTop;
+    qreal right  = m_marginRight;
     qreal bottom = m_marginBottom;
 
-    // 2. 遍历所有轴，根据对齐方式累加 sizeHint
-    QFont font = this->font(); // 使用当前字体
+    QFont font = this->font();
     for (auto* axis : m_axes) {
-        if (!axis->isVisible()) continue;
-        Qt::Alignment align = axis->alignment();
+        if (!axis || !axis->isVisible()) continue;
         QSizeF hint = axis->sizeHint(font);
-        switch (align) {
-        case Qt::AlignLeft:
-            left = qMax(left, hint.width());
-            break;
-        case Qt::AlignRight:
-            right = qMax(right, hint.width());
-            break;
-        case Qt::AlignTop:
-            top = qMax(top, hint.height());
-            break;
-        case Qt::AlignBottom:
-            bottom = qMax(bottom, hint.height());
-            break;
-        case Qt::AlignCenter:
-            // 极轴不占外边距，忽略
-            break;
-        default:
-            break;
+        switch (axis->alignment()) {
+        case Qt::AlignLeft:   left   = qMax(left,   hint.width());  break;
+        case Qt::AlignRight:  right  = qMax(right,  hint.width());  break;
+        case Qt::AlignTop:    top    = qMax(top,    hint.height()); break;
+        case Qt::AlignBottom: bottom = qMax(bottom, hint.height()); break;
+        default: break; // HCenter/VCenter 不占边距
         }
     }
 
-
-
-    // 3. 计算绘图区
-    m_plotArea = QRectF(
-        left,
-        top,
-        width() - left - right,
-        height() - top - bottom
-    );
-    qCDebug(logWidget) << "updated layout: " << m_plotArea;
+    m_plotArea = QRectF(left, top,
+                        width() - left - right,
+                        height() - top - bottom);
+    qCDebug(logWidget) << "layoutAxes: plotArea=" << m_plotArea;
+    fitViewRectToPlotArea(FitStrategy::KeepCenter);
 }
 
+// ===== 缓存控制 =====
+void QChartWidget::invalidateBackground() { m_bgDirty = true; update(); }
+void QChartWidget::invalidateForeground() { m_fgDirty = true; update(); }
+void QChartWidget::invalidateLayout()      { m_layoutDirty = true; update(); }
+
+// ===== 事件 =====
 void QChartWidget::resizeEvent(QResizeEvent*) {
     m_bgDirty = m_fgDirty = true;
     layoutAxes();
 }
 
 void QChartWidget::paintEvent(QPaintEvent*) {
-
-    //在paintEvent处理是为了保证性能，如果每pan或者zoom一次就处理的话太过耗时了。
     if (m_layoutDirty) {
         layoutAxes();
         m_layoutDirty = false;
-        // 布局变化必然导致背景和前景失效
         m_bgDirty = true;
         m_fgDirty = true;
     }
@@ -189,105 +405,124 @@ void QChartWidget::paintEvent(QPaintEvent*) {
     p.drawPixmap(0, 0, m_fgCache);
 }
 
+// ===== drawBackground =====
 void QChartWidget::drawBackground(QPainter* p) {
     p->fillRect(m_plotArea, Qt::transparent);
     QFont f = p->font();
     f.setPointSize(f.pointSize() - 1);
     p->setFont(f);
 
-    for (auto* a : m_axes) {
-        if (a && a->isVisible())
-            if (a->coordinateSystem() == CoordinateSystem::Cartesian)a->QChartAxis::draw(p, m_plotArea, m_projection.get());
-            else a->draw(p, m_plotArea, m_projection.get(), 0);
-    }
-    // 绘制网格（取最后一个几何体，或遍历全部）
-    if (!m_geometries.isEmpty())
-        m_geometries.last()->drawGrid(p, m_projection.get());
+    // 构建 DrawContext —— 所有 draw 调用共用
+    DrawContext ctx;
+    ctx.plotArea   = m_plotArea;
+    ctx.dataBounds = m_dataBounds;
+    ctx.viewRect   = m_viewRect;
+    ctx.projection = m_projection.get();
 
+    qCDebug(logRender) << "drawBackground: plotArea=" << m_plotArea
+        << "viewRect=" << m_viewRect
+        << "dataBounds=" << m_dataBounds
+        << "projection type=" << (m_projection ? (int)m_projection->type() : -1);
+
+    // ── 绘制所有轴 ──
+    for (auto* a : m_axes) {
+        if (!a || !a->isVisible()) continue;
+
+        qCDebug(logRender) << "drawBackground: drawing axis alignment=" << a->alignment()
+            << "color=" << a->color()
+            << "isInterior=" << (a->alignment() == Qt::AlignHCenter || a->alignment() == Qt::AlignVCenter);
+
+        bool isInterior = (a->alignment() == Qt::AlignHCenter
+                        || a->alignment() == Qt::AlignVCenter);
+        if (isInterior) {
+            // 数据主脊：画在 offset = 0 的位置（通过 dataBounds 确定默认位置）
+            // offset=0 意味着画在 Numeric dim0=0 或 dim1=0 的等值线上
+            // 对于 Cartesian，这条线通过 plotArea；Polar 下它通过原点
+            qreal defaultOffset = 0.0;
+            if (a->alignment() == Qt::AlignHCenter)
+                defaultOffset = ctx.dataBounds.top();  // Y 维度在默认位置
+            else
+                defaultOffset = ctx.dataBounds.left(); // X 维度在默认位置
+
+            p->save();
+            p->setClipRect(m_plotArea);
+            a->drawAtPosition(p, ctx, defaultOffset,
+                              /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+            p->restore();
+        } else {
+            // 边框轴：画在 plotArea 边缘
+            a->drawAtEdge(p, ctx,
+                          /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+        }
+    }
+
+    // ── 绘制网格（取最后一个几何体）──
+    if (!m_geometries.isEmpty()) {
+        auto* geo = m_geometries.last();
+        p->save();
+        p->setClipRect(m_plotArea);
+        geo->drawGrid(p, ctx);
+        p->restore();
+    }
+
+    // ── 调试：黄色 plotArea 边框 ──
     if (logWidget().isDebugEnabled()) {
         p->save();
         p->setPen(Qt::yellow);
-        p->drawRect(plotArea());
+        p->drawRect(m_plotArea);
         p->restore();
     }
 }
 
+// ===== drawForeground =====
 void QChartWidget::drawForeground(QPainter* p) {
+    DrawContext ctx;
+    ctx.plotArea   = m_plotArea;
+    ctx.dataBounds = m_dataBounds;
+    ctx.viewRect   = m_viewRect;
+    ctx.projection = m_projection.get();
+
     for (auto* g : m_geometries) {
         p->save();
         p->setClipRect(m_plotArea);
-        g->drawAllSeries(p, m_projection.get());
+        g->drawAllSeries(p, ctx);
         p->restore();
     }
 }
 
-// ---- 鼠标事件 ----
+// ===== 鼠标事件 =====
 void QChartWidget::mousePressEvent(QMouseEvent* e) {
     if (e->button() == Qt::LeftButton && m_panEnabled) {
         m_panStart = e->pos();
         m_panning = true;
         setCursor(Qt::ClosedHandCursor);
+        qCDebug(logWidget) << "Pan started at" << m_panStart;
     }
     QWidget::mousePressEvent(e);
 }
 
 void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
-    if (m_panning) {
+    if (m_panning && m_projection) {
         QPointF currentPos = e->pos();
-        // 将像素坐标转为归一化坐标（0~1，Y轴向上）
-        QPointF normStart = m_projection->mapToNormalized(m_panStart, m_plotArea);
-        QPointF normCurrent = m_projection->mapToNormalized(currentPos, m_plotArea);
-
-        // 计算归一化位移
-        qreal deltaNormX = normCurrent.x() - normStart.x();
-        qreal deltaNormY = normCurrent.y() - normStart.y(); // 注意：Y轴已反转，直接使用
-
-        // 更新起始位置（归一化坐标，以便下次计算增量）
-        m_panStart = currentPos; // 保存像素位置，或保存归一化位置都可以
-
-        for (auto* axis : m_axes) {
-            if (!axis->isDragEnabled()) continue;
-            Qt::Alignment align = axis->alignment();
-            if (align == Qt::AlignTop || align == Qt::AlignBottom) {
-                axis->pan(deltaNormX);
-            }
-            else if (align == Qt::AlignLeft || align == Qt::AlignRight) {
-                axis->pan(deltaNormY); // 因为 mapToNormalized 已经翻转了Y，所以这里直接用正号
-            }
-        }
+        // 像素位移 → View Cartesian 位移
+        QPointF startCart = pixelToCartesian(m_panStart);
+        QPointF currCart = pixelToCartesian(currentPos);
+        qreal dx = startCart.x() - currCart.x();
+        qreal dy = startCart.y() - currCart.y();
+        panViewCartesian(dx, dy);
+        m_panStart = currentPos;
         return;
     }
 
-    // 悬停检测
-    for (auto* g : m_geometries) {
-        auto [s, idx] = g->hitTest(e->pos());
-        if (s) {
-            if (s != m_hoverSeries || idx != m_hoverIndex) {
-                if (m_hoverSeries)
-                    emit seriesHovered(m_hoverSeries, m_hoverIndex, false);
-                m_hoverSeries = s;
-                m_hoverIndex = idx;
-                emit seriesHovered(s, idx, true);
-                setCursor(Qt::PointingHandCursor);
-            }
-            return;
-        }
-    }
-    // 未命中，清除悬停
-    if (m_hoverSeries) {
-        emit seriesHovered(m_hoverSeries, m_hoverIndex, false);
-        m_hoverSeries = nullptr;
-        m_hoverIndex = -1;
-        setCursor(Qt::ArrowCursor);
-    }
+    // 悬停检测（暂时用旧的 hitTest 接口——需要 DrawContext 但当前还未构建）
+    // 未来实现：通过 pixelToCartesian + fromCartesian + fromNumeric 反查数据索引
+    QWidget::mouseMoveEvent(e);
 }
 
 void QChartWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (m_panning) {
         m_panning = false;
         setCursor(Qt::ArrowCursor);
-        // 可发射点击信号（可选）
-        // 如果需要点击，可以在 mouseRelease 时判断是否没有拖动
     }
     QWidget::mouseReleaseEvent(e);
 }
@@ -297,41 +532,17 @@ void QChartWidget::wheelEvent(QWheelEvent* e) {
     QPointF pos = e->position();
     if (!m_plotArea.contains(pos)) return;
 
-    // 获取滚动角度（通常 y 方向）
     int delta = e->angleDelta().y();
     if (delta == 0) return;
 
-    // 将角度转换为缩放因子：滚动向上（正）放大，向下（负）缩小
-    static constexpr qreal SCALE_SENSITIVITY = 0.1; // 可调参数
-    qreal factor = std::exp(-delta * SCALE_SENSITIVITY / 120.0);
-    // 限制范围防止过激
-    if (factor < 0.8 || factor > 1.25)qWarning() << "too fast. Clamp.";
-    factor = qBound(0.8, factor, 1.25); // 可选
+    // 缩放因子：向上滚 = 放大（factor<1），向下滚 = 缩小（factor>1）
+    static constexpr qreal SCALE_SENSITIVITY = 0.001;
+    qreal factor = std::exp(-delta * SCALE_SENSITIVITY);
+    factor = qBound(0.8, factor, 1.25);
 
-    // 归一化坐标
-    QPointF normPos = m_projection->mapToNormalized(pos, m_plotArea);
-
-    // 🔥 调试输出
-    qCDebug(logWidget) << "wheelEvent: pos =" << pos
-        << "normPos =" << normPos
-        << "plotArea =" << m_plotArea
-        << "normPos =" << normPos
-        << "factor =" << factor;
-
-    for (auto* axis : m_axes) {
-        if (!axis->isZoomEnabled()) continue;
-        Qt::Alignment align = axis->alignment();
-        if (align == Qt::AlignTop || align == Qt::AlignBottom) {
-            axis->zoom(normPos.x(), factor);
-        }
-        else if (align == Qt::AlignLeft || align == Qt::AlignRight) {
-            axis->zoom(normPos.y(), factor);
-        }
-        else if (align == Qt::AlignCenter) {
-            // 极轴：固定中心缩放，中心归一化值为 0（原点是中心）
-            axis->zoom(0.0, factor);
-        }
-    }
+    // 以鼠标位置的 View Cartesian 坐标为中心缩放
+    QPointF cartCenter = pixelToCartesian(pos);
+    zoomViewCartesian(cartCenter.x(), cartCenter.y(), factor);
 }
 
 void QChartWidget::leaveEvent(QEvent*) {

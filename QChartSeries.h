@@ -41,11 +41,23 @@ public:
     virtual int count() const { return 0; }
     virtual QRectF boundingRect() const { return {}; }
 
+    // ===== 新接口：toPixel(Data,Data)→Pixel =====
+    /// Series 只需实现此方法——用 toPixel 把数据点转成像素后画形状
+    /// toPixel 返回 NaN 时跳过该点
     virtual void draw(QPainter* painter,
+                      std::function<QPointF(qreal,qreal)> toPixel) const = 0;
+
+    // ===== 旧接口（待删除，子类尚未迁移）=====
+    [[deprecated]]
+    virtual void drawLegacy(QPainter* painter,
         const QChartGeometry* geometry,
         const QChartAxis* axisX,
-        const QChartAxis* axisY, 
-        const QChartProjection* projection) const = 0;
+        const QChartAxis* axisY,
+        const QChartProjection* projection) const { Q_UNUSED(painter); Q_UNUSED(geometry); Q_UNUSED(axisX); Q_UNUSED(axisY); Q_UNUSED(projection); }
+
+    /// 命中检测：返回命中数据点索引，-1 未命中
+    virtual int hitTest(const QPointF& pixel,
+                        std::function<QPointF(qreal,qreal)> toPixel) const { Q_UNUSED(pixel); Q_UNUSED(toPixel); return -1; }
 
 signals:
     void nameChanged(const QString&);

@@ -209,5 +209,8 @@
     <ClInclude Include="QChartDebug.h">
       <Filter>头文件\Core</Filter>
     </ClInclude>
+    <ClInclude Include="QFunctionalProjection.h">
+      <Filter>头文件\Projection</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
