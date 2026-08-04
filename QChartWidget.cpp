@@ -447,7 +447,7 @@ void QChartWidget::drawBackground(QPainter* p) {
             p->save();
             p->setClipRect(m_plotArea);
             a->drawAtPosition(p, ctx, defaultOffset,
-                              /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+                              /*axisLine=*/true, /*labels=*/false, /*ticks=*/true);
             p->restore();
         } else {
             // 边框轴：画在 plotArea 边缘

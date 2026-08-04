@@ -98,17 +98,37 @@ void QChartGeometry::drawGrid(QPainter* painter, const DrawContext& ctx) const {
 
     // 画 dim0 方向的网格线（垂直数据主脊）：dim0=扫, dim1=tick
     QVector<qreal> ticksY = m_axisY->tickValues(dim1Min, dim1Max);
+    int i = 0;
     for (qreal tickVal : ticksY) {
         // tickVal 已经是 Numeric 空间的 dim1 值 → 作为 offset 传给 dim0 的轴
-        m_axisX->drawAtPosition(painter, ctx, tickVal,
-                                /*axisLine=*/true, /*labels=*/false, /*ticks=*/false);
+        if (i % 2 == 0) {
+			painter->setPen(QPen(m_gridColor, 1.0, Qt::DashLine));
+            m_axisX->drawAtPosition(painter, ctx, tickVal,
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+        }
+        else {
+			painter->setPen(QPen(m_gridColor, 1.0, Qt::SolidLine));
+            m_axisX->drawAtPosition(painter, ctx, tickVal,
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+        }
+        i++;
     }
 
     // 画 dim1 方向的网格线（水平数据主脊）：dim1=扫, dim0=tick
+    i = 0;
     QVector<qreal> ticksX = m_axisX->tickValues(dim0Min, dim0Max);
     for (qreal tickVal : ticksX) {
-        m_axisY->drawAtPosition(painter, ctx, tickVal,
-                                /*axisLine=*/true, /*labels=*/false, /*ticks=*/false);
+        if (i % 2 == 0) {
+			painter->setPen(QPen(m_gridColor, 1.0, Qt::DashLine));
+            m_axisY->drawAtPosition(painter, ctx, tickVal,
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+		}
+		else {
+			painter->setPen(QPen(m_gridColor, 1.0, Qt::SolidLine));
+            m_axisY->drawAtPosition(painter, ctx, tickVal,
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+		}
+        i++;
     }
 
     painter->restore();

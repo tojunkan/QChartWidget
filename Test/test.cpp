@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
     qInstallMessageHandler(logToFile);
     // 启用所有 chart 分类的 debug 日志
     //QLoggingCategory::setFilterRules("chart.axis.debug=true");
-    QLoggingCategory::setFilterRules("chart.render.debug=true");
+    QLoggingCategory::setFilterRules("chart.*.debug=false");
 
     QApplication app(argc, argv);
     qDebug() << "========== 测试开始 ==========";
@@ -307,19 +307,19 @@ int main(int argc, char* argv[]) {
     qDebug() << "\n========== 图形化交互测试 ==========";
 
     QChartWidget * chartWidget = new QChartWidget();
-    chartWidget->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
-	chartWidget->setViewRectFitMode(ViewRectFitMode::Fixed);
-	chartWidget->setFixedAspectRatio(1.0);  // 强制 viewRect
+    chartWidget->setProjection(QChartProjectionFactory::create(CoordinateSystem::Polar));
+	chartWidget->setViewRectFitMode(ViewRectFitMode::Fit);
+	//chartWidget->setFixedAspectRatio(1.0);  // 强制 viewRect
 
     // dim0 = 角度 (AlignHCenter)
-    QValueAxis * angleAxis = new QValueAxis(chartWidget, Qt::AlignLeft);
+    QValueAxis * angleAxis = new QValueAxis(chartWidget, Qt::AlignHCenter);
     angleAxis->setColor(Qt::white);
     chartWidget->addAxis(angleAxis);
     //angleAxis->setRange(0, 360);
     //angleAxis->setTickCount(9);
 
     // dim1 = 半径 (AlignVCenter)
-    QValueAxis * radialAxis = new QValueAxis(chartWidget, Qt::AlignBottom);
+    QValueAxis * radialAxis = new QValueAxis(chartWidget, Qt::AlignVCenter);
     radialAxis->setColor(Qt::white);
     chartWidget->addAxis(radialAxis);
     //radialAxis->setRange(0, 10);
@@ -332,43 +332,43 @@ int main(int argc, char* argv[]) {
     chartWidget->resize(800, 600);
 
     // ── 诊断日志 ──
-    qDebug() << "=== DIAG: plotArea =" << chartWidget->plotArea();
-    qDebug() << "=== DIAG: viewRect =" << chartWidget->viewRect();
-    qDebug() << "=== DIAG: dataBounds =" << chartWidget->dataBounds();
-    qDebug() << "=== DIAG: plotArea aspect ="
-             << chartWidget->plotArea().width() / chartWidget->plotArea().height();
-    qDebug() << "=== DIAG: viewRect aspect ="
-             << chartWidget->viewRect().width() / chartWidget->viewRect().height();
-    qDebug() << "=== DIAG: scale X ="
-             << chartWidget->plotArea().width() / chartWidget->viewRect().width();
-    qDebug() << "=== DIAG: scale Y ="
-             << chartWidget->plotArea().height() / chartWidget->viewRect().height();
+    //qDebug() << "=== DIAG: plotArea =" << chartWidget->plotArea();
+    //qDebug() << "=== DIAG: viewRect =" << chartWidget->viewRect();
+    //qDebug() << "=== DIAG: dataBounds =" << chartWidget->dataBounds();
+    //qDebug() << "=== DIAG: plotArea aspect ="
+    //         << chartWidget->plotArea().width() / chartWidget->plotArea().height();
+    //qDebug() << "=== DIAG: viewRect aspect ="
+    //         << chartWidget->viewRect().width() / chartWidget->viewRect().height();
+    //qDebug() << "=== DIAG: scale X ="
+    //         << chartWidget->plotArea().width() / chartWidget->viewRect().width();
+    //qDebug() << "=== DIAG: scale Y ="
+    //         << chartWidget->plotArea().height() / chartWidget->viewRect().height();
 
     // 打印关键像素映射
-    auto p = chartWidget->projection();
-    qDebug() << "=== DIAG: toCartesian(0°,10) =" << p->toCartesian(0, 10);
-    qDebug() << "=== DIAG: toCartesian(90°,10) =" << p->toCartesian(90, 10);
-    qDebug() << "=== DIAG: toCartesian(180°,10) =" << p->toCartesian(180, 10);
-    qDebug() << "=== DIAG: toCartesian(270°,10) =" << p->toCartesian(270, 10);
+    //auto p = chartWidget->projection();
+    //qDebug() << "=== DIAG: toCartesian(0°,10) =" << p->toCartesian(0, 10);
+    //qDebug() << "=== DIAG: toCartesian(90°,10) =" << p->toCartesian(90, 10);
+    //qDebug() << "=== DIAG: toCartesian(180°,10) =" << p->toCartesian(180, 10);
+    //qDebug() << "=== DIAG: toCartesian(270°,10) =" << p->toCartesian(270, 10);
 
-    QPointF px0   = chartWidget->cartesianToPixel(p->toCartesian(0, 10).x(), p->toCartesian(0, 10).y());
-    QPointF px90  = chartWidget->cartesianToPixel(p->toCartesian(90, 10).x(), p->toCartesian(90, 10).y());
-    QPointF px180 = chartWidget->cartesianToPixel(p->toCartesian(180, 10).x(), p->toCartesian(180, 10).y());
-    QPointF px270 = chartWidget->cartesianToPixel(p->toCartesian(270, 10).x(), p->toCartesian(270, 10).y());
-    qDebug() << "=== DIAG: pixel(0°,10) =" << px0;
-    qDebug() << "=== DIAG: pixel(90°,10) =" << px90;
-    qDebug() << "=== DIAG: pixel(180°,10) =" << px180;
-    qDebug() << "=== DIAG: pixel(270°,10) =" << px270;
-    qDebug() << "=== DIAG: pixel dx(0→180) =" << qAbs(px0.x() - px180.x());
-    qDebug() << "=== DIAG: pixel dy(90→270) =" << qAbs(px90.y() - px270.y());
+    //QPointF px0   = chartWidget->cartesianToPixel(p->toCartesian(0, 10).x(), p->toCartesian(0, 10).y());
+    //QPointF px90  = chartWidget->cartesianToPixel(p->toCartesian(90, 10).x(), p->toCartesian(90, 10).y());
+    //QPointF px180 = chartWidget->cartesianToPixel(p->toCartesian(180, 10).x(), p->toCartesian(180, 10).y());
+    //QPointF px270 = chartWidget->cartesianToPixel(p->toCartesian(270, 10).x(), p->toCartesian(270, 10).y());
+    //qDebug() << "=== DIAG: pixel(0°,10) =" << px0;
+    //qDebug() << "=== DIAG: pixel(90°,10) =" << px90;
+    //qDebug() << "=== DIAG: pixel(180°,10) =" << px180;
+    //qDebug() << "=== DIAG: pixel(270°,10) =" << px270;
+    //qDebug() << "=== DIAG: pixel dx(0→180) =" << qAbs(px0.x() - px180.x());
+    //qDebug() << "=== DIAG: pixel dy(90→270) =" << qAbs(px90.y() - px270.y());
 
     // Grid 绘制时的关键路径验证
-    qDebug() << "=== DIAG: angle ticks =" << angleAxis->tickValues(
-        chartWidget->dataBounds().left(),
-        chartWidget->dataBounds().left() + chartWidget->dataBounds().width());
-    qDebug() << "=== DIAG: radial ticks =" << radialAxis->tickValues(
-        chartWidget->dataBounds().top(),
-        chartWidget->dataBounds().top() + chartWidget->dataBounds().height());
+    //qDebug() << "=== DIAG: angle ticks =" << angleAxis->tickValues(
+    //    chartWidget->dataBounds().left(),
+    //    chartWidget->dataBounds().left() + chartWidget->dataBounds().width());
+    //qDebug() << "=== DIAG: radial ticks =" << radialAxis->tickValues(
+    //    chartWidget->dataBounds().top(),
+    //    chartWidget->dataBounds().top() + chartWidget->dataBounds().height());
 
     chartWidget->show();
     return app.exec();

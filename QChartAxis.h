@@ -57,6 +57,9 @@ public:
     virtual QVector<qreal> subTickValues(qreal numericMin, qreal numericMax) const;
 
     // ===== 绘制 =====
+
+	static constexpr qreal textPadding() { return TEXT_PADDING; }
+
     /// 边框轴模式：画在 plotArea 对应边缘（仅 Cartesian 有效）
     /// 不依赖 Projection，直接用 plotArea 边缘坐标线性插值
     void drawAtEdge(QPainter* painter, const DrawContext& ctx,

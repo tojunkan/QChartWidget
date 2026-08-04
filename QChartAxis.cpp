@@ -12,6 +12,153 @@
 
 Q_LOGGING_CATEGORY(logAxis, "chart.axis")
 
+// QChartAxis.cpp
+
+// ============================================================
+// 匿名命名空间：存放绘制辅助函数（不暴露到头文件）
+// ============================================================
+namespace {
+
+    // 1. Numeric → Pixel 完整映射链
+    QPointF mapNumericToPixel(const DrawContext& ctx, qreal num0, qreal num1)
+    {
+        if (!ctx.projection) return QPointF(qQNaN(), qQNaN());
+        QPointF cartesian = ctx.projection->toCartesian(num0, num1);
+        if (!std::isfinite(cartesian.x()) || !std::isfinite(cartesian.y()))
+            return QPointF(qQNaN(), qQNaN());
+
+        qreal px = ctx.plotArea.left()
+            + (cartesian.x() - ctx.viewRect.left()) / ctx.viewRect.width()
+            * ctx.plotArea.width();
+        qreal py = ctx.plotArea.bottom()
+            - (cartesian.y() - ctx.viewRect.top()) / ctx.viewRect.height()
+            * ctx.plotArea.height();
+
+        return QPointF(px, py);
+    }
+
+    // 2. View Cartesian 路径 → Pixel 路径
+    QPainterPath mapViewPathToPixel(const DrawContext& ctx, const QPainterPath& viewPath)
+    {
+        QPainterPath pixelPath;
+        if (viewPath.isEmpty()) return pixelPath;
+
+        for (int i = 0; i < viewPath.elementCount(); ++i) {
+            const auto& el = viewPath.elementAt(i);
+            qreal px = ctx.plotArea.left()
+                + (el.x - ctx.viewRect.left()) / ctx.viewRect.width()
+                * ctx.plotArea.width();
+            qreal py = ctx.plotArea.bottom()
+                - (el.y - ctx.viewRect.top()) / ctx.viewRect.height()
+                * ctx.plotArea.height();
+
+            if (i == 0 || el.isMoveTo())
+                pixelPath.moveTo(px, py);
+            else
+                pixelPath.lineTo(px, py);
+        }
+        return pixelPath;
+    }
+
+    // 3. 画小十字刻度标记
+    void drawTickMark(QPainter* painter, const QPointF& pos, qreal length = 5.0)
+    {
+        painter->drawPoint(pos);
+        painter->drawPoint(QPointF(pos.x() + length, pos.y()));
+        painter->drawPoint(QPointF(pos.x() - length, pos.y()));
+        painter->drawPoint(QPointF(pos.x(), pos.y() + length));
+        painter->drawPoint(QPointF(pos.x(), pos.y() - length));
+    }
+
+    // 4. 单标签绘制
+// 辅助函数：从 Pixel 路径中提取标签锚点
+    void drawSingleLabel(QPainter* painter,
+        const DrawContext& ctx,
+        const QPainterPath& pixelPath,
+        const QString& label)
+    {
+        if (pixelPath.isEmpty() || label.isEmpty()) return;
+
+        // 1. 寻找路径上第一个位于 plotArea 内部的点作为锚点
+        QPointF anchor;
+        bool found = false;
+        for (int i = pixelPath.elementCount() - 1; i >= 0; --i) {
+            const auto& el = pixelPath.elementAt(i);
+            QPointF pos(el.x, el.y);
+            if (ctx.plotArea.contains(pos)) {
+                anchor = pos;
+                found = true;
+                break;
+            }
+        }
+        if (!found) { 
+			qWarning() << "drawSingleLabel: no anchor point found in plotArea for label" << label;
+            return; 
+        }
+
+        // 2. 测量文字尺寸
+        QFontMetrics fm(painter->font());
+        qreal textW = static_cast<qreal>(fm.horizontalAdvance(label));
+        qreal textH = static_cast<qreal>(fm.height());
+        const qreal pad = QChartAxis::textPadding();  // 间距
+        const qreal w = textW + pad * 2;
+        const qreal h = textH + pad * 2;
+
+        // 3. 计算到四条边的距离，选择最远方向放置
+        qreal distLeft = anchor.x() - ctx.plotArea.left();
+        qreal distRight = ctx.plotArea.right() - anchor.x();
+        qreal distTop = anchor.y() - ctx.plotArea.top();
+        qreal distBottom = ctx.plotArea.bottom() - anchor.y();
+
+        // 找最大距离的方向
+        enum Dir { Left, Right, Top, Bottom };
+        Dir dir = Left;
+        qreal maxDist = distLeft;
+        if (distRight > maxDist) { maxDist = distRight; dir = Right; }
+        if (distTop > maxDist) { maxDist = distTop;   dir = Top; }
+        if (distBottom > maxDist) { maxDist = distBottom; dir = Bottom; }
+
+        // 根据方向计算文本矩形
+        QRectF textRect;
+        switch (dir) {
+        case Left:   // 文本放左侧
+            textRect = QRectF(anchor.x() - w - pad, anchor.y() - h / 2, w, h);
+            break;
+        case Right:  // 文本放右侧
+            textRect = QRectF(anchor.x() + pad, anchor.y() - h / 2, w, h);
+            break;
+        case Top:    // 文本放上方
+            textRect = QRectF(anchor.x() - w / 2, anchor.y() - h - pad, w, h);
+            break;
+        case Bottom: // 文本放下方
+            textRect = QRectF(anchor.x() - w / 2, anchor.y() + pad, w, h);
+            break;
+        }
+
+        // 4. 如果计算出的矩形超出 plotArea，进行裁剪调整
+        if (!ctx.plotArea.contains(textRect)) {
+            // 尝试将矩形移入 plotArea 内（水平或垂直方向微调）
+            if (textRect.left() < ctx.plotArea.left())
+                textRect.moveLeft(ctx.plotArea.left() + pad);
+            if (textRect.right() > ctx.plotArea.right())
+                textRect.moveRight(ctx.plotArea.right() - pad);
+            if (textRect.top() < ctx.plotArea.top())
+                textRect.moveTop(ctx.plotArea.top() + pad);
+            if (textRect.bottom() > ctx.plotArea.bottom())
+                textRect.moveBottom(ctx.plotArea.bottom() - pad);
+            // 如果调整后仍无效或尺寸过小，直接居中放置（兜底）
+            if (textRect.width() < w * 0.5 || textRect.height() < h * 0.5) {
+                textRect = QRectF(ctx.plotArea.center().x() - w / 2,
+                    ctx.plotArea.center().y() - h / 2,
+                    w, h);
+            }
+        }
+
+        painter->drawText(textRect, Qt::AlignCenter, label);
+    }
+
+} // namespace
+
 // ===== 构造 =====
 QChartAxis::QChartAxis(QObject* parent, Qt::Alignment alignment)
     : QObject(parent)
@@ -84,6 +231,9 @@ QSizeF QChartAxis::sizeHint(const QFont& font) const {
         return QSizeF(40.0 + AXIS_MARGIN, 10.0);
     }
 }
+
+
+// 绘制部分：
 
 // ===== drawAtEdge：边框轴 =====
 void QChartAxis::drawAtEdge(QPainter* painter,
@@ -224,11 +374,11 @@ void QChartAxis::drawAtEdge(QPainter* painter,
 
 // ===== drawAtPosition：数据主脊 =====
 void QChartAxis::drawAtPosition(QPainter* painter,
-                                const DrawContext& ctx,
-                                qreal offset,
-                                bool drawAxisLine,
-                                bool drawLabels,
-                                bool drawTicks) const
+    const DrawContext& ctx,
+    qreal offset,
+    bool drawAxisLine,
+    bool drawLabels,
+    bool drawTicks) const
 {
     if (!m_visible) return;
     if (!ctx.projection) {
@@ -240,72 +390,38 @@ void QChartAxis::drawAtPosition(QPainter* painter,
     painter->setPen(m_color);
 
     bool isHoriz = (m_alignment == Qt::AlignHCenter || m_alignment == Qt::AlignLeft || m_alignment == Qt::AlignRight);
-    // isHoriz=true  → 沿 dim0 扫描, dim1=offset
-    // isHoriz=false → dim0=offset, 沿 dim1 扫描
 
-    // ── 轴线（经 Projection 映射后可能弯曲）──
-    if (drawAxisLine) {
-        auto dataCurve = [isHoriz, offset, &ctx](qreal t) -> QPointF {
-            if (isHoriz) {
-                qreal num0 = ctx.dataBounds.left() + t * ctx.dataBounds.width();
-                return QPointF(num0, offset);
-            } else {
-                qreal num1 = ctx.dataBounds.top() + t * ctx.dataBounds.height();
-                return QPointF(offset, num1);
-            }
-        };
-
-        QPainterPath path = ctx.projection->createPath(dataCurve, 72);
-
-        qCDebug(logRender) << "drawAtPosition: path.elementCount=" << path.elementCount();
-        if (path.elementCount() > 0) {
-            qCDebug(logRender) << "drawAtPosition: path first point="
-                << path.elementAt(0)
-                << "last point="
-                << path.elementAt(path.elementCount() - 1);
-            QRectF pathBounds = path.boundingRect();
-            qCDebug(logRender) << "drawAtPosition: path bounds=" << pathBounds;
-        }
-
-        // View Cartesian path → Pixel path
-        if (!path.isEmpty()) {
-            QPainterPath pixelPath;
-            int validPoints = 0;
-            for (int i = 0; i < path.elementCount(); ++i) {
-                const auto& el = path.elementAt(i);
-                qreal px = ctx.plotArea.left()
-                    + (el.x - ctx.viewRect.left()) / ctx.viewRect.width()
-                    * ctx.plotArea.width();
-                qreal py = ctx.plotArea.bottom()
-                    - (el.y - ctx.viewRect.top()) / ctx.viewRect.height()
-                    * ctx.plotArea.height();
-
-                if (i == 0 || el.isMoveTo())
-                    pixelPath.moveTo(px, py);
-                else
-                    pixelPath.lineTo(px, py);
-                ++validPoints;
-            }
-
-            // ── 新增调试 ──
-            qCDebug(logRender) << "drawAtPosition: pixelPath validPoints=" << validPoints
-                << "boundingRect=" << pixelPath.boundingRect()
-                << "plotArea=" << ctx.plotArea;
-
-            painter->drawPath(pixelPath);
+    // ── 构建数据曲线 ──
+    auto dataCurve = [isHoriz, offset, &ctx](qreal t) -> QPointF {
+        if (isHoriz) {
+            qreal num0 = ctx.dataBounds.left() + t * ctx.dataBounds.width();
+            return QPointF(num0, offset);
         }
         else {
-            qCDebug(logRender) << "drawAtPosition: path is EMPTY! Skipping axis line.";
+            qreal num1 = ctx.dataBounds.top() + t * ctx.dataBounds.height();
+            return QPointF(offset, num1);
         }
+        };
+
+    // ── 构建 View Cartesian 路径 ──
+    QPainterPath viewPath = ctx.projection->createPath(dataCurve, 72);
+
+    // ── 画轴线 ──
+	QPainterPath pixelPath;
+    if (drawAxisLine && !viewPath.isEmpty()) {
+        pixelPath = mapViewPathToPixel(ctx, viewPath);
+        painter->drawPath(pixelPath);
     }
 
     // ── 刻度和标签 ──
+    // 注意：多标签逻辑已完全移除。只画单标签（offset）和刻度标记。
     if (drawTicks || drawLabels) {
         qreal numericMin, numericMax;
         if (isHoriz) {
             numericMin = ctx.dataBounds.left();
             numericMax = ctx.dataBounds.left() + ctx.dataBounds.width();
-        } else {
+        }
+        else {
             numericMin = ctx.dataBounds.top();
             numericMax = ctx.dataBounds.top() + ctx.dataBounds.height();
         }
@@ -314,58 +430,31 @@ void QChartAxis::drawAtPosition(QPainter* painter,
         const QStringList labels = tickLabels(ticks);
         if (ticks.isEmpty()) { painter->restore(); return; }
 
-        qCDebug(logRender) << "drawAtPosition: offset=" << offset << "isHoriz=" << isHoriz
-                         << "ticks=" << ticks << "plotArea=" << ctx.plotArea
-                         << "viewRect=" << ctx.viewRect;
-
-        for (int i = 0; i < ticks.size(); ++i) {
-            // Numeric → View Cartesian
-            QPointF cartesian;
-            if (isHoriz)
-                cartesian = ctx.projection->toCartesian(ticks[i], offset);
-            else
-                cartesian = ctx.projection->toCartesian(offset, ticks[i]);
-
-            if (!std::isfinite(cartesian.x()) || !std::isfinite(cartesian.y())) {
-                qCDebug(logRender) << "drawAtPosition: NaN at tick" << ticks[i] << "—skipping";
-                continue;
+        // ── 画刻度标记（所有可见的 tick 位置） ──
+        if (drawTicks) {
+            for (int i = 0; i < ticks.size(); ++i) {
+                qreal num0, num1;
+                if (isHoriz) {
+                    num0 = ticks[i];
+                    num1 = offset;
+                }
+                else {
+                    num0 = offset;
+                    num1 = ticks[i];
+                }
+                QPointF pixelPos = mapNumericToPixel(ctx, num0, num1);
+                if (!std::isfinite(pixelPos.x()) || !std::isfinite(pixelPos.y())
+                    || !ctx.plotArea.contains(pixelPos))
+                    continue;
+                drawTickMark(painter, pixelPos);
             }
+        }
 
-            qCDebug(logRender) << "drawAtPosition: tick" << ticks[i]
-                            << "→ cartesian" << cartesian;
-
-            // View Cartesian → Pixel
-            qreal px = ctx.plotArea.left()
-                + (cartesian.x() - ctx.viewRect.left()) / ctx.viewRect.width()
-                * ctx.plotArea.width();
-            qreal py = ctx.plotArea.bottom()
-                - (cartesian.y() - ctx.viewRect.top()) / ctx.viewRect.height()
-                * ctx.plotArea.height();
-            QPointF pixelPos(px, py);
-
-            if (!ctx.plotArea.contains(pixelPos))
-                continue;
-
-            // 刻度标记：用点状标记画（避免弯曲路径上做法向量）
-            if (drawTicks) {
-                // 画一个以 pixelPos 为中心的小十字
-                painter->drawPoint(pixelPos);
-                painter->drawPoint(QPointF(px + 1.0, py));
-                painter->drawPoint(QPointF(px - 1.0, py));
-                painter->drawPoint(QPointF(px, py + 1.0));
-                painter->drawPoint(QPointF(px, py - 1.0));
-            }
-
-            // 标签
-            if (drawLabels && i < labels.size()) {
-                QFontMetrics fm(painter->font());
-                qreal textW = static_cast<qreal>(fm.horizontalAdvance(labels[i]));
-                qreal textH = static_cast<qreal>(fm.height());
-                // 放在 tick 右下方
-                QRectF textRect(px + 6.0, py + 6.0,
-                                textW + TEXT_PADDING * 2.0,
-                                textH + TEXT_PADDING * 2.0);
-                painter->drawText(textRect, Qt::AlignCenter, labels[i]);
+        // ── 画单标签（offset 对应的标签） ──
+        if (drawLabels) {
+            QStringList offsetLabels = tickLabels({ offset });
+            if (!offsetLabels.isEmpty()) {
+                drawSingleLabel(painter, ctx, pixelPath, offsetLabels.first());
             }
         }
     }
