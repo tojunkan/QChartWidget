@@ -56,19 +56,53 @@ public:
         return result;
     }
 
-    // ── 包络转换（默认恒等）──
+    // ── 包络转换 ──
     QRectF computeDataBounds(const QRectF& viewRect) const override {
         if (m_viewToData)
             return m_viewToData(viewRect);
-        // 默认：恒等映射
-        return viewRect;
+        // fallback: 32×32 网格采样 fromCartesian，与 PolarProjection 一致
+        const int grid = 32;
+        qreal d0Min = qInf(), d0Max = -qInf(), d1Min = qInf(), d1Max = -qInf();
+        for (int i = 0; i <= grid; ++i) {
+            qreal x = viewRect.left() + (static_cast<qreal>(i) / grid) * viewRect.width();
+            for (int j = 0; j <= grid; ++j) {
+                qreal y = viewRect.top() + (static_cast<qreal>(j) / grid) * viewRect.height();
+                QPointF data = fromCartesian(x, y);
+                if (std::isfinite(data.x()) && std::isfinite(data.y())) {
+                    d0Min = qMin(d0Min, data.x());
+                    d0Max = qMax(d0Max, data.x());
+                    d1Min = qMin(d1Min, data.y());
+                    d1Max = qMax(d1Max, data.y());
+                }
+            }
+        }
+        if (qIsInf(d0Min)) return viewRect; // all NaN → 回退恒等
+        return QRectF(d0Min, d1Min, d0Max - d0Min, d1Max - d1Min);
     }
 
     QRectF computeViewRect(const QRectF& dataBounds) const override {
         if (m_dataToView)
             return m_dataToView(dataBounds);
-        // 默认：恒等映射
-        return dataBounds;
+        // fallback: 对 dataBounds 边界采样 toCartesian，估算 Cartesian 包围盒
+        const int grid = 16;
+        qreal xMin = qInf(), xMax = -qInf(), yMin = qInf(), yMax = -qInf();
+        qreal d0Min = dataBounds.left(), d0Max = d0Min + dataBounds.width();
+        qreal d1Min = dataBounds.top(),  d1Max = d1Min + dataBounds.height();
+        for (int i = 0; i <= grid; ++i) {
+            qreal d0 = d0Min + (static_cast<qreal>(i) / grid) * (d0Max - d0Min);
+            for (int j = 0; j <= grid; ++j) {
+                qreal d1 = d1Min + (static_cast<qreal>(j) / grid) * (d1Max - d1Min);
+                QPointF cart = toCartesian(d0, d1);
+                if (std::isfinite(cart.x()) && std::isfinite(cart.y())) {
+                    xMin = qMin(xMin, cart.x());
+                    xMax = qMax(xMax, cart.x());
+                    yMin = qMin(yMin, cart.y());
+                    yMax = qMax(yMax, cart.y());
+                }
+            }
+        }
+        if (qIsInf(xMin)) return dataBounds; // all NaN → 回退恒等
+        return QRectF(xMin, yMin, xMax - xMin, yMax - yMin);
     }
 
     QRectF defaultDataBounds() const override {

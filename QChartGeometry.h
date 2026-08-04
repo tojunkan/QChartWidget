@@ -65,9 +65,10 @@ public:
     void setGridColor(const QColor& c);
 
 protected:
-    /// 组装 toPixel(lambda): Data(dataX,dataY) → Pixel(px,py)
+    /// 组装 toPixel(lambda): Data(QVariant,QVariant) → Pixel(px,py)
     /// 链: toNumeric → toCartesian → cartesianToPixel
-    std::function<QPointF(qreal,qreal)> makeToPixel(const DrawContext& ctx) const;
+    /// Series 只存 Data，不知道 Axis 类型——所有转换在此注入
+    std::function<QPointF(QVariant,QVariant)> makeToPixel(const DrawContext& ctx) const;
 
     QChartAxis *m_axisX = nullptr;
     QChartAxis *m_axisY = nullptr;

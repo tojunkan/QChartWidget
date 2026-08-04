@@ -105,6 +105,9 @@ protected:
     enum class FitStrategy { KeepWidth, KeepHeight, KeepCenter };
     void fitViewRectToPlotArea(FitStrategy strategy);
 
+    /// 悬停 tooltip 内容：命中点的 Data → Numeric 坐标
+    QString buildHoverTooltip(QChartGeometry* g, QChartSeries* s, int index) const;
+
     // ===== 视窗状态 =====
     std::unique_ptr<QChartProjection> m_projection;
     QRectF m_viewRect;              // View Cartesian 窗口（主状态）

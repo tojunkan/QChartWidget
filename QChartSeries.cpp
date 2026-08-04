@@ -1,4 +1,11 @@
+// QChartSeries.cpp —— 系列基类实现
 #include "QChartSeries.h"
+#include "QChartDebug.h"
+#include <QDebug>
+#include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(logSeries, "chart.series")
+Q_LOGGING_CATEGORY(logSeriesVerbose, "chart.series.verbose")
 
 QChartSeries::QChartSeries(const QString& n, QObject* p)
     : QObject(p), m_name(n) {
@@ -21,4 +28,13 @@ void QChartSeries::setOpacity(qreal o) {
     if (qFuzzyCompare(m_opacity, o)) return;
     m_opacity = o;
     emit opacityChanged();
+}
+
+// ===== 命中检测默认实现 =====
+// 基类无法知道数据布局，默认返回 -1。子类（Scatter 等）重写。
+int QChartSeries::hitTest(const QPointF& pixel,
+                          std::function<QPointF(QVariant,QVariant)> toPixel) const {
+    Q_UNUSED(pixel);
+    Q_UNUSED(toPixel);
+    return -1;
 }

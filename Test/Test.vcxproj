@@ -111,6 +111,30 @@
     <QtMoc Include="..\QChartSeries.h" />
   </ItemGroup>
   <ItemGroup>
+    <QtMoc Include="..\QXYSeries.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QScatterSeries.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QLineSeries.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QRegionSeries.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QBarSeries.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QDateTimeAxis.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QBarCategoryAxis.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QLogAxis.h" />
+  </ItemGroup>
+  <ItemGroup>
     <QtMoc Include="..\QChartWidget.h" />
   </ItemGroup>
   <ItemGroup>
@@ -120,6 +144,14 @@
     <ClCompile Include="..\QChartSeries.cpp" />
     <ClCompile Include="..\QChartWidget.cpp" />
     <ClCompile Include="..\QValueAxis.cpp" />
+    <ClCompile Include="..\QXYSeries.cpp" />
+    <ClCompile Include="..\QScatterSeries.cpp" />
+    <ClCompile Include="..\QLineSeries.cpp" />
+    <ClCompile Include="..\QRegionSeries.cpp" />
+    <ClCompile Include="..\QBarSeries.cpp" />
+    <ClCompile Include="..\QDateTimeAxis.cpp" />
+    <ClCompile Include="..\QBarCategoryAxis.cpp" />
+    <ClCompile Include="..\QLogAxis.cpp" />
     <ClCompile Include="test.cpp" />
   </ItemGroup>
   <ItemGroup>

@@ -95,7 +95,7 @@ public:
             }
 
             if (i == 0 || i == segments || i % 10 == 0) {
-                qCDebug(logRender) << "createPath: i=" << i
+                qCDebug(logRenderVerbose) << "createPath: i=" << i
                     << "numeric=" << numeric
                     << "cartesian=" << cartesian
                     << "isfinite=" << std::isfinite(cartesian.x());

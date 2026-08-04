@@ -11,6 +11,8 @@
 #include <QLoggingCategory>
 
 Q_LOGGING_CATEGORY(logAxis, "chart.axis")
+Q_LOGGING_CATEGORY(logAxisVerbose, "chart.axis.verbose")
+Q_LOGGING_CATEGORY(logRenderVerbose, "chart.projection.verbose")
 
 // QChartAxis.cpp
 
@@ -445,9 +447,15 @@ void QChartAxis::drawAtPosition(QPainter* painter,
                     num1 = ticks[i];
                 }
                 QPointF pixelPos = mapNumericToPixel(ctx, num0, num1);
-                if (!std::isfinite(pixelPos.x()) || !std::isfinite(pixelPos.y())
-                    || !ctx.plotArea.contains(pixelPos))
+                if (!std::isfinite(pixelPos.x()) || !std::isfinite(pixelPos.y())) {
+                    qCDebug(logAxisVerbose) << "TICK NaN: tick=" << ticks[i] << "pixel=" << pixelPos;
                     continue;
+                }
+                if (!ctx.plotArea.contains(pixelPos)) {
+                    qCDebug(logAxisVerbose) << "TICK SKIP: tick=" << ticks[i] << "pixel=" << pixelPos
+                                            << "plotArea=" << ctx.plotArea;
+                    continue;
+                }
                 drawTickMark(painter, pixelPos);
             }
         }

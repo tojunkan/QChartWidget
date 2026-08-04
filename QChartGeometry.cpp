@@ -47,13 +47,14 @@ void QChartGeometry::setGridColor(const QColor& c) {
 }
 
 // ===== makeToPixel：组装完整坐标变换链 =====
-std::function<QPointF(qreal,qreal)> QChartGeometry::makeToPixel(const DrawContext& ctx) const {
-    // 链: Data(dataX,dataY) → toNumeric → toCartesian → cartesianToPixel
+std::function<QPointF(QVariant,QVariant)> QChartGeometry::makeToPixel(const DrawContext& ctx) const {
+    // 链: Data(QVariant) → toNumeric → toCartesian → cartesianToPixel
     // 返回的函数将 Data 空间的 (x,y) 直接映射到 Pixel
-    return [this, &ctx](qreal dataX, qreal dataY) -> QPointF {
-        // Data → Numeric
-        qreal num0 = m_axisX ? m_axisX->toNumeric(QVariant::fromValue(dataX)) : dataX;
-        qreal num1 = m_axisY ? m_axisY->toNumeric(QVariant::fromValue(dataY)) : dataY;
+    // Series 不知道 Axis 类型——toNumeric 由 Geometry 在此注入
+    return [this, &ctx](QVariant dataX, QVariant dataY) -> QPointF {
+        // Data → Numeric（Axis 负责类型转换：qreal/QDateTime/QString → qreal）
+        qreal num0 = m_axisX ? m_axisX->toNumeric(dataX) : dataX.toDouble();
+        qreal num1 = m_axisY ? m_axisY->toNumeric(dataY) : dataY.toDouble();
 
         // NaN check: toNumeric 返回 NaN 表示非法输入
         if (!std::isfinite(num0) || !std::isfinite(num1))

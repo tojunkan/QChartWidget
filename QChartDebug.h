@@ -7,7 +7,13 @@ Q_DECLARE_LOGGING_CATEGORY(logGeometry)   // 坐标系的日志分类
 Q_DECLARE_LOGGING_CATEGORY(logSeries)     // 数据的日志分类
 Q_DECLARE_LOGGING_CATEGORY(logProjection) // 投影的日志分类
 Q_DECLARE_LOGGING_CATEGORY(logFactory)    // 工厂的日志分类
-Q_DECLARE_LOGGING_CATEGORY(logValueAxis)  // 数值轴的日志分类
+Q_DECLARE_LOGGING_CATEGORY(logValueAxis)    // 数值轴的日志分类
+Q_DECLARE_LOGGING_CATEGORY(logAxisVerbose)   // 轴每帧细节（TICK SKIP等）——默认关
+Q_DECLARE_LOGGING_CATEGORY(logRenderVerbose) // 渲染每帧细节（createPath采样等）——默认关
+Q_DECLARE_LOGGING_CATEGORY(logSeriesVerbose)  // Series 每帧绘制细节——默认关
+Q_DECLARE_LOGGING_CATEGORY(logDateTimeAxis)  // 日期时间轴的日志分类
+Q_DECLARE_LOGGING_CATEGORY(logCategoryAxis)  // 分类轴的日志分类
+Q_DECLARE_LOGGING_CATEGORY(logLogAxis)       // 对数轴的日志分类
 
 Q_DECLARE_LOGGING_CATEGORY(logRender)     // 绘制部分的日志分类
 

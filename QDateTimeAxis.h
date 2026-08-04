@@ -1,61 +1,51 @@
+// QDateTimeAxis.h —— 日期时间轴
+// Data = QDateTime（用户领域类型）
+// Numeric = msecsSinceEpoch（纯数字，喂给 Projection）
+// tickValues 自动选择合适的时间单位（年/月/天/时/分/秒）
 #pragma once
-#ifndef QDATETIMEAXIS_H
-#define QDATETIMEAXIS_H
-
 #include "QChartAxis.h"
-#include "QChartProjection.h"
 #include <QDateTime>
 
 class QDateTimeAxis : public QChartAxis {
     Q_OBJECT
-        Q_PROPERTY(QString format READ format WRITE setFormat)
+    Q_PROPERTY(QString format READ format WRITE setFormat)
 
 public:
     explicit QDateTimeAxis(QObject* parent = nullptr,
-        Qt::Alignment alignment = Qt::AlignBottom);
+                           Qt::Alignment alignment = Qt::AlignBottom);
 
-    CoordinateSystem coordinateSystem() const override;
+    // ===== 数值化：Data(QDateTime) ↔ Numeric(epoch ms) =====
+    qreal toNumeric(QVariant data) const override {
+        return static_cast<qreal>(data.toDateTime().toMSecsSinceEpoch());
+    }
+    QVariant fromNumeric(qreal num) const override {
+        bool ok = false;
+        qint64 ms = static_cast<qint64>(num);
+        return QVariant::fromValue(QDateTime::fromMSecsSinceEpoch(ms));
+    }
 
-    // ---------- 业务层便利接口（非虚，直接转换） ----------
-    void setRange(const QDateTime& min, const QDateTime& max);
-    QDateTime dateTimeMin() const;
-    QDateTime dateTimeMax() const;
+    // ===== 刻度生成：时间范围上自适应步长 =====
+    QVector<qreal> tickValues(qreal numericMin, qreal numericMax) const override;
+    QStringList tickLabels(const QVector<qreal>& ticks) const override;
+    QVector<qreal> subTickValues(qreal numericMin, qreal numericMax) const override;
 
-    // ---------- 重写基类接口（增加防负数保护） ----------
-    void setMin(qreal v) override;
-    void setMax(qreal v) override;
+    // ===== 便捷：QDateTime 版 setRange =====
+    void setRange(const QDateTime& min, const QDateTime& max) {
+        QChartAxis::setRange(toNumeric(QVariant::fromValue(min)),
+                             toNumeric(QVariant::fromValue(max)));
+    }
 
-    // ---------- 格式管理 ----------
+    // ===== 标签格式 =====
     QString format() const { return m_format; }
     void setFormat(const QString& f) { m_format = f; }
 
-    // ---------- 核心映射（直接操作基类的 m_min/m_max） ----------
-    qreal valueToNormalized(qreal value) const override;
-    qreal normalizedToValue(qreal norm) const override;
-
-    // ---------- 刻度生成 ----------
-    QVector<qreal> tickValues() const override;
-    QStringList tickLabels() const override;
-    QVector<qreal> subTickValues() const override;
-
-    // ---------- 工具函数 ----------
-    static qreal toEpoch(const QDateTime& dt) {
-        return qreal(dt.toSecsSinceEpoch());
-    }
-
 private:
-    // 内部辅助结构
     struct TimeStepInfo {
-        qreal stepSeconds;   // 步长（秒）
-        QString format;      // 对应的显示格式
-        int subDivisions;    // 建议的次刻度数
+        qint64 stepMs;          // 步长（毫秒）
+        QString format;         // 对应的显示格式
+        int subDivisions;       // 建议次刻度数
     };
+    TimeStepInfo chooseStep(qint64 rangeMs) const;
 
-    TimeStepInfo calculateStepInfo() const;
-    static QDateTime floorToStep(const QDateTime& dt, qreal stepSeconds);
-
-private:
-    QString m_format;        // 只存格式，不存日期对象
+    QString m_format;  // 用户自定义格式；空 = 自适应
 };
-
-#endif // QDATETIMEAXIS_H

@@ -2,11 +2,14 @@
 // 持有唯一 Projection、管理 viewRect、协调 Axis/Geometry 绘制
 #include "QChartWidget.h"
 #include "QChartSeries.h"
+#include "QXYSeries.h"
+#include "QDataPoint.h"
 #include "QChartProjectionFactory.h"
 #include "QChartDebug.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QToolTip>
 #include <QDebug>
 #include <QLoggingCategory>
 
@@ -514,9 +517,73 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
         return;
     }
 
-    // 悬停检测（暂时用旧的 hitTest 接口——需要 DrawContext 但当前还未构建）
-    // 未来实现：通过 pixelToCartesian + fromCartesian + fromNumeric 反查数据索引
+    // ── 悬停检测：命中 Series 数据点 → 显示 tooltip（Numeric 坐标）──
+    DrawContext ctx;
+    ctx.plotArea   = m_plotArea;
+    ctx.dataBounds = m_dataBounds;
+    ctx.viewRect   = m_viewRect;
+    ctx.projection = m_projection.get();
+
+    QChartSeries* hoverSeries = nullptr;
+    int hoverIndex = -1;
+    QPointF hoverPos;
+
+    for (auto* g : m_geometries) {
+        auto result = g->hitTest(e->pos(), ctx);
+        if (result.series) {
+            hoverSeries = result.series;
+            hoverIndex = result.index;
+            hoverPos = e->pos();
+            break;
+        }
+    }
+
+    // 命中状态变化 → 更新 tooltip / 清空
+    if (hoverSeries != m_hoverSeries || hoverIndex != m_hoverIndex) {
+        m_hoverSeries = hoverSeries;
+        m_hoverIndex = hoverIndex;
+
+        if (hoverSeries) {
+            setCursor(Qt::PointingHandCursor);
+            emit seriesHovered(hoverSeries, hoverIndex, true);
+
+            // 显示 tooltip：Numeric 坐标
+            // 通过 Geometry 的轴把命中点的 Data 转成 Numeric 显示
+            // 注意：QToolTip::showText 需要全局坐标，hoverPos 是本地坐标 → mapToGlobal
+            if (auto* g = qobject_cast<QChartGeometry*>(hoverSeries->parent())) {
+                QString tip = buildHoverTooltip(g, hoverSeries, hoverIndex);
+                QToolTip::showText(mapToGlobal(hoverPos.toPoint()), tip, this);
+            }
+        } else {
+            setCursor(Qt::ArrowCursor);
+            QToolTip::hideText();
+            if (m_hoverSeries)
+                emit seriesHovered(m_hoverSeries, m_hoverIndex, false);
+        }
+    }
     QWidget::mouseMoveEvent(e);
+}
+
+// ── tooltip 内容：命中点的 Data → Numeric 坐标 ──
+QString QChartWidget::buildHoverTooltip(QChartGeometry* g,
+                                        QChartSeries* s, int index) const {
+    // 只对 QXYSeries 有点索引；其他类型返回系列名
+    auto* xy = qobject_cast<QXYSeries*>(s);
+    if (!xy || index < 0 || index >= xy->count())
+        return s->name();
+
+    QDataPoint pt = xy->at(index);
+    QString dim0Name = m_projection ? m_projection->dimensionName(0) : "x";
+    QString dim1Name = m_projection ? m_projection->dimensionName(1) : "y";
+
+    // Data → Numeric（Axis 转换）
+    qreal num0 = g->axisX() ? g->axisX()->toNumeric(pt.x()) : pt.x().toDouble();
+    qreal num1 = g->axisY() ? g->axisY()->toNumeric(pt.y()) : pt.y().toDouble();
+
+    return QString("%1 (%2, %3)")
+        .arg(s->name())
+        .arg(dim0Name + "=" + QString::number(num0, 'g', 6),
+             dim1Name + "=" + QString::number(num1, 'g', 6));
 }
 
 void QChartWidget::mouseReleaseEvent(QMouseEvent* e) {

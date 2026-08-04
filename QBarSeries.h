@@ -1,84 +1,49 @@
-#ifndef QBARSERIES_H
-#define QBARSERIES_H
-
-#include "QAbstractSeries.h"
-#include "QChartAxis.h"
+// QBarSeries.h —— 柱状系列
+// 每个柱 = Data 空间的一个矩形 (left, top, right, bottom)。
+// 只存 Data，绘制用注入的 toPixel。不知道 Axis/Projection 类型。
+// Cartesian 下投影后若四角构成轴对齐矩形 → drawRect 快路径；
+// 否则（Polar/Functional 变形）→ drawPolygon。
+#pragma once
+#include "QChartSeries.h"
 #include <QVector>
-#include <QList>
-#include <QString>
+#include <QRectF>
+#include <QPen>
 
-// ========== QBarSet ==========
-class QBarSet : public QObject
-{
-    Q_OBJECT
-    Q_PROPERTY(QString label READ label WRITE setLabel NOTIFY labelChanged)
-    Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY colorChanged)
-public:
-    explicit QBarSet(const QString& label, QObject* parent = nullptr);
-    QString label() const { return m_label; }
-    void setLabel(const QString& l);
-    int count() const { return m_values.size(); }
-    qreal valueAt(int i) const;
-    void setValue(int i, qreal v);
-    QVector<qreal> values() const { return m_values; }
-    void setValues(const QVector<qreal>& v);
-    QColor color() const { return m_color; }
-    void setColor(const QColor& c);
-signals:
-    void valuesChanged(); void valueChanged(int); void labelChanged(const QString&); void colorChanged(const QColor&);
-private:
-    QString m_label; QVector<qreal> m_values; QColor m_color;
-};
-
-// ========== QBarSeries ==========
-class QBarSeries : public QAbstractSeries
+class QBarSeries : public QChartSeries
 {
     Q_OBJECT
 public:
-    enum BarsType { Groups, Stacked, StackedPercent };
-    enum Orientation { Vertical, Horizontal };
-    enum LabelsPosition { Center, InsideEnd, InsideBase, OutsideEnd };
-
     explicit QBarSeries(const QString& name = {}, QObject* parent = nullptr);
 
-    // 数据
-    void addBarSet(QBarSet* set);
-    void removeBarSet(QBarSet* set);
-    QList<QBarSet*> barSets() const { return m_barSets; }
-    void setCategories(const QStringList& cats) { m_categories = cats; emit dataChanged(); }
-    QStringList categories() const { return m_categories; }
-    int categoryCount() const { return m_categories.size(); }
+    // ===== 数据：Data 空间矩形 =====
+    int count() const override { return m_rects.size(); }
+    void append(qreal left, qreal top, qreal right, qreal bottom);
+    void append(const QRectF& rect);
+    void replace(int i, const QRectF& rect);
+    void remove(int i);
+    void clear();
+    QRectF at(int i) const { return m_rects.at(i); }
+    const QVector<QRectF>& rectangles() const { return m_rects; }
 
-    // 布局
-    void setBarsType(BarsType t) { m_barsType = t; }
-    BarsType barsType() const { return m_barsType; }
-    void setBarWidth(qreal r) { m_barWidth = qBound(0.1, r, 1.0); }
-    qreal barWidth() const { return m_barWidth; }
+    // ===== 绘制 =====
+    void draw(QPainter* painter,
+              std::function<QPointF(QVariant,QVariant)> toPixel) const override;
 
-    // 标签
-    void setBarLabelsVisible(bool v) { m_labelsVisible = v; }
-    void setBarLabelsPosition(LabelsPosition p) { m_labelsPos = p; }
-    void setBarLabelsPrecision(int p) { m_labelsPrecision = p; }
-    void setBarBorderWidth(int w) { m_borderWidth = w; }
-    void setBarBorderColor(const QColor& c) { m_borderColor = c; }
-    void setBarRadius(qreal r) { m_barRadius = r; }
-    qreal barRadius() const { return m_barRadius; }
-    void setOrientation(Orientation o) { m_orientation = o; }
-    Orientation orientation() const { return m_orientation; }
+    // ===== 命中检测：像素在矩形内 =====
+    int hitTest(const QPointF& pixel,
+                std::function<QPointF(QVariant,QVariant)> toPixel) const override;
 
+    // ===== 样式 =====
+    QColor fillColor() const { return m_fillColor; }
+    void setFillColor(const QColor& c) { m_fillColor = c; }
+    QPen pen() const { return m_pen; }
+    void setPen(const QPen& p) { m_pen = p; }
 
-protected:
-    QList<QBarSet*> m_barSets;
-    QStringList m_categories;
-    BarsType m_barsType = Groups;
-    qreal m_barWidth = 0.7;
-    bool m_labelsVisible = false;
-    LabelsPosition m_labelsPos = OutsideEnd;
-    int m_labelsPrecision = 1;
-    int m_borderWidth = 0;
-    QColor m_borderColor = Qt::white;
-    qreal m_barRadius = 0;
-    Orientation m_orientation = Vertical;
+signals:
+    void dataChanged();
+
+private:
+    QVector<QRectF> m_rects;   // Data 空间矩形
+    QColor m_fillColor;        // 空 = 用系列色
+    QPen m_pen = Qt::NoPen;
 };
-
-#endif
