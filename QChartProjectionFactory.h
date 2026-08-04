@@ -52,7 +52,9 @@ public:
         std::function<QPointF(qreal, qreal)> backward = nullptr,
         QRectF defaultBounds = QRectF(0, 0, 10, 10),
         std::function<QRectF(const QRectF&)> dataToView = nullptr,
-        std::function<QRectF(const QRectF&)> viewToData = nullptr)
+        std::function<QRectF(const QRectF&)> viewToData = nullptr,
+        QString name0 = "x",
+        QString name1 = "y")
     {
         qCDebug(logFactory) << "Creating QFunctionalProjection";
         return std::make_unique<QFunctionalProjection>(
@@ -60,7 +62,9 @@ public:
             std::move(backward),
             defaultBounds,
             std::move(dataToView),
-            std::move(viewToData)
+            std::move(viewToData),
+            name0,
+            name1
         );
     }
 

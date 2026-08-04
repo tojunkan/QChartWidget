@@ -21,7 +21,17 @@ enum class CoordinateSystem {
 
 class QChartProjection {
 public:
+
+	// 默认构造：使用“x”和“y”作为两个维度的 Numeric 名称
+	QChartProjection(QString name0 = "x", QString name1 = "y"): m_name0(name0), m_name1(name1) {}
+
     virtual ~QChartProjection() = default;
+
+	QString dimensionName(int dim) const {
+		if (dim == 0) return m_name0;
+		if (dim == 1) return m_name1;
+		return QString();
+	}
 
     // ===== 身份标识 =====
     virtual CoordinateSystem type() const = 0;
@@ -101,4 +111,8 @@ public:
         return path;
         // 注意：返回的 path 坐标在 View Cartesian 空间，调用方还需 cartesianToPixel 变换后绘制
     }
+
+protected:
+    QString m_name0;
+	QString m_name1;
 };

@@ -378,7 +378,8 @@ void QChartAxis::drawAtPosition(QPainter* painter,
     qreal offset,
     bool drawAxisLine,
     bool drawLabels,
-    bool drawTicks) const
+    bool drawTicks,
+    QPen* pen) const
 {
     if (!m_visible) return;
     if (!ctx.projection) {
@@ -387,7 +388,8 @@ void QChartAxis::drawAtPosition(QPainter* painter,
     }
 
     painter->save();
-    painter->setPen(m_color);
+    if (pen)painter->setPen(*pen);
+    else painter->setPen(m_color);
 
     bool isHoriz = (m_alignment == Qt::AlignHCenter || m_alignment == Qt::AlignLeft || m_alignment == Qt::AlignRight);
 
@@ -454,7 +456,10 @@ void QChartAxis::drawAtPosition(QPainter* painter,
         if (drawLabels) {
             QStringList offsetLabels = tickLabels({ offset });
             if (!offsetLabels.isEmpty()) {
-                drawSingleLabel(painter, ctx, pixelPath, offsetLabels.first());
+                QString label;
+				if(!isHoriz) label = ctx.projection->dimensionName(0) + "=" + offsetLabels.first();
+				else label = ctx.projection->dimensionName(1) + "=" + offsetLabels.first();
+                drawSingleLabel(painter, ctx, pixelPath, label);
             }
         }
     }

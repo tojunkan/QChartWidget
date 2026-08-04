@@ -13,6 +13,9 @@
 
 class QPolarProjection : public QChartProjection {
 public:
+
+	QPolarProjection() : QChartProjection("θ", "r") {}
+
     CoordinateSystem type() const override { return CoordinateSystem::Polar; }
 
     // ── Numeric ↔ View Cartesian ──
@@ -95,7 +98,7 @@ public:
         if (crossesZero || coversPositiveX) {
             // 返回完整圆盘的角度范围 [0°, 360°)
             qCDebug(logProjection) << "computeDataBounds: crosses 0° → returning full circle";
-            return QRectF(0.0, rMin, 360.0, rMax - rMin);
+            return QRectF(0.0, rMin, nextafter(360.0, -INFINITY), rMax - rMin);
         }
 
         // ── 5. 正常返回（θ 范围不跨 0°） ──

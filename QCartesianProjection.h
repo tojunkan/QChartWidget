@@ -6,6 +6,9 @@
 
 class QCartesianProjection : public QChartProjection {
 public:
+
+	QCartesianProjection() : QChartProjection("x", "y") {}
+
     CoordinateSystem type() const override { return CoordinateSystem::Cartesian; }
 
     // ── Numeric ↔ View Cartesian：恒等 ──

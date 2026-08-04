@@ -22,13 +22,16 @@ public:
         std::function<QPointF(qreal x, qreal y)> backward = nullptr,
         QRectF defaultBounds = QRectF(0, 0, 10, 10),
         std::function<QRectF(const QRectF&)> dataToView = nullptr,
-        std::function<QRectF(const QRectF&)> viewToData = nullptr
+        std::function<QRectF(const QRectF&)> viewToData = nullptr,
+		QString name0 = "x", 
+        QString name1 = "y"
     )
         : m_forward(std::move(forward))
         , m_backward(std::move(backward))
         , m_defaultBounds(defaultBounds)
         , m_dataToView(std::move(dataToView))
         , m_viewToData(std::move(viewToData))
+		, QChartProjection(name0, name1)
     {}
 
     CoordinateSystem type() const override { return CoordinateSystem::Functional; }

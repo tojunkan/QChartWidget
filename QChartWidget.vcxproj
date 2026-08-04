@@ -165,6 +165,7 @@
     <QtMoc Include="QValueAxis.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ProjectionToolKit.h" />
     <ClInclude Include="QChartDebug.h" />
     <ClInclude Include="QChartProjectionFactory.h" />
     <ClInclude Include="QFunctionalProjection.h" />

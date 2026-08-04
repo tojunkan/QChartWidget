@@ -68,7 +68,7 @@ public:
     /// 数据主脊模式：画在 offset 指定的 Numeric 位置（所有坐标系有效）
     /// offset 是另一维度的 Numeric 值（由调用者 Geometry 提供）
     void drawAtPosition(QPainter* painter, const DrawContext& ctx, qreal offset,
-                        bool drawAxisLine, bool drawLabels, bool drawTicks) const;
+                        bool drawAxisLine, bool drawLabels, bool drawTicks, QPen* pen = nullptr) const;
 
     /// 边框轴占用空间估算；数据主脊返回 {0, 0}
     virtual QSizeF sizeHint(const QFont& font) const;

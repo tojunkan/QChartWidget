@@ -212,5 +212,8 @@
     <ClInclude Include="QFunctionalProjection.h">
       <Filter>头文件\Projection</Filter>
     </ClInclude>
+    <ClInclude Include="ProjectionToolKit.h">
+      <Filter>头文件\Projection</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
