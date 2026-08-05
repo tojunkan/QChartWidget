@@ -47,7 +47,15 @@ void QChartGeometry::setGridColor(const QColor& c) {
 }
 
 // ===== makeToPixel：组装完整坐标变换链 =====
-std::function<QPointF(QVariant,QVariant)> QChartGeometry::makeToPixel(const DrawContext& ctx) const {
+// 同时注入 toNumeric0/toNumeric1 到 DrawContext（Series 画曲线边用）
+std::function<QPointF(QVariant,QVariant)> QChartGeometry::makeToPixel(DrawContext& ctx) const {
+    // 注入 Numeric 转换闭包——Series 不需要知道 Axis 类型
+    const_cast<DrawContext&>(ctx).toNumeric0 = [this](QVariant d) -> qreal {
+        return m_axisX ? m_axisX->toNumeric(d) : d.toDouble();
+    };
+    const_cast<DrawContext&>(ctx).toNumeric1 = [this](QVariant d) -> qreal {
+        return m_axisY ? m_axisY->toNumeric(d) : d.toDouble();
+    };
     // 链: Data(QVariant) → toNumeric → toCartesian → cartesianToPixel
     // 返回的函数将 Data 空间的 (x,y) 直接映射到 Pixel
     // Series 不知道 Axis 类型——toNumeric 由 Geometry 在此注入
@@ -80,16 +88,17 @@ std::function<QPointF(QVariant,QVariant)> QChartGeometry::makeToPixel(const Draw
 }
 
 // ===== drawGrid：用轴 drawAtPosition 画网格线 =====
+// QChartGeometry.cpp —— drawGrid 修改后
+
 void QChartGeometry::drawGrid(QPainter* painter, const DrawContext& ctx) const {
     if (!m_gridVisible) return;
     if (!m_axisX || !m_axisY || !ctx.projection)
         return;
 
     qCDebug(logGeometry) << "drawGrid: dataBounds=" << ctx.dataBounds
-                         << "viewRect=" << ctx.viewRect;
+        << "viewRect=" << ctx.viewRect;
 
     painter->save();
-    painter->setPen(QPen(m_gridColor, 1.0, Qt::DotLine));
 
     // 获取 dataBounds 对应的 Numeric 范围
     qreal dim0Min = ctx.dataBounds.left();
@@ -97,42 +106,47 @@ void QChartGeometry::drawGrid(QPainter* painter, const DrawContext& ctx) const {
     qreal dim1Min = ctx.dataBounds.top();
     qreal dim1Max = ctx.dataBounds.top() + ctx.dataBounds.height();
 
-    // 画 dim0 方向的网格线（垂直数据主脊）：dim0=扫, dim1=tick
-    int countY = qMax(2, m_axisY->tickCount());
-	QVector<qreal> ticksY = m_axisY->tickValues(dim1Min, dim1Max);
+    // ── 画 dim0 方向的网格线（垂直数据主脊）：dim0=扫, dim1=tick ──
+    QVector<qreal> ticksY = m_axisY->tickValues(dim1Min, dim1Max);
+    QStringList labelsY = m_axisY->tickLabels(ticksY);  // 提前获取完整标签列表
+
     QPen gridPen;
-    int i = 0;
-    for (qreal tickVal : ticksY) {
-        // tickVal 已经是 Numeric 空间的 dim1 值 → 作为 offset 传给 dim0 的轴
+    for (int i = 0; i < ticksY.size(); ++i) {
+        qreal tickVal = ticksY[i];
+        QString label = labelsY.value(i);               // 直接取对应标签
         if (i % 2 == 0) {
-			gridPen = QPen(m_gridColor, 1.0, Qt::DashLine);
+            gridPen = QPen(m_gridColor, 1.0, Qt::DashLine);
             m_axisX->drawAtPosition(painter, ctx, tickVal,
-                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true, /*pen=*/&gridPen);
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
+                /*label=*/label, /*pen=*/&gridPen);
         }
         else {
-			gridPen = QPen(m_gridColor, 1.0, Qt::SolidLine);
+            gridPen = QPen(m_gridColor, 1.0, Qt::SolidLine);
             m_axisX->drawAtPosition(painter, ctx, tickVal,
-                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true, /*pen=*/&gridPen);
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
+                /*label=*/label, /*pen=*/&gridPen);
         }
-        i++;
     }
 
-    // 画 dim1 方向的网格线（水平数据主脊）：dim1=扫, dim0=tick
-    i = 0;
-    int countX = qMax(2, m_axisX->tickCount());
-	QVector<qreal> ticksX = m_axisX->tickValues(dim0Min, dim0Max);
-    for (qreal tickVal : ticksX) {
+    // ── 画 dim1 方向的网格线（水平数据主脊）：dim1=扫, dim0=tick ──
+    QVector<qreal> ticksX = m_axisX->tickValues(dim0Min, dim0Max);
+    QStringList labelsX = m_axisX->tickLabels(ticksX);  // 提前获取完整标签列表
+
+    for (int i = 0; i < ticksX.size(); ++i) {
+        qreal tickVal = ticksX[i];
+        QString label = labelsX.value(i);
         if (i % 2 == 0) {
-			gridPen = QPen(m_gridColor, 1.0, Qt::DashLine);
+            gridPen = QPen(m_gridColor, 1.0, Qt::DashLine);
             m_axisY->drawAtPosition(painter, ctx, tickVal,
-                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true, /*pen=*/&gridPen);
-		}
-		else {
-			gridPen = QPen(m_gridColor, 1.0, Qt::SolidLine);
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
+                /*label=*/label, /*pen=*/&gridPen);
+        }
+        else {
+            gridPen = QPen(m_gridColor, 1.0, Qt::SolidLine);
             m_axisY->drawAtPosition(painter, ctx, tickVal,
-                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true, /*pen=*/&gridPen);
-		}
-        i++;
+                /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
+                /*label=*/label, /*pen=*/&gridPen);
+        }
     }
 
     painter->restore();
@@ -165,13 +179,13 @@ void QChartGeometry::drawAllSeries(QPainter* painter, const DrawContext& ctx) {
         return;
     }
 
-    auto toPixel = makeToPixel(ctx);
+    auto toPixel = makeToPixel(const_cast<DrawContext&>(ctx));
 
     for (auto* s : m_series) {
         if (!s || !s->isVisible()) continue;
         painter->save();
         painter->setOpacity(s->opacity());
-        s->draw(painter, toPixel);
+        s->draw(painter, toPixel, &ctx);
         painter->restore();
     }
 }
@@ -179,11 +193,11 @@ void QChartGeometry::drawAllSeries(QPainter* painter, const DrawContext& ctx) {
 // ===== 命中检测 =====
 QChartGeometry::HitResult QChartGeometry::hitTest(const QPointF& pixel,
                                                    const DrawContext& ctx) const {
-    auto toPixel = makeToPixel(ctx);
+    auto toPixel = makeToPixel(const_cast<DrawContext&>(ctx));
     for (int i = m_series.size() - 1; i >= 0; --i) {
         auto* s = m_series[i];
         if (!s || !s->isVisible()) continue;
-        int idx = s->hitTest(pixel, toPixel);
+        int idx = s->hitTest(pixel, toPixel, &ctx);
         if (idx >= 0)
             return { s, idx };
     }

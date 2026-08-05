@@ -28,15 +28,17 @@ public:
     virtual int count() const = 0;
 
     // ===== 绘制（纯虚）=====
-    /// toPixel: Data(QVariant, QVariant) → Pixel。
-    /// 返回 NaN 的点应跳过不画。Series 不知道 Axis 类型，全靠注入的函数。
+    /// toPixel: Data(QVariant, QVariant) → Pixel。NaN 的点应跳过。
+    /// ctx: 可选。提供 toNumeric*/toPixelCurve 用于通用坐标系下曲线边。
+    ///      nullptr → 像素空间直线（Cartesian 下的快路径/旧行为）
     virtual void draw(QPainter* painter,
-                      std::function<QPointF(QVariant,QVariant)> toPixel) const = 0;
+                      std::function<QPointF(QVariant,QVariant)> toPixel,
+                      const struct DrawContext* ctx = nullptr) const = 0;
 
     // ===== 命中检测 =====
-    /// 返回命中数据点索引，-1 未命中。默认实现调用 draw 相同路径逐点比较。
     virtual int hitTest(const QPointF& pixel,
-                        std::function<QPointF(QVariant,QVariant)> toPixel) const;
+                        std::function<QPointF(QVariant,QVariant)> toPixel,
+                        const struct DrawContext* ctx = nullptr) const;
 
     // ===== 样式 =====
     QString name() const { return m_name; }

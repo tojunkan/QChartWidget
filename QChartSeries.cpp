@@ -33,8 +33,10 @@ void QChartSeries::setOpacity(qreal o) {
 // ===== 命中检测默认实现 =====
 // 基类无法知道数据布局，默认返回 -1。子类（Scatter 等）重写。
 int QChartSeries::hitTest(const QPointF& pixel,
-                          std::function<QPointF(QVariant,QVariant)> toPixel) const {
+                          std::function<QPointF(QVariant,QVariant)> toPixel,
+                          const DrawContext* ctx) const {
     Q_UNUSED(pixel);
     Q_UNUSED(toPixel);
+    Q_UNUSED(ctx);
     return -1;
 }

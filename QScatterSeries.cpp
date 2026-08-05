@@ -1,5 +1,6 @@
 // QScatterSeries.cpp —— 散点系列实现
 #include "QScatterSeries.h"
+#include "QChartAxis.h"  // DrawContext::numericToPixel
 #include "QChartDebug.h"
 #include <QDebug>
 #include <QtMath>
@@ -13,18 +14,35 @@ QScatterSeries::QScatterSeries(const QString& name, QObject* parent)
 
 // ===== 绘制 =====
 void QScatterSeries::draw(QPainter* painter,
-                          std::function<QPointF(QVariant,QVariant)> toPixel) const {
-    if (!painter || !toPixel || !m_visible) return;
+                          std::function<QPointF(QVariant,QVariant)> toPixel,
+                          const DrawContext* ctx) const {
+    if (!painter || !m_visible) return;
+    // override 点已是 Numeric 空间，不需 toPixel；真实数据则必须要有
+    if (!m_hasOverride && !toPixel) return;
 
     int drawn = 0, skipped = 0;
-    for (const auto& pt : m_points) {
-        QPointF pixel = toPixel(pt.x(), pt.y());
-        if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
-            skipped++;
-            continue;
+    if (m_hasOverride) {
+        // 动画覆盖层：Numeric 点直接投影到像素
+        for (const auto& n : m_overridePoints) {
+            QPointF pixel = ctx ? ctx->numericToPixel(n.x(), n.y())
+                                : QPointF(qQNaN(), qQNaN());
+            if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
+                skipped++;
+                continue;
+            }
+            drawMarker(painter, pixel);
+            drawn++;
         }
-        drawMarker(painter, pixel);
-        drawn++;
+    } else {
+        for (const auto& pt : m_points) {
+            QPointF pixel = toPixel(pt.x(), pt.y());
+            if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
+                skipped++;
+                continue;
+            }
+            drawMarker(painter, pixel);
+            drawn++;
+        }
     }
     qCDebug(logSeriesVerbose) << "QScatterSeries::draw:" << drawn << "drawn,"
                               << skipped << "skipped (NaN)";
@@ -32,7 +50,9 @@ void QScatterSeries::draw(QPainter* painter,
 
 // ===== 命中检测：像素到最近数据点距离 < marker 半径 =====
 int QScatterSeries::hitTest(const QPointF& pixel,
-                            std::function<QPointF(QVariant,QVariant)> toPixel) const {
+                            std::function<QPointF(QVariant,QVariant)> toPixel,
+                            const DrawContext* ctx) const {
+    Q_UNUSED(ctx);
     if (!toPixel || !m_visible) return -1;
 
     qreal threshold = m_markerSize * 1.5;   // 容差：marker 尺寸的 1.5 倍

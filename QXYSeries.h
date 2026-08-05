@@ -17,6 +17,12 @@ public:
     const QVector<QDataPoint>& points() const { return m_points; }
     QDataPoint at(int i) const { return m_points.at(i); }
 
+    // ===== 动画覆盖层 —— 优先于真实数据被 draw() 使用 =====
+    void setRenderOverride(const QVector<QPointF>& numericPts);
+    void clearRenderOverride();
+    bool hasRenderOverride() const { return m_hasOverride; }
+    const QVector<QPointF>& renderOverride() const { return m_overridePoints; }
+
     // ===== 数据操作（改数据后发 dataChanged）=====
     void append(qreal x, qreal y);                    // 便捷：qreal 版本
     void append(const QDataPoint& pt);
@@ -27,8 +33,12 @@ public:
     void setPoints(const QVector<QDataPoint>& pts);   // 整批替换
 
 signals:
-    void dataChanged(); // 任何数据改动都发
+    void dataChanged();             // 任何数据改动都发
+    void renderOverrideChanged();   // 动画覆盖层变化（每帧可能多次）
 
 protected:
     QVector<QDataPoint> m_points;
+    // 动画临时点集（Numeric空间），优先于 m_points 被 draw() 使用
+    QVector<QPointF> m_overridePoints;
+    bool m_hasOverride = false;
 };

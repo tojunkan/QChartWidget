@@ -16,11 +16,13 @@ public:
 
     // ===== 绘制 =====
     void draw(QPainter* painter,
-              std::function<QPointF(QVariant,QVariant)> toPixel) const override;
+              std::function<QPointF(QVariant,QVariant)> toPixel,
+              const DrawContext* ctx = nullptr) const override;
 
     // ===== 命中检测：像素到最近数据点的距离 < 阈值 =====
     int hitTest(const QPointF& pixel,
-                std::function<QPointF(QVariant,QVariant)> toPixel) const override;
+                std::function<QPointF(QVariant,QVariant)> toPixel,
+                const DrawContext* ctx = nullptr) const override;
 
     // ===== marker 样式 =====
     MarkerShape markerShape() const { return m_markerShape; }

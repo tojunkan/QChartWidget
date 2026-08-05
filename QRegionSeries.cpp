@@ -10,7 +10,9 @@ QRegionSeries::QRegionSeries(const QString& name, QObject* parent)
 
 // ===== 绘制：多边形 fill（隐式闭合）=====
 void QRegionSeries::draw(QPainter* painter,
-                         std::function<QPointF(QVariant,QVariant)> toPixel) const {
+                         std::function<QPointF(QVariant,QVariant)> toPixel,
+                         const DrawContext* ctx) const {
+    Q_UNUSED(ctx); // 留待 createPath 修复
     if (!painter || !toPixel || !m_visible) return;
     if (m_points.size() < 3) return;
 
@@ -50,7 +52,9 @@ void QRegionSeries::draw(QPainter* painter,
 
 // ===== 命中检测：像素在多边形内部 =====
 int QRegionSeries::hitTest(const QPointF& pixel,
-                           std::function<QPointF(QVariant,QVariant)> toPixel) const {
+                           std::function<QPointF(QVariant,QVariant)> toPixel,
+                           const DrawContext* ctx) const {
+    Q_UNUSED(ctx);
     if (!toPixel || !m_visible || m_points.size() < 3) return -1;
 
     QPolygonF polygon;

@@ -120,7 +120,7 @@
     <QtMoc Include="..\QLineSeries.h" />
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="..\QRegionSeries.h" />
+    <QtMoc Include="..\QPolygonSeries.h" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="..\QBarSeries.h" />
@@ -138,16 +138,23 @@
     <QtMoc Include="..\QChartWidget.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\QCartesianGeometry.cpp" />
+    <QtMoc Include="..\QChartAnimation.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="..\QNumericSeriesAnimation.h" />
+  </ItemGroup>
+  <ItemGroup>
     <ClCompile Include="..\QChartAxis.cpp" />
     <ClCompile Include="..\QChartGeometry.cpp" />
     <ClCompile Include="..\QChartSeries.cpp" />
     <ClCompile Include="..\QChartWidget.cpp" />
+    <ClCompile Include="..\QChartAnimation.cpp" />
+    <ClCompile Include="..\QNumericSeriesAnimation.cpp" />
     <ClCompile Include="..\QValueAxis.cpp" />
     <ClCompile Include="..\QXYSeries.cpp" />
     <ClCompile Include="..\QScatterSeries.cpp" />
     <ClCompile Include="..\QLineSeries.cpp" />
-    <ClCompile Include="..\QRegionSeries.cpp" />
+    <ClCompile Include="..\QPolygonSeries.cpp" />
     <ClCompile Include="..\QBarSeries.cpp" />
     <ClCompile Include="..\QDateTimeAxis.cpp" />
     <ClCompile Include="..\QBarCategoryAxis.cpp" />
@@ -156,9 +163,6 @@
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="..\QValueAxis.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <QtMoc Include="..\QCartesianGeometry.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="..\..\GoodsSystem\x64\Debug\test_log.txt" />

@@ -53,6 +53,14 @@ void QChartWidget::addGeometry(QChartGeometry* g) {
 
     g->setParent(this);
     m_geometries.append(g);
+
+    // 动画覆盖层每帧变化 → 刷新前景缓存（不动背景/布局）
+    connect(g, &QChartGeometry::seriesAdded, this, [this](QChartSeries* s) {
+        if (auto* xy = qobject_cast<QXYSeries*>(s))
+            connect(xy, &QXYSeries::renderOverrideChanged,
+                    this, [this]() { invalidateForeground(); });
+    });
+
     invalidateForeground();
     qCDebug(logWidget) << "Geometry added, total:" << m_geometries.size();
 }
@@ -447,10 +455,11 @@ void QChartWidget::drawBackground(QPainter* p) {
             else
                 defaultOffset = ctx.dataBounds.left(); // X 维度在默认位置
 
+            QString nullLabel = "";
             p->save();
             p->setClipRect(m_plotArea);
             a->drawAtPosition(p, ctx, defaultOffset,
-                              /*axisLine=*/true, /*labels=*/false, /*ticks=*/true);
+                              /*axisLine=*/true, /*labels=*/false, /*ticks=*/true, /*label=*/nullLabel, /*pen=*/nullptr);
             p->restore();
         } else {
             // 边框轴：画在 plotArea 边缘

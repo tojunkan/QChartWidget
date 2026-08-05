@@ -22,18 +22,32 @@ public:
     void removeCategory(int index);
     void clearCategories();
 
-    // ===== 数值化：Data(QString) ↔ Numeric(索引) =====
+    // ===== 数值化：Data(QString/qreal) ↔ Numeric(线性映射) =====
     qreal toNumeric(QVariant data) const override {
-        // 类别名 → 索引；未找到返回 NaN
+        // qreal 直通——Bar 等用小数索引定位
+        if (static_cast<QMetaType::Type>(data.typeId()) == QMetaType::Double
+            || static_cast<QMetaType::Type>(data.typeId()) == QMetaType::Int
+            || static_cast<QMetaType::Type>(data.typeId()) == QMetaType::LongLong)
+            return data.toDouble();
+        // 类别名 → 索引 → 线性映射到 [numericMin, numericMax]
         int idx = m_categories.indexOf(data.toString());
-        return (idx >= 0) ? static_cast<qreal>(idx) : qQNaN();
+        if (idx < 0 || m_categories.isEmpty()) return qQNaN();
+        // 线性映射：旧域[0,n-1] → 新域[numericMin,numericMax]
+        qreal norm = static_cast<qreal>(idx) / (m_categories.size() - 1);
+        return m_numericMin + norm * (m_numericMax - m_numericMin);
     }
     QVariant fromNumeric(qreal num) const override {
-        // 索引 → 类别名；NaN/越界返回空字符串
-        if (!std::isfinite(num)) return QString();
-        int idx = static_cast<int>(num);
+        // Numeric → 逆线性映射 → 索引 → 类别名
+        if (!std::isfinite(num) || m_categories.isEmpty()) return QString();
+        qreal norm = (num - m_numericMin) / (m_numericMax - m_numericMin);
+        int idx = static_cast<int>(std::round(norm * (m_categories.size() - 1)));
         return (idx >= 0 && idx < m_categories.size()) ? m_categories[idx] : QString();
     }
+
+    // ===== 线性映射区间 =====
+    void setNumericMapping(qreal numericMin, qreal numericMax);
+    qreal numericMin() const { return m_numericMin; }
+    qreal numericMax() const { return m_numericMax; }
 
     // ===== 刻度生成 =====
     QVector<qreal> tickValues(qreal numericMin, qreal numericMax) const override;
@@ -47,4 +61,6 @@ public:
 
 private:
     QStringList m_categories;
+    qreal m_numericMin = 0.0;
+    qreal m_numericMax = 0.0;  // setCategories 时自动更新
 };

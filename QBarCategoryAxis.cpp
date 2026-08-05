@@ -12,11 +12,21 @@ QBarCategoryAxis::QBarCategoryAxis(QObject* parent, Qt::Alignment alignment)
 // ===== 类别管理 =====
 void QBarCategoryAxis::setCategories(const QStringList& cats) {
     m_categories = cats;
+    int n = m_categories.size();
+    m_numericMax = qMax(0.0, static_cast<qreal>(n - 1));
     m_sugarMin = -0.5;
-    m_sugarMax = m_categories.size() - 0.5;
+    m_sugarMax = m_numericMax + 0.5;
     emit rangeChanged(m_sugarMin, m_sugarMax);
     emit styleChanged();
-    qCDebug(logCategoryAxis) << "categories:" << cats;
+    qCDebug(logCategoryAxis) << "categories:" << cats
+                             << "numeric range:[" << m_numericMin << "," << m_numericMax << "]";
+}
+
+void QBarCategoryAxis::setNumericMapping(qreal numericMin, qreal numericMax) {
+    m_numericMin = numericMin;
+    m_numericMax = numericMax;
+    qCDebug(logCategoryAxis) << "numericMapping: [" << numericMin << "," << numericMax << "]";
+    emit styleChanged();
 }
 
 void QBarCategoryAxis::appendCategory(const QString& cat) {

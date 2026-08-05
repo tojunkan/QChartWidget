@@ -13,7 +13,7 @@
 #include "../QChartProjectionFactory.h"
 #include "../QScatterSeries.h"
 #include "../QLineSeries.h"
-#include "../QRegionSeries.h"
+#include "../QPolygonSeries.h"
 #include "../QBarSeries.h"
 #include "../QValueAxis.h"
 #include "../ProjectionToolKit.h"
@@ -21,6 +21,9 @@
 #include "../QBarCategoryAxis.h"
 #include "../QLogAxis.h"
 #include "../QDataPoint.h"
+#include "../QChartAnimation.h"
+#include "../QNumericSeriesAnimation.h"
+#include <QParallelAnimationGroup>
 
 // 将 Qt 日志同时写入文件和 stderr（Windows 下 qDebug 默认不输出到控制台）
 static QFile g_logFile;
@@ -46,172 +49,173 @@ int main(int argc, char* argv[]) {
     qInstallMessageHandler(logToFile);
     // 启用所有 chart 分类的 debug 日志
     //QLoggingCategory::setFilterRules("chart.axis.debug=true");
-    QLoggingCategory::setFilterRules("chart.*.debug=false");
+    QLoggingCategory::setFilterRules("chart.*.verbose=true");
 
     QApplication app(argc, argv);
     qDebug() << "========== 测试开始 ==========";
     qDebug() << "日志文件:" << logPath;
 
-    qDebug() << "\n========== 图形化交互测试 ==========";
+    qDebug() << "\n========== 窗口1: Polar 五边形 ==========";
 
-    QChartWidget * chartWidget = new QChartWidget();
-    chartWidget->setProjection(createSwirlProjection());
-	chartWidget->setViewRectFitMode(ViewRectFitMode::Fit);
-	//chartWidget->setFixedAspectRatio(1.0);  // 强制 viewRect
+    auto* polarW = new QChartWidget();
+    polarW->setWindowTitle("Polar 五边形 - 曲线边验证");
+    polarW->setProjection(QChartProjectionFactory::create(CoordinateSystem::Polar));
 
-    // dim0 = 角度 (AlignHCenter)
-    QValueAxis * angleAxis = new QValueAxis(chartWidget, Qt::AlignHCenter);
+    auto* angleAxis = new QValueAxis(polarW, Qt::AlignHCenter);
     angleAxis->setColor(Qt::white);
-    chartWidget->addAxis(angleAxis);
-    //angleAxis->setRange(0, 360);
-    //angleAxis->setTickCount(9);
+    polarW->addAxis(angleAxis);
+    angleAxis->setLabelFormat("%g°");
+    angleAxis->setRange(0, 360);
 
-    // dim1 = 半径 (AlignVCenter)
-    QValueAxis * radialAxis = new QValueAxis(chartWidget, Qt::AlignVCenter);
+    auto* radialAxis = new QValueAxis(polarW, Qt::AlignVCenter);
     radialAxis->setColor(Qt::white);
-    chartWidget->addAxis(radialAxis);
-    //radialAxis->setTickInterval(M_PI / 3);
-    //radialAxis->setRange(0, 10);
-    //radialAxis->setTickCount(5);
+    polarW->addAxis(radialAxis);
+    radialAxis->setRange(0, 5);
 
-    QChartGeometry * geometry = new QChartGeometry(chartWidget);
-    geometry->setAxisX(angleAxis);
-    geometry->setAxisY(radialAxis);
-    chartWidget->addGeometry(geometry);
-    chartWidget->resize(800, 600);
+    auto* polarGeo = new QChartGeometry(polarW);
+    polarGeo->setAxisX(angleAxis);
+    polarGeo->setAxisY(radialAxis);
+    polarW->addGeometry(polarGeo);
 
-    // ===== QScatterSeries 验证 =====
-    // 在 Swirl 投影下加 200 个散点，验证 Data→toPixel 渲染链路
-    auto* scatter = new QScatterSeries("swirl-scatter", geometry);
-    scatter->setMarkerShape(QScatterSeries::MarkerShape::Circle);
-    scatter->setMarkerSize(6);
-    scatter->setColor(QColor("#4CAF50"));
-    scatter->setFillColor(QColor("#4CAF50"));
-
-    // 随机点在 [-4,4]² 内（Swirl 的有效输入范围）
-    auto* rng = QRandomGenerator::global();
-    for (int i = 0; i < 200; ++i) {
-        qreal x = -4.0 + rng->generateDouble() * 8.0;
-        qreal y = -4.0 + rng->generateDouble() * 8.0;
-        scatter->append(x, y);
+    // 五边形顶点：θ=0°,72°,144°,216°,288°， r=4
+    auto* penta = new QPolygonSeries("pentagon", polarGeo);
+    penta->setColor(QColor("#FF5722"));
+    penta->setFillColor(QColor(255, 87, 34, 80));
+    for (int i = 0; i < 5; ++i) {
+        qreal theta = i * 72.0;
+        penta->append(theta, 4.0);
     }
-    qDebug() << "Scatter points:" << scatter->count();
-    geometry->addSeries(scatter);
+    polarGeo->addSeries(penta);
 
-    // ===== QLineSeries 验证：正弦线 =====
-    auto* line = new QLineSeries("sine", geometry);
-    line->setColor(QColor("#FF9800"));
-    line->setLineWidth(2.0);
-    for (int i = 0; i < 100; ++i) {
-        qreal x = -3.0 + i * 6.0 / 99.0;
-        qreal y = qSin(x);
-        line->append(x, y);
-    }
-    geometry->addSeries(line);
+    // 顶点加标记
+    auto* vertexMarks = new QScatterSeries("vertices", polarGeo);
+    vertexMarks->setColor(QColor("#FFC107"));
+    vertexMarks->setMarkerSize(8);
+    for (int i = 0; i < 5; ++i)
+        vertexMarks->append(i * 72.0, 4.0);
+    polarGeo->addSeries(vertexMarks);
 
-    // ===== QRegionSeries 验证：填充三角形 =====
-    auto* region = new QRegionSeries("triangle", geometry);
-    region->setColor(QColor("#9C27B0"));
-    region->setFillColor(QColor(156, 39, 176, 80));  // 半透明紫
-    region->append(-3.0, -1.0);
-    region->append(3.0, -1.0);
-    region->append(0.0, 2.0);
-    geometry->addSeries(region);
+    polarW->resize(600, 500);
+    polarW->show();
 
-    // ===== QBarSeries 验证：笛卡尔矩形柱 =====
-    auto* bars = new QBarSeries("bars", geometry);
-    bars->setColor(QColor("#00BCD4"));
-    bars->setFillColor(QColor(0, 188, 212, 180));
-    // 在 Swirl 输入范围 [-4,4]² 内放几个矩形柱
-    bars->append(-4.0, -4.0, -2.0, -1.0);
-    bars->append(-1.0, -3.0, 1.0, -2.0);
-    bars->append(2.0, -4.0, 3.5, -1.5);
-    geometry->addSeries(bars);
+    // ===== 窗口 2: Cartesian 柱状图 =====
+    qDebug() << "\n========== 窗口2: Cartesian 柱状图 ==========";
 
-    qDebug() << "All series added: line, region, bars";
+    auto* barW = new QChartWidget();
+    barW->setWindowTitle("Cartesian 柱状图 - drawRect 快路径");
+    barW->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
+    barW->setViewRectFitMode(ViewRectFitMode::Stretch); // Cartesian 下直接拉伸即可
 
-    // ===== Test 4: QDateTimeAxis (Data=QDateTime, Numeric=epoch ms) =====
-    qDebug() << "\n===== Test 4: QDateTimeAxis =====";
-    auto* dtWidget = new QChartWidget();
-    dtWidget->setWindowTitle("QDateTimeAxis 验证");
-    dtWidget->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
-    auto* dateAxis = new QDateTimeAxis(dtWidget, Qt::AlignBottom);
-    dtWidget->addAxis(dateAxis);
-    dateAxis->setRange(QDateTime(QDate(2026, 1, 1), QTime(0, 0)),
-                       QDateTime(QDate(2026, 12, 31), QTime(0, 0)));
-    auto* dtYAxis = new QValueAxis(dtWidget, Qt::AlignLeft);
-    dtWidget->addAxis(dtYAxis);
-    dtYAxis->setRange(0, 100);
-    auto* dtGeo = new QChartGeometry(dtWidget);
-    dtGeo->setAxisX(dateAxis);
-    dtGeo->setAxisY(dtYAxis);
-    dtWidget->addGeometry(dtGeo);
-    auto* dtLine = new QLineSeries("Temperatures", dtGeo);
-    dtLine->setColor(QColor("#FF5722"));
-    for (int i = 0; i < 12; ++i) {
-        QDateTime d(QDate(2026, i + 1, 15), QTime(0, 0));
-        dtLine->append(QDataPoint(QVariant::fromValue(d),
-                                  QVariant::fromValue(20.0 + qSin(i * 0.8) * 15.0)));
-    }
-    dtGeo->addSeries(dtLine);
-    dtWidget->resize(800, 400);
-    dtWidget->show();
+    auto* xAxis = new QBarCategoryAxis(barW, Qt::AlignBottom);
+    xAxis->setColor(Qt::white);
+    barW->addAxis(xAxis);
+    xAxis->setCategories({"苹果","香蕉","橙子","葡萄","西瓜"});
+    xAxis->setNumericMapping(-0.5, 4.5);  // 槽位居中：索引0→-0.5, 索引4→4.5
 
-    // ===== Test 5: QBarCategoryAxis (Data=QString, Numeric=index) =====
-    qDebug() << "\n===== Test 5: QBarCategoryAxis =====";
-    auto* catWidget = new QChartWidget();
-    catWidget->setWindowTitle("QBarCategoryAxis 验证");
-    catWidget->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
-    auto* catAxis = new QBarCategoryAxis(catWidget, Qt::AlignBottom);
-    catWidget->addAxis(catAxis);
-    catAxis->setCategories({QStringLiteral("苹果"), QStringLiteral("香蕉"),
-                            QStringLiteral("橙子"), QStringLiteral("葡萄"),
-                            QStringLiteral("西瓜")});
-    auto* catYAxis = new QValueAxis(catWidget, Qt::AlignLeft);
-    catWidget->addAxis(catYAxis);
-    catYAxis->setRange(0, 100);
-    auto* catGeo = new QChartGeometry(catWidget);
-    catGeo->setAxisX(catAxis);
-    catGeo->setAxisY(catYAxis);
-    catWidget->addGeometry(catGeo);
-    auto* catBars = new QBarSeries("Fruit Sales", catGeo);
-    catBars->setColor(QColor("#4CAF50"));
-    catBars->setFillColor(QColor(76, 175, 80, 160));
-    catBars->append(-0.3, 0, 0.3, 45);   // 苹果: index 0
-    catBars->append(0.7, 0, 1.3, 72);    // 香蕉: index 1
-    catBars->append(1.7, 0, 2.3, 33);    // 橙子: index 2
-    catBars->append(2.7, 0, 3.3, 88);    // 葡萄: index 3
-    catBars->append(3.7, 0, 4.3, 56);    // 西瓜: index 4
-    catGeo->addSeries(catBars);
-    catWidget->resize(600, 400);
-    catWidget->show();
+    auto* valAxis = new QValueAxis(barW, Qt::AlignLeft);
+    valAxis->setColor(Qt::white);
+    barW->addAxis(valAxis);
+    valAxis->setRange(0, 100);
 
-    // ===== Test 6: QLogAxis (Data=qreal>0, Numeric=log10) =====
-    qDebug() << "\n===== Test 6: QLogAxis =====";
-    auto* logWidget = new QChartWidget();
-    logWidget->setWindowTitle("QLogAxis 验证");
-    logWidget->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
-    auto* logAxis = new QLogAxis(logWidget, Qt::AlignBottom);
-    logWidget->addAxis(logAxis);
-    logAxis->setRange(1, 10000); // Data 空间 1~10000
-    auto* logYAxis = new QValueAxis(logWidget, Qt::AlignLeft);
-    logWidget->addAxis(logYAxis);
-    logYAxis->setRange(0, 10);
-    auto* logGeo = new QChartGeometry(logWidget);
-    logGeo->setAxisX(logAxis);
-    logGeo->setAxisY(logYAxis);
-    logWidget->addGeometry(logGeo);
-    auto* logScatter = new QScatterSeries("log-points", logGeo);
-    logScatter->setMarkerShape(QScatterSeries::MarkerShape::Circle);
-    logScatter->setMarkerSize(6);
-    logScatter->setColor(QColor("#E91E63"));
-    for (qreal v = 1.0; v <= 10000.0; v *= 1.5) {
-        logScatter->append(QDataPoint(QVariant::fromValue(v), QVariant::fromValue(5.0)));
-    }
-    logGeo->addSeries(logScatter);
-    logWidget->resize(800, 400);
-    logWidget->show();
+    auto* barGeo = new QChartGeometry(barW);
+    barGeo->setAxisX(xAxis);
+    barGeo->setAxisY(valAxis);
+    barW->addGeometry(barGeo);
 
-    chartWidget->show();
+    auto* bars = new QBarSeries("bars", barGeo);
+    bars->setColor(QColor("#4CAF50"));
+    bars->setFillColor(QColor(76, 175, 80, 160));
+    bars->append(-0.3, 0, 0.3, 45);
+    bars->append(0.7, 0, 1.3, 72);
+    bars->append(1.7, 0, 2.3, 33);
+    bars->append(2.7, 0, 3.3, 88);
+    bars->append(3.7, 0, 4.3, 56);
+    barGeo->addSeries(bars);
+
+    barW->resize(600, 400);
+    barW->show();
+
+    // ===== 窗口 3: 单摆动画（QNumericSeriesAnimation Generator 模式）=====
+    qDebug() << "\n========== 窗口3: 单摆动画 ==========";
+
+    auto* pendW = new QChartWidget();
+    pendW->setWindowTitle("单摆动画 - Generator 模式");
+    pendW->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
+    pendW->setViewRectFitMode(ViewRectFitMode::Stretch);
+
+    auto* pendX = new QValueAxis(pendW, Qt::AlignBottom);
+    pendX->setColor(Qt::white);
+    pendW->addAxis(pendX);
+    pendX->setRange(-5, 5);
+
+    auto* pendY = new QValueAxis(pendW, Qt::AlignLeft);
+    pendY->setColor(Qt::white);
+    pendW->addAxis(pendY);
+    pendY->setRange(-5, 1);
+
+    auto* pendGeo = new QChartGeometry(pendW);
+    pendGeo->setAxisX(pendX);
+    pendGeo->setAxisY(pendY);
+    pendW->addGeometry(pendGeo);
+
+    // 物理参数：L=4, g=9.8, θ₀=60°，动画跑两个周期
+    const qreal L = 4.0, g = 9.8, theta0 = M_PI / 3.0;
+    const qreal T = 2 * M_PI * std::sqrt(L / g);   // 周期 ≈4.01s
+    const int durationMs = qRound(T * 2 * 1000);   // ≈8024ms
+
+    // 杆：悬挂点 (0,0) → 球心；球：单点散点
+    auto* rod = new QLineSeries("rod", pendGeo);
+    rod->setColor(QColor("#2196F3"));
+    pendGeo->addSeries(rod);
+
+    auto* ball = new QScatterSeries("ball", pendGeo);
+    ball->setColor(QColor("#F44336"));
+    ball->setMarkerSize(14);
+    pendGeo->addSeries(ball);
+
+    // 共享物理核：θ(t) = θ₀·cos(√(g/L)·t)，t = alpha·两周期
+    // 两个动画各自包装 Generator——输出点集形状不同（杆 2 点、球 1 点）
+    auto thetaAt = [L, g, theta0, T](qreal alpha) -> qreal {
+        qreal t = alpha * 2.0 * T;
+        return theta0 * std::cos(std::sqrt(g / L) * t);
+    };
+
+    QNumericSeriesAnimation::Generator genRod = [thetaAt, L](qreal alpha, QVector<QPointF>& out) {
+        qreal th = thetaAt(alpha);
+        out = { QPointF(0, 0), QPointF(L * std::sin(th), -L * std::cos(th)) };
+    };
+    QNumericSeriesAnimation::Generator genBall = [thetaAt, L](qreal alpha, QVector<QPointF>& out) {
+        qreal th = thetaAt(alpha);
+        out = { QPointF(L * std::sin(th), -L * std::cos(th)) };
+    };
+
+    auto* rodAnim = new QNumericSeriesAnimation(pendW);
+    rodAnim->setDuration(durationMs);
+    rodAnim->setEasingCurve(QEasingCurve::Linear); // 物理时间必须线性推进
+    rodAnim->setTargetSeries(rod);
+    rodAnim->setGenerator(genRod);
+
+    auto* ballAnim = new QNumericSeriesAnimation(pendW);
+    ballAnim->setDuration(durationMs);
+    ballAnim->setEasingCurve(QEasingCurve::Linear);
+    ballAnim->setTargetSeries(ball);
+    ballAnim->setGenerator(genBall);
+
+    auto* group = new QParallelAnimationGroup(pendW);
+    group->addAnimation(rodAnim);
+    group->addAnimation(ballAnim);
+
+    // 动画结束：清除覆盖层，恢复真实数据渲染
+    QObject::connect(group, &QParallelAnimationGroup::finished, rod, [rod, ball]() {
+        rod->clearRenderOverride();
+        ball->clearRenderOverride();
+        qDebug() << "单摆动画结束，覆盖层已清除";
+    });
+
+    group->start();
+
+    pendW->resize(600, 500);
+    pendW->show();
+
     return app.exec();
 }

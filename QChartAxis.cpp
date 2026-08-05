@@ -381,6 +381,7 @@ void QChartAxis::drawAtPosition(QPainter* painter,
     bool drawAxisLine,
     bool drawLabels,
     bool drawTicks,
+    QString& label,
     QPen* pen) const
 {
     if (!m_visible) return;
@@ -393,7 +394,7 @@ void QChartAxis::drawAtPosition(QPainter* painter,
     if (pen)painter->setPen(*pen);
     else painter->setPen(m_color);
 
-    bool isHoriz = (m_alignment == Qt::AlignHCenter || m_alignment == Qt::AlignLeft || m_alignment == Qt::AlignRight);
+    bool isHoriz = isHorizontal();
 
     // ── 构建数据曲线 ──
     auto dataCurve = [isHoriz, offset, &ctx](qreal t) -> QPointF {
@@ -462,12 +463,11 @@ void QChartAxis::drawAtPosition(QPainter* painter,
 
         // ── 画单标签（offset 对应的标签） ──
         if (drawLabels) {
-            QStringList offsetLabels = tickLabels({ offset });
-            if (!offsetLabels.isEmpty()) {
-                QString label;
-				if(!isHoriz) label = ctx.projection->dimensionName(0) + "=" + offsetLabels.first();
-				else label = ctx.projection->dimensionName(1) + "=" + offsetLabels.first();
-                drawSingleLabel(painter, ctx, pixelPath, label);
+            if (!label.isEmpty()) {
+                QString labelWithUnit = label;
+				if(!isHoriz) labelWithUnit = ctx.projection->dimensionName(0) + "=" + label;
+				else labelWithUnit = ctx.projection->dimensionName(1) + "=" + label;
+                drawSingleLabel(painter, ctx, pixelPath, labelWithUnit);
             }
         }
     }

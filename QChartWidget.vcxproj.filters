@@ -49,12 +49,6 @@
     <ClCompile Include="QRadialAxis.cpp">
       <Filter>源文件\Axes</Filter>
     </ClCompile>
-    <ClCompile Include="QCartesianGeometry.cpp">
-      <Filter>源文件\Geometries</Filter>
-    </ClCompile>
-    <ClCompile Include="QPolarGeometry.cpp">
-      <Filter>源文件\Geometries</Filter>
-    </ClCompile>
     <ClCompile Include="QChartSeries.cpp">
       <Filter>源文件\Core</Filter>
     </ClCompile>
@@ -66,6 +60,12 @@
     </ClCompile>
     <ClCompile Include="QChartAxis.cpp">
       <Filter>源文件\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="QRegionSeries.cpp">
+      <Filter>源文件\Series</Filter>
+    </ClCompile>
+    <ClCompile Include="QXYSeries.cpp">
+      <Filter>源文件\Series</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -113,12 +113,6 @@
     </QtMoc>
     <QtMoc Include="QValueAxis.h">
       <Filter>头文件\Axes</Filter>
-    </QtMoc>
-    <QtMoc Include="QPolarGeometry.h">
-      <Filter>头文件\Geometries</Filter>
-    </QtMoc>
-    <QtMoc Include="QCartesianGeometry.h">
-      <Filter>头文件\Geometries</Filter>
     </QtMoc>
     <QtMoc Include="QChartGeometry.h">
       <Filter>头文件\Core</Filter>
@@ -214,6 +208,18 @@
     </ClInclude>
     <ClInclude Include="ProjectionToolKit.h">
       <Filter>头文件\Projection</Filter>
+    </ClInclude>
+    <ClInclude Include="QDataPoint.h">
+      <Filter>头文件\Series</Filter>
+    </ClInclude>
+    <ClInclude Include="QXYSeries.h">
+      <Filter>头文件\Series</Filter>
+    </ClInclude>
+    <ClInclude Include="QRegionSeries.h">
+      <Filter>头文件\Series</Filter>
+    </ClInclude>
+    <ClInclude Include="QDataRect.h">
+      <Filter>头文件\Series</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

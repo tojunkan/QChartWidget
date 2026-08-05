@@ -5,8 +5,8 @@
 // 否则（Polar/Functional 变形）→ drawPolygon。
 #pragma once
 #include "QChartSeries.h"
+#include "QDataRect.h"
 #include <QVector>
-#include <QRectF>
 #include <QPen>
 
 class QBarSeries : public QChartSeries
@@ -18,20 +18,22 @@ public:
     // ===== 数据：Data 空间矩形 =====
     int count() const override { return m_rects.size(); }
     void append(qreal left, qreal top, qreal right, qreal bottom);
-    void append(const QRectF& rect);
-    void replace(int i, const QRectF& rect);
+    void append(const QDataRect& rect);
+    void replace(int i, const QDataRect& rect);
     void remove(int i);
     void clear();
-    QRectF at(int i) const { return m_rects.at(i); }
-    const QVector<QRectF>& rectangles() const { return m_rects; }
+    QDataRect at(int i) const { return m_rects.at(i); }
+    const QVector<QDataRect>& rectangles() const { return m_rects; }
 
     // ===== 绘制 =====
     void draw(QPainter* painter,
-              std::function<QPointF(QVariant,QVariant)> toPixel) const override;
+              std::function<QPointF(QVariant,QVariant)> toPixel,
+              const DrawContext* ctx = nullptr) const override;
 
     // ===== 命中检测：像素在矩形内 =====
     int hitTest(const QPointF& pixel,
-                std::function<QPointF(QVariant,QVariant)> toPixel) const override;
+                std::function<QPointF(QVariant,QVariant)> toPixel,
+                const DrawContext* ctx = nullptr) const override;
 
     // ===== 样式 =====
     QColor fillColor() const { return m_fillColor; }
@@ -43,7 +45,7 @@ signals:
     void dataChanged();
 
 private:
-    QVector<QRectF> m_rects;   // Data 空间矩形
-    QColor m_fillColor;        // 空 = 用系列色
+    QVector<QDataRect> m_rects;   // Data 空间矩形
+    QColor m_fillColor;           // 空 = 用系列色
     QPen m_pen = Qt::NoPen;
 };

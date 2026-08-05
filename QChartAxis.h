@@ -25,6 +25,41 @@ struct DrawContext {
     QRectF dataBounds;                 // 当前可见 Numeric 范围: (dim0Min, dim1Min, dim0Span, dim1Span)
     QRectF viewRect;                   // 当前 View Cartesian 窗口
     const QChartProjection* projection = nullptr;
+
+    // ===== Series 画曲线边用 =====
+    /// Data→Numeric 函数（Geometry 注入闭包，Series 零依赖 Axis）
+    std::function<qreal(QVariant)> toNumeric0;  // dim0
+    std::function<qreal(QVariant)> toNumeric1;  // dim1
+
+    /// Numeric 单点 → Pixel（动画覆盖层用：点集已在 Numeric 空间，无需走 Axis）
+    QPointF numericToPixel(qreal num0, qreal num1) const {
+        if (!projection) return QPointF(qQNaN(), qQNaN());
+        QPointF c = projection->toCartesian(num0, num1);
+        if (!std::isfinite(c.x()) || !std::isfinite(c.y()))
+            return QPointF(qQNaN(), qQNaN());
+        return QPointF(plotArea.left()
+                + (c.x() - viewRect.left()) / viewRect.width() * plotArea.width(),
+            plotArea.bottom()
+                - (c.y() - viewRect.top()) / viewRect.height() * plotArea.height());
+    }
+
+    /// Numeric 空间曲线 → Pixel 路径（创建 createPath + cartesian→pixel in one shot）
+    QPainterPath toPixelCurve(std::function<QPointF(qreal)> dataCurve,
+                              int segments = 64) const {
+        QPainterPath pixelPath;
+        if (!projection || !dataCurve) return pixelPath;
+        QPainterPath viewPath = projection->createPath(dataCurve, segments);
+        for (int i = 0; i < viewPath.elementCount(); ++i) {
+            const auto& el = viewPath.elementAt(i);
+            qreal px = plotArea.left()
+                + (el.x - viewRect.left()) / viewRect.width() * plotArea.width();
+            qreal py = plotArea.bottom()
+                - (el.y - viewRect.top()) / viewRect.height() * plotArea.height();
+            if (i == 0 || el.isMoveTo()) pixelPath.moveTo(px, py);
+            else                         pixelPath.lineTo(px, py);
+        }
+        return pixelPath;
+    }
 };
 
 class QChartAxis : public QObject
@@ -68,7 +103,7 @@ public:
     /// 数据主脊模式：画在 offset 指定的 Numeric 位置（所有坐标系有效）
     /// offset 是另一维度的 Numeric 值（由调用者 Geometry 提供）
     void drawAtPosition(QPainter* painter, const DrawContext& ctx, qreal offset,
-                        bool drawAxisLine, bool drawLabels, bool drawTicks, QPen* pen = nullptr) const;
+                        bool drawAxisLine, bool drawLabels, bool drawTicks, QString& label, QPen* pen = nullptr) const;
 
     /// 边框轴占用空间估算；数据主脊返回 {0, 0}
     virtual QSizeF sizeHint(const QFont& font) const;

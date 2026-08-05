@@ -53,3 +53,18 @@ void QXYSeries::setPoints(const QVector<QDataPoint>& pts) {
     m_points = pts;
     emit dataChanged();
 }
+
+// ===== 动画覆盖层 =====
+// 每帧都可能被动画调用——发专用信号而非 dataChanged，
+// 避免把"动画临时状态"误当成"数据改动"（后者可能触发布局重算）
+void QXYSeries::setRenderOverride(const QVector<QPointF>& numericPts) {
+    m_overridePoints = numericPts;
+    m_hasOverride = true;
+    emit renderOverrideChanged();
+}
+
+void QXYSeries::clearRenderOverride() {
+    m_overridePoints.clear();
+    m_hasOverride = false;
+    emit renderOverrideChanged();
+}

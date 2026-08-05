@@ -13,13 +13,15 @@ class QLineSeries : public QXYSeries
 public:
     explicit QLineSeries(const QString& name = {}, QObject* parent = nullptr);
 
-    // ===== 绘制：逐点连折线，NaN 断开 =====
+    // ===== 绘制：逐点连折线。远点走 Numeric Lerp→createPath 曲线边 =====
     void draw(QPainter* painter,
-              std::function<QPointF(QVariant,QVariant)> toPixel) const override;
+              std::function<QPointF(QVariant,QVariant)> toPixel,
+              const DrawContext* ctx = nullptr) const override;
 
-    // ===== 命中检测：像素到最近线段的垂直距离 < 阈值 =====
+    // ===== 命中检测 =====
     int hitTest(const QPointF& pixel,
-                std::function<QPointF(QVariant,QVariant)> toPixel) const override;
+                std::function<QPointF(QVariant,QVariant)> toPixel,
+                const DrawContext* ctx = nullptr) const override;
 
     // ===== 线样式 =====
     qreal lineWidth() const { return m_lineWidth; }
