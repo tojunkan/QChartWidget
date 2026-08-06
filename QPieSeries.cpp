@@ -1,5 +1,5 @@
 #include "QPieSeries.h"
-#include "QChartGeometry.h"
+#include "QChartLayer.h"
 #include "QChartAxis.h"
 #include <QPainter>
 #include <QPainterPath>

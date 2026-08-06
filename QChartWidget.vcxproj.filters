@@ -52,7 +52,7 @@
     <ClCompile Include="QChartSeries.cpp">
       <Filter>源文件\Core</Filter>
     </ClCompile>
-    <ClCompile Include="QChartGeometry.cpp">
+    <ClCompile Include="QChartLayer.cpp">
       <Filter>源文件\Core</Filter>
     </ClCompile>
     <ClCompile Include="QChartWidget.cpp">
@@ -114,7 +114,7 @@
     <QtMoc Include="QValueAxis.h">
       <Filter>头文件\Axes</Filter>
     </QtMoc>
-    <QtMoc Include="QChartGeometry.h">
+    <QtMoc Include="QChartLayer.h">
       <Filter>头文件\Core</Filter>
     </QtMoc>
     <QtMoc Include="QChartAxis.h">

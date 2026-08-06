@@ -119,7 +119,7 @@
     <ClCompile Include="QRegionSeries.cpp" />
     <ClCompile Include="QValueAxis.cpp" />
     <QtMoc Include="QChartAxis.h" />
-    <QtMoc Include="QChartGeometry.h" />
+    <QtMoc Include="QChartLayer.h" />
     <QtMoc Include="QChartSeries.h" />
     <QtMoc Include="QLineSeries.h" />
     <QtMoc Include="QScatterSeries.h" />
@@ -134,7 +134,7 @@
     <QtMoc Include="QScatterWidget.h" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="QChartAxis.cpp" />
-    <ClCompile Include="QChartGeometry.cpp" />
+    <ClCompile Include="QChartLayer.cpp" />
     <ClCompile Include="QChartSeries.cpp" />
     <ClCompile Include="QLineSeries.cpp" />
     <ClCompile Include="QScatterSeries.cpp" />

@@ -1,5 +1,5 @@
 // QChartWidget.h —— 图表控件
-// 持有唯一 Projection、所有 Axis 和 Geometry，管理 viewRect + plotArea
+// 持有唯一 Projection、所有 Axis 和 Layer，管理 viewRect + plotArea
 // 坐标链路：View Cartesian → ViewNorm → Pixel（在此完成）
 #ifndef QCHARTWIDGET_H
 #define QCHARTWIDGET_H
@@ -9,7 +9,7 @@
 #include <QPoint>
 #include <QRectF>
 #include <memory>
-#include "QChartGeometry.h"
+#include "QChartLayer.h"
 #include "QChartProjection.h"
 
 class QChartSeries;
@@ -32,9 +32,9 @@ public:
     ~QChartWidget() override;
 
     // ===== 组件管理 =====
-    void addGeometry(QChartGeometry* g);
-    void removeGeometry(QChartGeometry* g);
-    QList<QChartGeometry*> geometries() const { return m_geometries; }
+    void addLayer(QChartLayer* g);
+    void removeLayer(QChartLayer* g);
+    QList<QChartLayer*> layers() const { return m_layers; }
 
     void addAxis(QChartAxis* a);
     void removeAxis(QChartAxis* a);
@@ -49,8 +49,9 @@ public:
     // ===== 视窗操作 =====
     /// 平移 viewRect（dx/dy 在 View Cartesian 空间）
     void panViewCartesian(qreal dx, qreal dy);
-    /// 以 (cx,cy) 为中心缩放 viewRect。factor<1=放大，>1=缩小
-    void zoomViewCartesian(qreal cx, qreal cy, qreal factor);
+    /// 以 (cx,cy) 为中心缩放 viewRect。factorX/factorY 独立控制两维
+    /// （禁交互轴所在维度传 1.0 = 不缩放）。factor<1=放大，>1=缩小
+    void zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY);
     /// 语法糖落地：修改 dataBounds dim0 → 重算 viewRect
     void setDataRangeDim0(qreal min, qreal max);
     /// 语法糖落地：修改 dataBounds dim1 → 重算 viewRect
@@ -106,7 +107,11 @@ protected:
     void fitViewRectToPlotArea(FitStrategy strategy);
 
     /// 悬停 tooltip 内容：命中点的 Data → Numeric 坐标
-    QString buildHoverTooltip(QChartGeometry* g, QChartSeries* s, int index) const;
+    QString buildHoverTooltip(QChartLayer* g, QChartSeries* s, int index) const;
+
+    /// 该维度（0=dim0 水平, 1=dim1 垂直）是否允许交互：
+    /// 任一绑定轴 isInteractive()==false → 禁止（如分类轴）
+    bool dimensionInteractive(int dim) const;
 
     // ===== 视窗状态 =====
     std::unique_ptr<QChartProjection> m_projection;
@@ -118,7 +123,7 @@ protected:
     ViewRectFitMode m_fitMode = ViewRectFitMode::Fit;
     qreal m_fixedAspectRatio = 1.0; // Fixed 模式下使用
 
-    QList<QChartGeometry*> m_geometries;
+    QList<QChartLayer*> m_layers;
     QList<QChartAxis*> m_axes;
     QRectF m_plotArea;
 

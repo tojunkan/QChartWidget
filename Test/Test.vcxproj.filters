@@ -26,7 +26,7 @@
     <QtMoc Include="..\QChartAxis.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="..\QChartGeometry.h">
+    <QtMoc Include="..\QChartLayer.h">
       <Filter>Header Files</Filter>
     </QtMoc>
     <QtMoc Include="..\QChartSeries.h">
@@ -46,7 +46,7 @@
     <ClCompile Include="..\QChartAxis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\QChartGeometry.cpp">
+    <ClCompile Include="..\QChartLayer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\QChartSeries.cpp">

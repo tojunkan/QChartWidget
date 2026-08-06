@@ -3,7 +3,7 @@
 #include <QLoggingCategory>
 Q_DECLARE_LOGGING_CATEGORY(logAxis)       // 轴的日志分类
 Q_DECLARE_LOGGING_CATEGORY(logWidget)     // 控件的日志分类
-Q_DECLARE_LOGGING_CATEGORY(logGeometry)   // 坐标系的日志分类
+Q_DECLARE_LOGGING_CATEGORY(logLayer)      // 图层的日志分类
 Q_DECLARE_LOGGING_CATEGORY(logSeries)     // 数据的日志分类
 Q_DECLARE_LOGGING_CATEGORY(logProjection) // 投影的日志分类
 Q_DECLARE_LOGGING_CATEGORY(logFactory)    // 工厂的日志分类

@@ -1,46 +1,46 @@
-// QChartGeometry.cpp —— 几何层基类实现
-#include "QChartGeometry.h"
+// QChartLayer.cpp —— 图层基类实现
+#include "QChartLayer.h"
 #include "QChartWidget.h"
 #include "QChartSeries.h"
 #include <QDebug>
 #include <QLoggingCategory>
 
-Q_LOGGING_CATEGORY(logGeometry, "chart.geometry")
+Q_LOGGING_CATEGORY(logLayer, "chart.layer")
 
-QChartGeometry::QChartGeometry(QObject* parent) : QObject(parent) {}
-QChartGeometry::~QChartGeometry() { qDeleteAll(m_series); }
+QChartLayer::QChartLayer(QObject* parent) : QObject(parent) {}
+QChartLayer::~QChartLayer() { qDeleteAll(m_series); }
 
 // ===== 轴绑定 =====
-void QChartGeometry::setAxisX(QChartAxis* a) {
+void QChartLayer::setAxisX(QChartAxis* a) {
     m_axisX = a;
-    qCDebug(logGeometry) << "setAxisX:" << (a ? "set" : "null");
+    qCDebug(logLayer) << "setAxisX:" << (a ? "set" : "null");
 }
 
-void QChartGeometry::setAxisY(QChartAxis* a) {
+void QChartLayer::setAxisY(QChartAxis* a) {
     m_axisY = a;
-    qCDebug(logGeometry) << "setAxisY:" << (a ? "set" : "null");
+    qCDebug(logLayer) << "setAxisY:" << (a ? "set" : "null");
 }
 
-bool QChartGeometry::validateAxes() const {
+bool QChartLayer::validateAxes() const {
     if (!m_axisX) {
-        qWarning() << "QChartGeometry::validateAxes: axisX is null";
+        qWarning() << "QChartLayer::validateAxes: axisX is null";
         return false;
     }
     if (!m_axisY) {
-        qWarning() << "QChartGeometry::validateAxes: axisY is null";
+        qWarning() << "QChartLayer::validateAxes: axisY is null";
         return false;
     }
     return true;
 }
 
 // ===== Grid 样式 =====
-void QChartGeometry::setGridVisible(bool v) {
+void QChartLayer::setGridVisible(bool v) {
     if (m_gridVisible == v) return;
     m_gridVisible = v;
     emit gridChanged();
 }
 
-void QChartGeometry::setGridColor(const QColor& c) {
+void QChartLayer::setGridColor(const QColor& c) {
     if (m_gridColor == c) return;
     m_gridColor = c;
     emit gridChanged();
@@ -48,7 +48,7 @@ void QChartGeometry::setGridColor(const QColor& c) {
 
 // ===== makeToPixel：组装完整坐标变换链 =====
 // 同时注入 toNumeric0/toNumeric1 到 DrawContext（Series 画曲线边用）
-std::function<QPointF(QVariant,QVariant)> QChartGeometry::makeToPixel(DrawContext& ctx) const {
+std::function<QPointF(QVariant,QVariant)> QChartLayer::makeToPixel(DrawContext& ctx) const {
     // 注入 Numeric 转换闭包——Series 不需要知道 Axis 类型
     const_cast<DrawContext&>(ctx).toNumeric0 = [this](QVariant d) -> qreal {
         return m_axisX ? m_axisX->toNumeric(d) : d.toDouble();
@@ -58,7 +58,7 @@ std::function<QPointF(QVariant,QVariant)> QChartGeometry::makeToPixel(DrawContex
     };
     // 链: Data(QVariant) → toNumeric → toCartesian → cartesianToPixel
     // 返回的函数将 Data 空间的 (x,y) 直接映射到 Pixel
-    // Series 不知道 Axis 类型——toNumeric 由 Geometry 在此注入
+    // Series 不知道 Axis 类型——toNumeric 由 Layer 在此注入
     return [this, &ctx](QVariant dataX, QVariant dataY) -> QPointF {
         // Data → Numeric（Axis 负责类型转换：qreal/QDateTime/QString → qreal）
         qreal num0 = m_axisX ? m_axisX->toNumeric(dataX) : dataX.toDouble();
@@ -88,14 +88,14 @@ std::function<QPointF(QVariant,QVariant)> QChartGeometry::makeToPixel(DrawContex
 }
 
 // ===== drawGrid：用轴 drawAtPosition 画网格线 =====
-// QChartGeometry.cpp —— drawGrid 修改后
+// QChartLayer.cpp —— drawGrid 修改后
 
-void QChartGeometry::drawGrid(QPainter* painter, const DrawContext& ctx) const {
+void QChartLayer::drawGrid(QPainter* painter, const DrawContext& ctx) const {
     if (!m_gridVisible) return;
     if (!m_axisX || !m_axisY || !ctx.projection)
         return;
 
-    qCDebug(logGeometry) << "drawGrid: dataBounds=" << ctx.dataBounds
+    qCDebug(logLayer) << "drawGrid: dataBounds=" << ctx.dataBounds
         << "viewRect=" << ctx.viewRect;
 
     painter->save();
@@ -153,29 +153,29 @@ void QChartGeometry::drawGrid(QPainter* painter, const DrawContext& ctx) const {
 }
 
 // ===== Series 管理 =====
-void QChartGeometry::addSeries(QChartSeries* s) {
+void QChartLayer::addSeries(QChartSeries* s) {
     if (!s) return;
     s->setParent(this);
     m_series.append(s);
     emit seriesAdded(s);
 }
 
-void QChartGeometry::removeSeries(QChartSeries* s) {
+void QChartLayer::removeSeries(QChartSeries* s) {
     if (m_series.removeAll(s)) {
         emit seriesRemoved(s);
         delete s;
     }
 }
 
-void QChartGeometry::clearSeries() {
+void QChartLayer::clearSeries() {
     qDeleteAll(m_series);
     m_series.clear();
 }
 
 // ===== drawAllSeries =====
-void QChartGeometry::drawAllSeries(QPainter* painter, const DrawContext& ctx) {
+void QChartLayer::drawAllSeries(QPainter* painter, const DrawContext& ctx) {
     if (!validateAxes()) {
-        qWarning() << "QChartGeometry::drawAllSeries: axes not valid, aborting";
+        qWarning() << "QChartLayer::drawAllSeries: axes not valid, aborting";
         return;
     }
 
@@ -191,7 +191,7 @@ void QChartGeometry::drawAllSeries(QPainter* painter, const DrawContext& ctx) {
 }
 
 // ===== 命中检测 =====
-QChartGeometry::HitResult QChartGeometry::hitTest(const QPointF& pixel,
+QChartLayer::HitResult QChartLayer::hitTest(const QPointF& pixel,
                                                    const DrawContext& ctx) const {
     auto toPixel = makeToPixel(const_cast<DrawContext&>(ctx));
     for (int i = m_series.size() - 1; i >= 0; --i) {

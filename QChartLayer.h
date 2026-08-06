@@ -1,8 +1,8 @@
-// QChartGeometry.h —— 几何层基类
+// QChartLayer.h —— 图层基类
 // 持有 axisX/axisY 和 Series 列表，组装坐标转换链 (Data→toNumeric→toCartesian→cartesianToPixel)
 // 负责 drawGrid 和 drawAllSeries
-#ifndef QCHARTGEOMETRY_H
-#define QCHARTGEOMETRY_H
+#ifndef QCHARTLAYER_H
+#define QCHARTLAYER_H
 #include <QObject>
 #include <QList>
 #include <QRectF>
@@ -14,16 +14,16 @@
 
 class QChartSeries;
 
-class QChartGeometry : public QObject
+class QChartLayer : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool gridVisible READ isGridVisible WRITE setGridVisible NOTIFY gridChanged)
     Q_PROPERTY(QColor gridColor READ gridColor WRITE setGridColor NOTIFY gridChanged)
 public:
-    explicit QChartGeometry(QObject* parent = nullptr);
-    ~QChartGeometry() override;
+    explicit QChartLayer(QObject* parent = nullptr);
+    ~QChartLayer() override;
 
-    /// 坐标系类型——由 Widget 在 setProjection / addGeometry 时同步更新
+    /// 坐标系类型——由 Widget 在 setProjection / addLayer 时同步更新
     /// 默认 Cartesian。子类初始构造时可预设，Widget 随后覆盖
     CoordinateSystem coordinateSystem() const { return m_coordSys; }
     void setCoordinateSystem(CoordinateSystem cs) { m_coordSys = cs; }
@@ -77,4 +77,4 @@ protected:
     QColor m_gridColor = QColor(220, 220, 220);
 };
 
-#endif // QCHARTGEOMETRY_H
+#endif // QCHARTLAYER_H

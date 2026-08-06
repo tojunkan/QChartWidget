@@ -14,79 +14,94 @@ QPolygonSeries::QPolygonSeries(const QString& name, QObject* parent)
 void QPolygonSeries::draw(QPainter* painter,
                           std::function<QPointF(QVariant,QVariant)> toPixel,
                           const DrawContext* ctx) const {
-    if (!painter || !toPixel || !m_visible) return;
-    if (m_points.size() < 3) return; // 至少 3 个点才能构成多边形
+    if (!painter || !m_visible) return;
+    // override 点已是 Numeric 空间，不需 toPixel；真实数据则必须要有
+    if (!m_hasOverride && !toPixel) return;
+    if (!m_hasOverride && m_points.size() < 3) return; // 至少 3 个点才能构成多边形
+
+    // ── 点源统一为「Numeric 点 + 像素点」：曲线边逻辑只认 Numeric ──
+    struct PtSrc { QPointF pixel; QPointF numeric; };
+    QVector<PtSrc> pts;
+    if (m_hasOverride) {
+        pts.reserve(m_overridePoints.size());
+        for (const auto& n : m_overridePoints) {
+            QPointF px = ctx ? ctx->numericToPixel(n.x(), n.y())
+                             : QPointF(qQNaN(), qQNaN());
+            pts.append({px, n});
+        }
+    } else {
+        pts.reserve(m_points.size());
+        for (const auto& pt : m_points) {
+            QPointF px = toPixel(pt.x(), pt.y());
+            // 曲线边需要 Numeric；无 ctx/toNumeric 时留 NaN → 回退像素直线
+            QPointF n(ctx && ctx->toNumeric0 ? ctx->toNumeric0(pt.x()) : qQNaN(),
+                      ctx && ctx->toNumeric1 ? ctx->toNumeric1(pt.y()) : qQNaN());
+            pts.append({px, n});
+        }
+    }
+    if (pts.size() < 3) return;
 
     const qreal threshold = 20.0; // 像素距离阈值
     QPainterPath polyPath;
 
     // 首先将第一个点作为起点
-    QPointF firstPx = toPixel(m_points[0].x(), m_points[0].y());
+    QPointF firstPx = pts[0].pixel;
     if (!std::isfinite(firstPx.x()) || !std::isfinite(firstPx.y())) return;
     polyPath.moveTo(firstPx);
 
     QPointF prevPx = firstPx;
-    QDataPoint prevPt = m_points[0];
+    QPointF prevNumeric = pts[0].numeric;
     int curvesDrawn = 0, linesDrawn = 0;
 
     // 逐边 (i → i+1)
-    for (int i = 0; i < m_points.size(); ++i) {
-        int next = (i + 1) % m_points.size(); // 隐式闭合：末点连回第 0 点
-        const auto& pt = m_points[next];
-        QPointF pixel = toPixel(pt.x(), pt.y());
+    for (int i = 0; i < pts.size(); ++i) {
+        int next = (i + 1) % pts.size(); // 隐式闭合：末点连回第 0 点
+        const auto& pt = pts[next];
+        const QPointF& pixel = pt.pixel;
 
         if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
             // NaN 顶点 → 闭合当前子路径并重开
             polyPath.closeSubpath();
-            if (next < m_points.size() - 1) {
-                QPointF restart = toPixel(m_points[next + 1].x(), m_points[next + 1].y());
+            if (next < pts.size() - 1) {
+                const QPointF& restart = pts[next + 1].pixel;
                 if (std::isfinite(restart.x()) && std::isfinite(restart.y()))
                     polyPath.moveTo(restart);
             }
             prevPx = pixel;
-            prevPt = pt;
+            prevNumeric = pt.numeric;
             continue;
         }
 
         qreal dist = std::hypot(pixel.x() - prevPx.x(), pixel.y() - prevPx.y());
 
-        // 近点或无可用 Numeric 转换 → 像素直线
-        if (dist < threshold || !ctx || !ctx->toNumeric0 || !ctx->toNumeric1
-            || !ctx->projection) {
+        // 近点，或 Numeric 值不可用（无投影/转换失败）→ 像素直线
+        if (dist < threshold || !ctx || !ctx->projection
+            || !std::isfinite(pt.numeric.x()) || !std::isfinite(pt.numeric.y())
+            || !std::isfinite(prevNumeric.x()) || !std::isfinite(prevNumeric.y())) {
             polyPath.lineTo(pixel);
             linesDrawn++;
         } else {
             // ── 远点：Numeric 空间 Lerp → createPath → 曲线 ──
-            qreal n0_a = ctx->toNumeric0(prevPt.x());
-            qreal n1_a = ctx->toNumeric1(prevPt.y());
-            qreal n0_b = ctx->toNumeric0(pt.x());
-            qreal n1_b = ctx->toNumeric1(pt.y());
-
-            if (!std::isfinite(n0_a) || !std::isfinite(n1_a)
-                || !std::isfinite(n0_b) || !std::isfinite(n1_b)) {
-                polyPath.lineTo(pixel);
-                linesDrawn++;
-            } else {
-                qreal dn0 = n0_b - n0_a;
-                qreal dn1 = n1_b - n1_a;
-                auto dataCurve = [=](qreal t) -> QPointF {
-                    return QPointF(n0_a + t * dn0, n1_a + t * dn1);
-                };
-                int segments = qMax(16, static_cast<int>(dist / 3.0));
-                QPainterPath curve = ctx->toPixelCurve(dataCurve, segments);
-                // 追加曲线元素到 polyPath
-                for (int j = 0; j < curve.elementCount(); ++j) {
-                    const auto& el = curve.elementAt(j);
-                    if (j == 0 || el.isMoveTo())
-                        polyPath.moveTo(QPointF(el.x, el.y));
-                    else
-                        polyPath.lineTo(QPointF(el.x, el.y));
-                }
-                curvesDrawn++;
+            qreal dn0 = pt.numeric.x() - prevNumeric.x();
+            qreal dn1 = pt.numeric.y() - prevNumeric.y();
+            auto dataCurve = [prevNumeric, dn0, dn1](qreal t) -> QPointF {
+                return QPointF(prevNumeric.x() + t * dn0,
+                               prevNumeric.y() + t * dn1);
+            };
+            int segments = qMax(16, static_cast<int>(dist / 3.0));
+            QPainterPath curve = ctx->toPixelCurve(dataCurve, segments);
+            // 追加曲线元素到 polyPath
+            for (int j = 0; j < curve.elementCount(); ++j) {
+                const auto& el = curve.elementAt(j);
+                if (j == 0 || el.isMoveTo())
+                    polyPath.moveTo(QPointF(el.x, el.y));
+                else
+                    polyPath.lineTo(QPointF(el.x, el.y));
             }
+            curvesDrawn++;
         }
         prevPx = pixel;
-        prevPt = pt;
+        prevNumeric = pt.numeric;
     }
     polyPath.closeSubpath();
 
@@ -106,7 +121,7 @@ void QPolygonSeries::draw(QPainter* painter,
     painter->drawPath(polyPath);
 
     qCDebug(logSeriesVerbose) << "QPolygonSeries::draw:" << curvesDrawn << "curves,"
-                              << linesDrawn << "lines," << m_points.size() << "vertices";
+                              << linesDrawn << "lines," << pts.size() << "vertices";
     painter->restore();
 }
 

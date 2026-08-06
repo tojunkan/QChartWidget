@@ -35,6 +35,13 @@ public:
                 std::function<QPointF(QVariant,QVariant)> toPixel,
                 const DrawContext* ctx = nullptr) const override;
 
+    // ===== 动画覆盖层 —— 优先于真实数据被 draw() 使用 =====
+    // 柱集动画（排序演示等）期间，Numeric 空间矩形临时替换真实 Data 矩形
+    void setRenderOverride(const QVector<QRectF>& numericRects);
+    void clearRenderOverride();
+    bool hasRenderOverride() const { return m_hasOverride; }
+    const QVector<QRectF>& renderOverride() const { return m_overrideRects; }
+
     // ===== 样式 =====
     QColor fillColor() const { return m_fillColor; }
     void setFillColor(const QColor& c) { m_fillColor = c; }
@@ -43,9 +50,12 @@ public:
 
 signals:
     void dataChanged();
+    void renderOverrideChanged();   // 动画覆盖层变化（每帧可能多次）
 
 private:
-    QVector<QDataRect> m_rects;   // Data 空间矩形
+    QVector<QDataRect> m_rects;     // Data 空间矩形
+    QVector<QRectF> m_overrideRects; // 动画临时矩形（Numeric 空间），优先于 m_rects
+    bool m_hasOverride = false;
     QColor m_fillColor;           // 空 = 用系列色
     QPen m_pen = Qt::NoPen;
 };

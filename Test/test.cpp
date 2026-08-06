@@ -23,7 +23,9 @@
 #include "../QDataPoint.h"
 #include "../QChartAnimation.h"
 #include "../QNumericSeriesAnimation.h"
+#include "../QBarAnimation.h"
 #include <QParallelAnimationGroup>
+#include <QSequentialAnimationGroup>
 
 // 将 Qt 日志同时写入文件和 stderr（Windows 下 qDebug 默认不输出到控制台）
 static QFile g_logFile;
@@ -49,7 +51,7 @@ int main(int argc, char* argv[]) {
     qInstallMessageHandler(logToFile);
     // 启用所有 chart 分类的 debug 日志
     //QLoggingCategory::setFilterRules("chart.axis.debug=true");
-    QLoggingCategory::setFilterRules("chart.*.verbose=true");
+    QLoggingCategory::setFilterRules("chart.*.verbose=false");
 
     QApplication app(argc, argv);
     qDebug() << "========== 测试开始 ==========";
@@ -72,10 +74,10 @@ int main(int argc, char* argv[]) {
     polarW->addAxis(radialAxis);
     radialAxis->setRange(0, 5);
 
-    auto* polarGeo = new QChartGeometry(polarW);
+    auto* polarGeo = new QChartLayer(polarW);
     polarGeo->setAxisX(angleAxis);
     polarGeo->setAxisY(radialAxis);
-    polarW->addGeometry(polarGeo);
+    polarW->addLayer(polarGeo);
 
     // 五边形顶点：θ=0°,72°,144°,216°,288°， r=4
     auto* penta = new QPolygonSeries("pentagon", polarGeo);
@@ -117,10 +119,10 @@ int main(int argc, char* argv[]) {
     barW->addAxis(valAxis);
     valAxis->setRange(0, 100);
 
-    auto* barGeo = new QChartGeometry(barW);
+    auto* barGeo = new QChartLayer(barW);
     barGeo->setAxisX(xAxis);
     barGeo->setAxisY(valAxis);
-    barW->addGeometry(barGeo);
+    barW->addLayer(barGeo);
 
     auto* bars = new QBarSeries("bars", barGeo);
     bars->setColor(QColor("#4CAF50"));
@@ -141,7 +143,7 @@ int main(int argc, char* argv[]) {
     auto* pendW = new QChartWidget();
     pendW->setWindowTitle("单摆动画 - Generator 模式");
     pendW->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
-    pendW->setViewRectFitMode(ViewRectFitMode::Stretch);
+    pendW->setViewRectFitMode(ViewRectFitMode::Crop);
 
     auto* pendX = new QValueAxis(pendW, Qt::AlignBottom);
     pendX->setColor(Qt::white);
@@ -153,13 +155,13 @@ int main(int argc, char* argv[]) {
     pendW->addAxis(pendY);
     pendY->setRange(-5, 1);
 
-    auto* pendGeo = new QChartGeometry(pendW);
+    auto* pendGeo = new QChartLayer(pendW);
     pendGeo->setAxisX(pendX);
     pendGeo->setAxisY(pendY);
-    pendW->addGeometry(pendGeo);
+    pendW->addLayer(pendGeo);
 
     // 物理参数：L=4, g=9.8, θ₀=60°，动画跑两个周期
-    const qreal L = 4.0, g = 9.8, theta0 = M_PI / 3.0;
+    const qreal L = 4.0, g = 9.8, theta0 = M_PI / 10.0;
     const qreal T = 2 * M_PI * std::sqrt(L / g);   // 周期 ≈4.01s
     const int durationMs = qRound(T * 2 * 1000);   // ≈8024ms
 
@@ -214,8 +216,104 @@ int main(int argc, char* argv[]) {
 
     group->start();
 
-    pendW->resize(600, 500);
+    pendW->resize(600, 600);
     pendW->show();
+
+    // ===== 窗口 4: 排序算法演示（QBarAnimation 模式 A lerp）=====
+    qDebug() << "\n========== 窗口4: 冒泡排序动画 ==========";
+
+    auto* sortW = new QChartWidget();
+    sortW->setWindowTitle("冒泡排序 - QBarAnimation 交换动画");
+    sortW->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
+    sortW->setViewRectFitMode(ViewRectFitMode::Stretch);
+
+    auto* sortX = new QBarCategoryAxis(sortW, Qt::AlignBottom);
+    sortX->setColor(Qt::white);
+    sortW->addAxis(sortX);
+
+    auto* sortY = new QValueAxis(sortW, Qt::AlignLeft);
+    sortY->setColor(Qt::white);
+    sortW->addAxis(sortY);
+    sortY->setRange(0, 10);
+
+    auto* sortLayer = new QChartLayer(sortW);
+    sortLayer->setAxisX(sortX);
+    sortLayer->setAxisY(sortY);
+    sortW->addLayer(sortLayer);
+
+    auto* sortBars = new QBarSeries("bars", sortLayer);
+    sortBars->setColor(QColor("#4CAF50"));
+    sortBars->setFillColor(QColor(76, 175, 80, 200));
+
+    // 初始乱序高度（Numeric 空间 x∈[-0.5, n-0.5]，y∈[0, 10]）
+    QVector<qreal> heights = { 3, 7, 1, 9, 4, 8, 2, 6, 5 };
+    const int N = heights.size();
+    sortX->setCategories(QStringList{"a","b","c","d","e","f","g","h","i"});
+    sortX->setNumericMapping(-0.5, N - 0.5);
+
+    for (int i = 0; i < N; ++i)
+        sortBars->append(i - 0.4, 0, i + 0.4, heights[i]);
+    sortLayer->addSeries(sortBars);
+
+    // 冒泡排序：每步一个交换动画（QBarAnimation 模式 B Generator）
+    // 注意：动画期间 Series 真实数据不修改——算法侧维护 working 高度数组，
+    // 每步动画从"交换前快照"lerp 到"交换后目标"；动画结束后一次性落地真实数据
+    auto* sortSeq = new QSequentialAnimationGroup(sortW);
+
+    QVector<qreal> working = heights;   // 算法侧跟踪的当前高度（真实数据不动）
+    bool swapped = true;
+    int pass = 0;
+    while (swapped && pass < N - 1) {
+        swapped = false;
+        for (int j = 0; j < N - 1 - pass; ++j) {
+            if (working[j] > working[j + 1]) {
+                // 交换前先快照 src（逐索引 lerp：只有 j/j+1 两柱会动）
+                QVector<QRectF> src, dst;
+                for (int k = 0; k < N; ++k)
+                    src << QRectF(k - 0.4, 0, 0.8, working[k]);
+
+                std::swap(working[j], working[j + 1]);
+                swapped = true;
+
+                for (int k = 0; k < N; ++k)
+                    dst << QRectF(k - 0.4, 0, 0.8, working[k]);
+
+                // 每个交换 = 一个自含 Generator 的动画（src→dst 逐矩形 lerp）
+                auto* anim = new QBarAnimation(sortSeq);
+                anim->setDuration(280);
+                anim->setEasingCurve(QEasingCurve::InOutQuad);
+                anim->setTargetSeries(sortBars);
+                anim->setGenerator([src, dst](qreal alpha, QVector<QRectF>& out) {
+                    int n = qMin(src.size(), dst.size());
+                    out.resize(n);
+                    for (int k = 0; k < n; ++k) {
+                        const QRectF& a = src[k];
+                        const QRectF& b = dst[k];
+                        out[k] = QRectF(a.left()   + (b.left()   - a.left())   * alpha,
+                                        a.top()    + (b.top()    - a.top())    * alpha,
+                                        a.width()  + (b.width()  - a.width())  * alpha,
+                                        a.height() + (b.height() - a.height()) * alpha);
+                    }
+                });
+                sortSeq->addAnimation(anim);
+            }
+        }
+        ++pass;
+    }
+
+    // 动画结束：数据落地 + 清除覆盖层
+    QObject::connect(sortSeq, &QSequentialAnimationGroup::finished, sortW, [sortW, sortBars, working]() {
+        // 真实数据更新为排序结果（之前动画期间从未动过）
+        for (int k = 0; k < working.size(); ++k)
+            sortBars->replace(k, QDataRect(k - 0.4, 0, k + 0.4, working[k]));
+        sortBars->clearRenderOverride();
+        qDebug() << "排序完成，数据已落地，覆盖层已清除";
+    });
+
+    sortSeq->start();
+
+    sortW->resize(600, 400);
+    sortW->show();
 
     return app.exec();
 }

@@ -105,7 +105,7 @@
     <QtMoc Include="..\QChartAxis.h" />
   </ItemGroup>
   <ItemGroup>
-    <QtMoc Include="..\QChartGeometry.h" />
+    <QtMoc Include="..\QChartLayer.h" />
   </ItemGroup>
   <ItemGroup>
     <QtMoc Include="..\QChartSeries.h" />
@@ -144,12 +144,16 @@
     <QtMoc Include="..\QNumericSeriesAnimation.h" />
   </ItemGroup>
   <ItemGroup>
+    <QtMoc Include="..\QBarAnimation.h" />
+  </ItemGroup>
+  <ItemGroup>
     <ClCompile Include="..\QChartAxis.cpp" />
-    <ClCompile Include="..\QChartGeometry.cpp" />
+    <ClCompile Include="..\QChartLayer.cpp" />
     <ClCompile Include="..\QChartSeries.cpp" />
     <ClCompile Include="..\QChartWidget.cpp" />
     <ClCompile Include="..\QChartAnimation.cpp" />
     <ClCompile Include="..\QNumericSeriesAnimation.cpp" />
+    <ClCompile Include="..\QBarAnimation.cpp" />
     <ClCompile Include="..\QValueAxis.cpp" />
     <ClCompile Include="..\QXYSeries.cpp" />
     <ClCompile Include="..\QScatterSeries.cpp" />

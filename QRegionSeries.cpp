@@ -1,5 +1,6 @@
 // QRegionSeries.cpp —— 填充区域系列实现
 #include "QRegionSeries.h"
+#include "QChartAxis.h"  // DrawContext::numericToPixel
 #include "QChartDebug.h"
 #include <QPainterPath>
 #include <QDebug>
@@ -13,14 +14,24 @@ void QRegionSeries::draw(QPainter* painter,
                          std::function<QPointF(QVariant,QVariant)> toPixel,
                          const DrawContext* ctx) const {
     Q_UNUSED(ctx); // 留待 createPath 修复
-    if (!painter || !toPixel || !m_visible) return;
-    if (m_points.size() < 3) return;
+    if (!painter || !m_visible) return;
+    // override 点已是 Numeric 空间，不需 toPixel；真实数据则必须要有
+    if (!m_hasOverride && !toPixel) return;
+    if (!m_hasOverride && m_points.size() < 3) return;
 
-    // 全部转换到像素
+    // 全部转换到像素（override：Numeric 点直接投影；真实数据：Data→toPixel）
     QPolygonF polygon;
-    polygon.reserve(m_points.size());
-    for (const auto& pt : m_points) {
-        QPointF p = toPixel(pt.x(), pt.y());
+    int n = m_hasOverride ? m_overridePoints.size() : m_points.size();
+    polygon.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        QPointF p;
+        if (m_hasOverride) {
+            const QPointF& np = m_overridePoints[i];
+            p = ctx ? ctx->numericToPixel(np.x(), np.y()) : QPointF(qQNaN(), qQNaN());
+        } else {
+            const QDataPoint& dp = m_points[i];
+            p = toPixel(dp.x(), dp.y());
+        }
         if (!std::isfinite(p.x()) || !std::isfinite(p.y()))
             continue;  // 跳过 NaN 顶点
         polygon << p;

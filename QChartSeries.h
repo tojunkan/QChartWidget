@@ -1,6 +1,6 @@
 // QChartSeries.h —— 系列基类
 // 五空间链中：Series 只存 Data 空间的数据（QVariant），不参与坐标变换。
-// 所有坐标变换由 Geometry 注入的 toPixel 函数完成。
+// 所有坐标变换由 Layer 注入的 toPixel 函数完成。
 #ifndef QCHARTSERIES_H
 #define QCHARTSERIES_H
 #include <QObject>

@@ -2,7 +2,7 @@
 #define QBARWIDGET_H
 #include "QChartWidget.h"
 #include "QChartAxis.h"
-#include "QChartGeometry.h"
+#include "QChartLayer.h"
 #include "QBarSeries.h"
 
 class QBarWidget : public QChartWidget {
@@ -18,7 +18,7 @@ public:
     QChartAxis* axisX() { return m_geom->axisX(); }
     QChartAxis* axisY() { return m_geom->axisY(); }
 protected:
-    QCartesianGeometry* m_geom;
+    QCartesianLayer* m_geom;
     QBarSeries* m_series;
 };
 #endif

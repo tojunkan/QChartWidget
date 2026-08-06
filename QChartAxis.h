@@ -27,7 +27,7 @@ struct DrawContext {
     const QChartProjection* projection = nullptr;
 
     // ===== Series 画曲线边用 =====
-    /// Data→Numeric 函数（Geometry 注入闭包，Series 零依赖 Axis）
+    /// Data→Numeric 函数（Layer 注入闭包，Series 零依赖 Axis）
     std::function<qreal(QVariant)> toNumeric0;  // dim0
     std::function<qreal(QVariant)> toNumeric1;  // dim1
 
@@ -101,7 +101,7 @@ public:
                     bool drawAxisLine, bool drawLabels, bool drawTicks) const;
 
     /// 数据主脊模式：画在 offset 指定的 Numeric 位置（所有坐标系有效）
-    /// offset 是另一维度的 Numeric 值（由调用者 Geometry 提供）
+    /// offset 是另一维度的 Numeric 值（由调用者 Layer 提供）
     void drawAtPosition(QPainter* painter, const DrawContext& ctx, qreal offset,
                         bool drawAxisLine, bool drawLabels, bool drawTicks, QString& label, QPen* pen = nullptr) const;
 
@@ -140,6 +140,11 @@ public:
         return (m_alignment == Qt::AlignBottom || m_alignment == Qt::AlignTop
                 || m_alignment == Qt::AlignHCenter);
     }
+
+    /// 是否允许用户交互（pan/zoom）
+    /// 离散 domain 的轴（如 QBarCategoryAxis 的类别索引）交互无意义——拖拽/缩放
+    /// 会撕裂标签与数据的关系，覆盖返回 false 后 Widget 会在该维度禁止平移缩放
+    virtual bool isInteractive() const { return true; }
 
 signals:
     /// setRange 语法糖触发，Widget 连接后映射到 setDataRangeDim0/Dim1

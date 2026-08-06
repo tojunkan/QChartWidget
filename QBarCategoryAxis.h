@@ -22,6 +22,9 @@ public:
     void removeCategory(int index);
     void clearCategories();
 
+    // 离散类别域没有平移/缩放意义（会撕裂标签与 bar 的对应关系）
+    bool isInteractive() const override { return false; }
+
     // ===== 数值化：Data(QString/qreal) ↔ Numeric(线性映射) =====
     qreal toNumeric(QVariant data) const override {
         // qreal 直通——Bar 等用小数索引定位

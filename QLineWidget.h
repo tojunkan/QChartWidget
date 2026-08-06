@@ -1,7 +1,7 @@
 #ifndef QLINEWIDGET_H
 #define QLINEWIDGET_H
 #include "QChartWidget.h"
-#include "QChartGeometry.h"
+#include "QChartLayer.h"
 #include "QChartAxis.h"
 #include "QLineSeries.h"
 
@@ -15,7 +15,7 @@ public:
     QChartAxis* axisX() { return m_geom->axisX(); }
     QChartAxis* axisY() { return m_geom->axisY(); }
 private:
-    QCartesianGeometry* m_geom;
+    QCartesianLayer* m_geom;
     QValueAxis *m_axX, *m_axY;
     QLineSeries* m_series;
 };

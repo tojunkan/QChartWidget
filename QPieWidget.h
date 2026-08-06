@@ -1,7 +1,7 @@
 #ifndef QPIEWIDGET_H
 #define QPIEWIDGET_H
 #include "QChartWidget.h"
-#include "QChartGeometry.h"
+#include "QChartLayer.h"
 #include "QPieSeries.h"
 
 class QPieWidget : public QChartWidget {
@@ -14,7 +14,7 @@ public:
     void setStartAngle(qreal deg);
     void setSliceExploded(int i, bool on);
 private:
-    QPolarGeometry* m_geom;
+    QPolarLayer* m_geom;
     QPieSeries* m_series;
 };
 #endif

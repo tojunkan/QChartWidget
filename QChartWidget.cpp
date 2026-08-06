@@ -1,8 +1,9 @@
 // QChartWidget.cpp —— 图表控件实现
-// 持有唯一 Projection、管理 viewRect、协调 Axis/Geometry 绘制
+// 持有唯一 Projection、管理 viewRect、协调 Axis/Layer 绘制
 #include "QChartWidget.h"
 #include "QChartSeries.h"
 #include "QXYSeries.h"
+#include "QBarSeries.h"
 #include "QDataPoint.h"
 #include "QChartProjectionFactory.h"
 #include "QChartDebug.h"
@@ -26,15 +27,15 @@ QChartWidget::QChartWidget(QWidget* parent) : QWidget(parent) {
 }
 
 QChartWidget::~QChartWidget() {
-    qDeleteAll(m_geometries);
+    qDeleteAll(m_layers);
     qDeleteAll(m_axes);
 }
 
 // ===== 组件管理 =====
-void QChartWidget::addGeometry(QChartGeometry* g) {
+void QChartWidget::addLayer(QChartLayer* g) {
     if (!g) return;
 
-    // 如果还没有 Projection，用 Geometry 的坐标系类型创建（默认 Cartesian）
+    // 如果还没有 Projection，用 Layer 的坐标系类型创建（默认 Cartesian）
     if (!m_projection) {
         m_projection = QChartProjectionFactory::create(g->coordinateSystem());
         if (!m_viewInitialized && m_projection) {
@@ -47,26 +48,30 @@ void QChartWidget::addGeometry(QChartGeometry* g) {
         }
     }
 
-    // Widget 的 projection 是权威来源 → 同步给 Geometry
+    // Widget 的 projection 是权威来源 → 同步给 Layer
     if (m_projection)
         g->setCoordinateSystem(m_projection->type());
 
     g->setParent(this);
-    m_geometries.append(g);
+    m_layers.append(g);
 
     // 动画覆盖层每帧变化 → 刷新前景缓存（不动背景/布局）
-    connect(g, &QChartGeometry::seriesAdded, this, [this](QChartSeries* s) {
-        if (auto* xy = qobject_cast<QXYSeries*>(s))
+    connect(g, &QChartLayer::seriesAdded, this, [this](QChartSeries* s) {
+        if (auto* xy = qobject_cast<QXYSeries*>(s)) {
             connect(xy, &QXYSeries::renderOverrideChanged,
                     this, [this]() { invalidateForeground(); });
+        } else if (auto* bar = qobject_cast<QBarSeries*>(s)) {
+            connect(bar, &QBarSeries::renderOverrideChanged,
+                    this, [this]() { invalidateForeground(); });
+        }
     });
 
     invalidateForeground();
-    qCDebug(logWidget) << "Geometry added, total:" << m_geometries.size();
+    qCDebug(logWidget) << "Layer added, total:" << m_layers.size();
 }
 
-void QChartWidget::removeGeometry(QChartGeometry* g) {
-    m_geometries.removeAll(g);
+void QChartWidget::removeLayer(QChartLayer* g) {
+    m_layers.removeAll(g);
     delete g;
     invalidateForeground();
 }
@@ -76,7 +81,7 @@ void QChartWidget::addAxis(QChartAxis* a) {
 
     // Axis 没有 coordinateSystem()——如果 Projection 尚未创建，报错
     if (!m_projection) {
-        qWarning() << "QChartWidget::addAxis: no projection set — call addGeometry() or setProjection() first";
+        qWarning() << "QChartWidget::addAxis: no projection set — call addLayer() or setProjection() first";
         return;
     }
 
@@ -262,22 +267,34 @@ void QChartWidget::panViewCartesian(qreal dx, qreal dy) {
     emit viewChanged();
 }
 
-void QChartWidget::zoomViewCartesian(qreal cx, qreal cy, qreal factor) {
-    if (factor <= 0.0 || !m_projection) return;
-    // 以 (cx, cy) 为中心缩放 viewRect
-    qreal newW = m_viewRect.width()  * factor;
-    qreal newH = m_viewRect.height() * factor;
-    qreal newLeft = cx - (cx - m_viewRect.left()) * factor;
-    qreal newTop  = cy - (cy - m_viewRect.top())  * factor;
+void QChartWidget::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY) {
+    if (factorX <= 0.0 || factorY <= 0.0 || !m_projection) return;
+    // 以 (cx, cy) 为中心缩放 viewRect，两维独立（禁交互维度传 1.0）
+    qreal newW = m_viewRect.width()  * factorX;
+    qreal newH = m_viewRect.height() * factorY;
+    qreal newLeft = cx - (cx - m_viewRect.left()) * factorX;
+    qreal newTop  = cy - (cy - m_viewRect.top())  * factorY;
     m_viewRect = QRectF(newLeft, newTop, newW, newH);
     m_dataBounds = m_projection->computeDataBounds(m_viewRect);
     fitViewRectToPlotArea(FitStrategy::KeepCenter);
-    qCDebug(logWidget) << "zoomViewCartesian: factor=" << factor
+    qCDebug(logWidget) << "zoomViewCartesian: factorX=" << factorX
+                       << "factorY=" << factorY
                        << "→ viewRect=" << m_viewRect
                        << "dataBounds=" << m_dataBounds;
     invalidateBackground();
     invalidateForeground();
     emit viewChanged();
+}
+
+// ===== 维度交互检查 =====
+// 分类轴等离散域轴不可交互——任一绑定轴禁用则该维度整体禁 pan/zoom
+bool QChartWidget::dimensionInteractive(int dim) const {
+    for (auto* g : m_layers) {
+        QChartAxis* a = (dim == 0) ? g->axisX() : g->axisY();
+        if (a && !a->isInteractive())
+            return false;
+    }
+    return true;
 }
 
 void QChartWidget::setDataRangeDim0(qreal min, qreal max) {
@@ -318,10 +335,10 @@ void QChartWidget::setProjection(std::unique_ptr<QChartProjection> proj) {
                            << m_viewRect;
         fitViewRectToPlotArea(FitStrategy::KeepCenter);
     }
-    // 同步 projection 类型给所有 Geometry
+    // 同步 projection 类型给所有 Layer
     if (m_projection) {
         auto type = m_projection->type();
-        for (auto* g : m_geometries)
+        for (auto* g : m_layers)
             g->setCoordinateSystem(type);
     }
     invalidateBackground();
@@ -469,8 +486,8 @@ void QChartWidget::drawBackground(QPainter* p) {
     }
 
     // ── 绘制网格（取最后一个几何体）──
-    if (!m_geometries.isEmpty()) {
-        auto* geo = m_geometries.last();
+    if (!m_layers.isEmpty()) {
+        auto* geo = m_layers.last();
         p->save();
         p->setClipRect(m_plotArea);
         geo->drawGrid(p, ctx);
@@ -494,7 +511,7 @@ void QChartWidget::drawForeground(QPainter* p) {
     ctx.viewRect   = m_viewRect;
     ctx.projection = m_projection.get();
 
-    for (auto* g : m_geometries) {
+    for (auto* g : m_layers) {
         p->save();
         p->setClipRect(m_plotArea);
         g->drawAllSeries(p, ctx);
@@ -521,6 +538,13 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
         QPointF currCart = pixelToCartesian(currentPos);
         qreal dx = startCart.x() - currCart.x();
         qreal dy = startCart.y() - currCart.y();
+        // 禁交互维度（分类轴）不平移——离散域拖动会撕裂标签与数据关系
+        if (!dimensionInteractive(0)) dx = 0.0;
+        if (!dimensionInteractive(1)) dy = 0.0;
+        if (dx == 0.0 && dy == 0.0) {
+            m_panStart = currentPos; // 仍要更新起点，否则恢复交互后跳变
+            return;
+        }
         panViewCartesian(dx, dy);
         m_panStart = currentPos;
         return;
@@ -537,7 +561,7 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
     int hoverIndex = -1;
     QPointF hoverPos;
 
-    for (auto* g : m_geometries) {
+    for (auto* g : m_layers) {
         auto result = g->hitTest(e->pos(), ctx);
         if (result.series) {
             hoverSeries = result.series;
@@ -557,9 +581,9 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
             emit seriesHovered(hoverSeries, hoverIndex, true);
 
             // 显示 tooltip：Numeric 坐标
-            // 通过 Geometry 的轴把命中点的 Data 转成 Numeric 显示
+            // 通过 Layer 的轴把命中点的 Data 转成 Numeric 显示
             // 注意：QToolTip::showText 需要全局坐标，hoverPos 是本地坐标 → mapToGlobal
-            if (auto* g = qobject_cast<QChartGeometry*>(hoverSeries->parent())) {
+            if (auto* g = qobject_cast<QChartLayer*>(hoverSeries->parent())) {
                 QString tip = buildHoverTooltip(g, hoverSeries, hoverIndex);
                 QToolTip::showText(mapToGlobal(hoverPos.toPoint()), tip, this);
             }
@@ -574,7 +598,7 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
 }
 
 // ── tooltip 内容：命中点的 Data → Numeric 坐标 ──
-QString QChartWidget::buildHoverTooltip(QChartGeometry* g,
+QString QChartWidget::buildHoverTooltip(QChartLayer* g,
                                         QChartSeries* s, int index) const {
     // 只对 QXYSeries 有点索引；其他类型返回系列名
     auto* xy = qobject_cast<QXYSeries*>(s);
@@ -616,9 +640,14 @@ void QChartWidget::wheelEvent(QWheelEvent* e) {
     qreal factor = std::exp(-delta * SCALE_SENSITIVITY);
     factor = qBound(0.8, factor, 1.25);
 
+    // 禁交互维度（分类轴）不缩放——离散域缩放没有意义
+    qreal factorX = dimensionInteractive(0) ? factor : 1.0;
+    qreal factorY = dimensionInteractive(1) ? factor : 1.0;
+    if (factorX == 1.0 && factorY == 1.0) return;
+
     // 以鼠标位置的 View Cartesian 坐标为中心缩放
     QPointF cartCenter = pixelToCartesian(pos);
-    zoomViewCartesian(cartCenter.x(), cartCenter.y(), factor);
+    zoomViewCartesian(cartCenter.x(), cartCenter.y(), factorX, factorY);
 }
 
 void QChartWidget::leaveEvent(QEvent*) {

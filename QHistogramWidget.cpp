@@ -1,5 +1,5 @@
 #include "QHistogramWidget.h"
-#include "QChartGeometry.h"
+#include "QChartLayer.h"
 #include "QHistogramSeries.h"
 #include <QPainter>
 #include <QPainterPath>
