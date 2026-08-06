@@ -254,6 +254,19 @@ QPointF QChartWidget::pixelToCartesian(const QPointF& pixel) const {
 }
 
 // ===== 视窗操作 =====
+// ===== 绝对设置 viewRect（相机动画等场景）=====
+void QChartWidget::setViewRect(const QRectF& r) {
+    m_viewRect = r;
+    if (m_projection)
+        m_dataBounds = m_projection->computeDataBounds(m_viewRect);
+    fitViewRectToPlotArea(FitStrategy::KeepCenter);
+    qCDebug(logWidget) << "setViewRect:" << r << "→ viewRect=" << m_viewRect
+                       << "dataBounds=" << m_dataBounds;
+    invalidateBackground();
+    invalidateForeground();
+    emit viewChanged();
+}
+
 void QChartWidget::panViewCartesian(qreal dx, qreal dy) {
     m_viewRect.translate(dx, dy);
     // 重算 dataBounds

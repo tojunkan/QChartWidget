@@ -24,6 +24,7 @@
 #include "../QChartAnimation.h"
 #include "../QNumericSeriesAnimation.h"
 #include "../QBarAnimation.h"
+#include "../QViewRectAnimation.h"
 #include <QParallelAnimationGroup>
 #include <QSequentialAnimationGroup>
 
@@ -314,6 +315,70 @@ int main(int argc, char* argv[]) {
 
     sortW->resize(600, 400);
     sortW->show();
+
+    // ===== 窗口 5: 相机漫游（QViewRectAnimation）=====
+    qDebug() << "\n========== 窗口5: 相机漫游 ==========";
+
+    auto* camW = new QChartWidget();
+    camW->setWindowTitle("相机漫游 - waypoint + sizeCurve");
+    camW->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
+    camW->setViewRectFitMode(ViewRectFitMode::Crop);
+
+    auto* camX = new QValueAxis(camW, Qt::AlignBottom);
+    auto* camY = new QValueAxis(camW, Qt::AlignLeft);
+    camX->setColor(Qt::white);
+    camY->setColor(Qt::white);
+    camW->addAxis(camX);
+    camW->addAxis(camY);
+    camX->setRange(-10, 10);
+    camY->setRange(-10, 10);
+
+    auto* camLayer = new QChartLayer(camW);
+    camLayer->setAxisX(camX);
+    camLayer->setAxisY(camY);
+    camW->addLayer(camLayer);
+
+    auto* scatter = new QScatterSeries("points", camLayer);
+    scatter->setColor(QColor("#FF9800"));
+    scatter->setMarkerSize(6);
+    for (int i = 0; i < 50; ++i) {
+        qreal x = (QRandomGenerator::global()->generateDouble() - 0.5) * 20.0;
+        qreal y = (QRandomGenerator::global()->generateDouble() - 0.5) * 20.0;
+        scatter->append(x, y);
+    }
+    camLayer->addSeries(scatter);
+
+    // 先设初始 viewRect（等 Widget 初化后修正）
+    camW->show();
+    camW->resize(500, 500);
+
+    // 直推动画：全景 → 中心区域
+    auto* push = new QViewRectAnimation(camW);
+    push->setDuration(3000);
+    push->setEasingCurve(QEasingCurve::InOutCubic);
+    push->setTargetWidget(camW);
+    push->setTargetViewRect(QRectF(0, 0, 4, 4));
+
+    // 弧线动画：同样终点，但 waypoint 绕远 + sizeCurve 中途放大
+    auto* arc = new QViewRectAnimation(camW);
+    arc->setDuration(3500);
+    arc->setEasingCurve(QEasingCurve::InOutCubic);
+    arc->setTargetWidget(camW);
+    arc->setTargetViewRect(QRectF(-2, -2, 3, 3)); // 换一个目标区域
+    arc->setWaypoint(QPointF(5, -5));  // 相机绕道右下角
+    arc->setSizeCurve([](qreal a) -> qreal {
+        qreal midSize = 4.0 + std::sin(a * M_PI) * 14.0; // α=0.5 时 width≈18，拉远示全景
+        return midSize;
+    });
+
+    // 串行：先直推，再弧线
+    auto* camSeq = new QSequentialAnimationGroup(camW);
+    camSeq->addAnimation(push);
+    camSeq->addAnimation(arc);
+    QObject::connect(camSeq, &QSequentialAnimationGroup::finished, camW, [camW]() {
+        qDebug() << "相机漫游完成";
+    });
+    camSeq->start();
 
     return app.exec();
 }

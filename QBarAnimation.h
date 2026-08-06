@@ -20,6 +20,7 @@ public:
     QBarSeries* targetSeries() const { return m_series; }
 
     // ── 模式 A：终点插值 ──
+    void setSourceRects(const QVector<QRectF>& numericRects) { m_srcRects = numericRects; }
     void setTargetRects(const QVector<QRectF>& numericRects);
 
     // ── 模式 B：生成器（物理模拟、排序算法逐步状态等）──

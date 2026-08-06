@@ -19,6 +19,7 @@ public:
     QXYSeries* targetSeries() const { return m_series; }
 
     // ── 模式 A：终点插值 ──
+    void setSourcePoints(const QVector<QPointF>& numericPts) { m_srcPoints = numericPts; }
     void setTargetPoints(const QVector<QPointF>& numericPts);
 
     // ── 模式 B：生成器（物理模拟等）──

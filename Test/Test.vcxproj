@@ -147,6 +147,9 @@
     <QtMoc Include="..\QBarAnimation.h" />
   </ItemGroup>
   <ItemGroup>
+    <QtMoc Include="..\QViewRectAnimation.h" />
+  </ItemGroup>
+  <ItemGroup>
     <ClCompile Include="..\QChartAxis.cpp" />
     <ClCompile Include="..\QChartLayer.cpp" />
     <ClCompile Include="..\QChartSeries.cpp" />
@@ -154,6 +157,7 @@
     <ClCompile Include="..\QChartAnimation.cpp" />
     <ClCompile Include="..\QNumericSeriesAnimation.cpp" />
     <ClCompile Include="..\QBarAnimation.cpp" />
+    <ClCompile Include="..\QViewRectAnimation.cpp" />
     <ClCompile Include="..\QValueAxis.cpp" />
     <ClCompile Include="..\QXYSeries.cpp" />
     <ClCompile Include="..\QScatterSeries.cpp" />

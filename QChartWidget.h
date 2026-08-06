@@ -47,6 +47,8 @@ public:
     QPointF pixelToCartesian(const QPointF& pixel) const;
 
     // ===== 视窗操作 =====
+    /// 绝对设置 viewRect（动画等），自动重算 dataBounds + fit + invalidate
+    void setViewRect(const QRectF& r);
     /// 平移 viewRect（dx/dy 在 View Cartesian 空间）
     void panViewCartesian(qreal dx, qreal dy);
     /// 以 (cx,cy) 为中心缩放 viewRect。factorX/factorY 独立控制两维
