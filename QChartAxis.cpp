@@ -11,8 +11,7 @@
 #include <QLoggingCategory>
 
 Q_LOGGING_CATEGORY(logAxis, "chart.axis")
-Q_LOGGING_CATEGORY(logAxisVerbose, "chart.axis.verbose")
-Q_LOGGING_CATEGORY(logRenderVerbose, "chart.projection.verbose")
+Q_LOGGING_CATEGORY(logAxisVerbose, "chart.axis.verbose", QtWarningMsg)
 
 // QChartAxis.cpp
 
@@ -29,14 +28,8 @@ namespace {
         if (!std::isfinite(cartesian.x()) || !std::isfinite(cartesian.y()))
             return QPointF(qQNaN(), qQNaN());
 
-        qreal px = ctx.plotArea.left()
-            + (cartesian.x() - ctx.viewRect.left()) / ctx.viewRect.width()
-            * ctx.plotArea.width();
-        qreal py = ctx.plotArea.bottom()
-            - (cartesian.y() - ctx.viewRect.top()) / ctx.viewRect.height()
-            * ctx.plotArea.height();
-
-        return QPointF(px, py);
+        return QChartCamera::cartesianToPixel(ctx.viewRect, ctx.plotArea,
+                                              cartesian.x(), cartesian.y());
     }
 
     // 2. View Cartesian 路径 → Pixel 路径
@@ -47,17 +40,12 @@ namespace {
 
         for (int i = 0; i < viewPath.elementCount(); ++i) {
             const auto& el = viewPath.elementAt(i);
-            qreal px = ctx.plotArea.left()
-                + (el.x - ctx.viewRect.left()) / ctx.viewRect.width()
-                * ctx.plotArea.width();
-            qreal py = ctx.plotArea.bottom()
-                - (el.y - ctx.viewRect.top()) / ctx.viewRect.height()
-                * ctx.plotArea.height();
-
+            QPointF p = QChartCamera::cartesianToPixel(ctx.viewRect, ctx.plotArea,
+                                                       el.x, el.y);
             if (i == 0 || el.isMoveTo())
-                pixelPath.moveTo(px, py);
+                pixelPath.moveTo(p);
             else
-                pixelPath.lineTo(px, py);
+                pixelPath.lineTo(p);
         }
         return pixelPath;
     }
@@ -255,7 +243,7 @@ void QChartAxis::drawAtEdge(QPainter* painter,
     }
 
     painter->save();
-    painter->setPen(m_color);
+    painter->setPen(color());
     QFont f = painter->font();
     f.setPointSize(f.pointSize());
     painter->setFont(f);
@@ -392,7 +380,7 @@ void QChartAxis::drawAtPosition(QPainter* painter,
 
     painter->save();
     if (pen)painter->setPen(*pen);
-    else painter->setPen(m_color);
+    else painter->setPen(color());
 
     bool isHoriz = isHorizontal();
 

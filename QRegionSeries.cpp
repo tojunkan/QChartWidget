@@ -41,7 +41,7 @@ void QRegionSeries::draw(QPainter* painter,
     painter->save();
 
     // 填充色：默认用系列色的半透明版本
-    QColor fill = m_fillColor.isValid() ? m_fillColor : m_color;
+    QColor fill = m_fillColor.isValid() ? m_fillColor : color();
     fill.setAlpha(m_fillColor.isValid() ? fill.alpha() : 96);  // 默认 ~40% 透明度
 
     QPainterPath path;
@@ -50,7 +50,7 @@ void QRegionSeries::draw(QPainter* painter,
 
     painter->setBrush(fill);
     if (m_strokeVisible) {
-        QPen pen(m_color, 1.5);
+        QPen pen(color(), 1.5);
         pen.setCosmetic(true);
         painter->setPen(pen);
     } else {

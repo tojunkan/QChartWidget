@@ -6,6 +6,7 @@
 #define QCHARTAXIS_H
 
 #include "QChartProjection.h"
+#include "QChartCamera.h" // View↔Pixel 线性映射的唯一实现（去重 1.5-3）
 #include <QObject>
 #include <QVector>
 #include <QString>
@@ -15,6 +16,7 @@
 #include <Qt>
 #include <QFont>
 #include <QVariant>
+#include <optional>
 
 // ===== 前置声明 =====
 struct DrawContext;
@@ -37,10 +39,7 @@ struct DrawContext {
         QPointF c = projection->toCartesian(num0, num1);
         if (!std::isfinite(c.x()) || !std::isfinite(c.y()))
             return QPointF(qQNaN(), qQNaN());
-        return QPointF(plotArea.left()
-                + (c.x() - viewRect.left()) / viewRect.width() * plotArea.width(),
-            plotArea.bottom()
-                - (c.y() - viewRect.top()) / viewRect.height() * plotArea.height());
+        return QChartCamera::cartesianToPixel(viewRect, plotArea, c.x(), c.y());
     }
 
     /// Numeric 空间曲线 → Pixel 路径（创建 createPath + cartesian→pixel in one shot）
@@ -51,12 +50,9 @@ struct DrawContext {
         QPainterPath viewPath = projection->createPath(dataCurve, segments);
         for (int i = 0; i < viewPath.elementCount(); ++i) {
             const auto& el = viewPath.elementAt(i);
-            qreal px = plotArea.left()
-                + (el.x - viewRect.left()) / viewRect.width() * plotArea.width();
-            qreal py = plotArea.bottom()
-                - (el.y - viewRect.top()) / viewRect.height() * plotArea.height();
-            if (i == 0 || el.isMoveTo()) pixelPath.moveTo(px, py);
-            else                         pixelPath.lineTo(px, py);
+            QPointF p = QChartCamera::cartesianToPixel(viewRect, plotArea, el.x, el.y);
+            if (i == 0 || el.isMoveTo()) pixelPath.moveTo(p);
+            else                         pixelPath.lineTo(p);
         }
         return pixelPath;
     }
@@ -143,8 +139,26 @@ public:
     QString title() const { return m_title; }
     void setTitle(const QString& t) { m_title = t; }
 
-    QColor color() const { return m_color; }
-    void setColor(const QColor& c) { m_color = c; }
+    QColor color() const { return m_colorOverride.value_or(m_themeColor); }
+    /// 用户显式设色（A3：写 override，永久盖过主题直到 clearColor）
+    void setColor(const QColor& c) {
+        if (m_colorOverride && *m_colorOverride == c) return;
+        m_colorOverride = c;
+        emit styleChanged();
+    }
+    /// 主题注入默认色（内部，Widget 推送）：仅当无显式覆盖时才真正变化
+    void setThemeColor(const QColor& c) {
+        m_themeColor = c;
+        if (!m_colorOverride) emit styleChanged();
+    }
+    /// 清除显式覆盖，回到主题默认色
+    void clearColor() {
+        if (!m_colorOverride) return;
+        m_colorOverride.reset();
+        emit styleChanged();
+    }
+    /// 显式覆盖（供主题/调色板判断）
+    std::optional<QColor> colorOverride() const { return m_colorOverride; }
 
     int tickCount() const { return m_tickCount; }
     void setTickCount(int n);
@@ -183,7 +197,8 @@ protected:
     // ── 样式 ──
     bool m_visible = true;
     QString m_title;
-    QColor m_color = Qt::black;
+    std::optional<QColor> m_colorOverride;   // 用户显式设过（setColor）
+    QColor m_themeColor = Qt::black;         // 主题注入默认（setThemeColor）
     Qt::Alignment m_alignment = Qt::AlignBottom;
 
     // ── 常量 ──

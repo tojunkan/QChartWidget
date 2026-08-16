@@ -18,7 +18,12 @@
 
 | 职责 | 类 |
 |---|---|
-| 容器 | `QChartWidget`（场景状态 + viewRect + 双缓存 + pan/zoom/hover + 布局） |
+| 容器 | `QChartWidget`（Phase 0 后：场景组装 + 交互 pan/zoom/hover + 布局；viewRect/缓存已外移） |
+| 相机 | `QChartCamera`（Phase 0 新增：viewRect + fit 策略 + View↔Pixel 映射 + `Q_PROPERTY(center/zoom)`） |
+| 渲染器 | `QChartRenderer`（接口 + `QChartScene` 快照，Phase 1 改名）/ `QPainterChartRenderer`（双缓存 + 绘制编排 + `renderUncached`，参数化于 `QPaintDevice`） |
+| 主题 | `QChartTheme`（Phase 1 新增：`Preset{Light,Dark}` + 调色板 + override 双槽颜色模型） |
+| 图例 | `QChartLegend`（Phase 1 新增：plotArea 四角 overlay，点击切换系列 visible） |
+| 导出 | `QChartWidget::saveAsPng/Svg/Pdf` + `QChartExportScope`（Phase 1 新增：默认全 widget，PNG 真栅格 / SVG 真矢量） |
 | 轴 | `QChartAxis` + `QValueAxis` / `QLogAxis` / `QDateTimeAxis` / `QBarCategoryAxis` |
 | 图层 | `QChartLayer`（组合 X/Y 轴 + 持有 Series + 网格 + hitTest） |
 | 系列 | `QChartSeries` + `QXYSeries` / `QLineSeries` / `QScatterSeries` / `QPolygonSeries` / `QBarSeries` / `QRegionSeries` |
@@ -28,18 +33,18 @@
 
 ### 1.3 构建与验证状态
 
-- **构建系统**：根 `CMakeLists.txt`（C++17，Qt6 ≥ 6.2）。三个 target：
-  - `QChartWidget` —— **静态库**（20 个 .cpp）
-  - `QChartDemo` —— `Test/test.cpp` + `Test/demos/*`（7 个演示）
-  - `QChartTests` —— `TestUnit/`（4 个测试类）
+- **构建系统**：根 `CMakeLists.txt`（C++17，Qt6 ≥ 6.2，`find_package(... Core Gui Widgets Svg)`）。三个 target：
+  - `QChartWidget` —— **静态库**（22 个 .cpp：Phase 0 后 + QChartTheme/QChartLegend）
+  - `QChartDemo` —— `Test/test.cpp` + `Test/demos/*`（8 个演示）
+  - `QChartTests` —— `TestUnit/`（12 个测试类）
 - **moc 所有权约定（别碰）**：AUTOMOC 只在库目标开启（所有 Q_OBJECT 类的 moc 唯一编入静态库）；`QChartDemo` 关 AUTOMOC；`QChartTests` 关 AUTOMOC + 对 4 个测试头手动 `qt6_wrap_cpp`。**目的：避免多目标重复 moc 导致链接符号冲突。**
 - **已验证（三端全绿）**：
   - MSVC（Qt 6.11.1 msvc2022_64 + VS2026 v145）编译 ✅，测试退出码 0 ✅
   - MinGW（Qt 6.11.0 mingw_64 + mingw1310_64）编译 ✅，测试退出码 0 ✅
   - Linux 原生（Qt 6.4.2 + cmake 3.28 + ninja + g++13.2，WSLg）编译 ✅，`ctest` 1/1 通过 ✅，7 个 demo 弹窗运行并干净退出 ✅
-- **测试现状**：仅轴刻度有单测（`TestUnit/tests/`，4 类 22 用例）。Projection / Series / hitTest / 缓存失效 / 动画**零测试**。
-- **demo 入口**：`Test/test.cpp` 支持 argv 选择：`QChartDemo.exe [polar bar pendulum sort camera swirl stress]`，无参 = 全部。**注意：此改动尚未提交 git（git 由用户操作）。**
-- 演示清单：`demo_polar`（极坐标五边形）、`demo_bar`、`demo_pendulum`、`demo_sort`、`demo_camera`（2D 相机漫游）、`demo_swirl`（投影切换）、`demo_stress`（1M 点，验证视口裁剪：100 万点 → 只画约 1000 线）。
+- **测试现状**：12 类 69 用例（轴刻度 4 类 22 + Phase 0 新增 22 + Phase 1 新增 25：主题/图例/导出/图例交互）。**仍零测试**：动画、tooltip/交互事件、布局 sizeHint。
+- **demo 入口**：`Test/test.cpp` 支持 argv 选择：`QChartDemo.exe [polar bar pendulum sort camera swirl stress theme]`，无参 = 全部。**注意：git 由用户操作，改动提交由用户完成。**
+- 演示清单：`demo_polar`（极坐标五边形）、`demo_bar`、`demo_pendulum`、`demo_sort`、`demo_camera`（2D 相机漫游）、`demo_swirl`（投影切换）、`demo_stress`（1M 点，验证视口裁剪：100 万点 → 只画约 1000 线）、`demo_theme`（Phase 1：深色主题 + 图例 + 三格式导出）。
 
 ### 1.4 环境事实（团队必读）
 
@@ -54,12 +59,12 @@
 - **Windows 侧**：git 由用户同步到 `E:\Dujia\DuRunHan\Programs\cplusplus\QChartWidget`（镜像与工作区一致，仅 CRLF 差异）。工具链：`E:\Qt\6.11.1\msvc2022_64`、`E:\Qt\6.11.0\mingw_64`、`E:\Qt\Tools\{CMake_64,Ninja,mingw1310_64}`、VS2026 v145。一键脚本 `scripts/build-msvc.bat`、`scripts/build-mingw.bat`。
 - **WSL→Windows interop 两坑**：① `cmd.exe` 从 UNC 工作目录启动会被拒（须 `cd /d` 到盘符路径）；② interop 会转义双引号（复杂命令写成 `.bat` 再执行）。
 
-### 1.5 已知小问题（Phase 0 一并处理）
+### 1.5 已知小问题（含 Phase 0 处理结果）
 
-1. **无主题系统**：颜色全硬编码（轴默认黑、网格 220 灰、demo 里写死白色）。用户在深色 Windows 下看到的色差即由此而来。
-2. **日志分类名不一致**：`logRenderVerbose` 在 `QChartDebug.h` 声明（render 组），却在 `QChartAxis.cpp` 定义为 `"chart.projection.verbose"`；实测 `chart.*.verbose=false` 压不住 `createPath` 逐采样点刷屏。
-3. **重复实现**：`QChartWidget::cartesianToPixel/pixelToCartesian` 与 `DrawContext::numericToPixel`（`QChartAxis.h` 内）是同一段线性映射写了两遍。
-4. `QChartWidget.h` 直接 include `QChartLayer.h` / `QChartProjection.h`（耦合偏紧，可前向声明化）。
+1. ~~无主题系统~~ ✅ **已修（Phase 1）**：`QChartTheme`（Light/Dark 预设 + override 双槽 + 系列调色板循环取色 + followSystemPalette），深色模式色差已解决。
+2. ~~日志分类名不一致~~ ✅ **已修（Phase 0）**：根因是 `chart.*.verbose=false` 为 Qt **非法规则**（`*` 通配符只能出现在模式末尾，Qt 忽略整条规则）+ `logRenderVerbose` 定义名错位。现 verbose 类默认 `QtWarningMsg` 静默，规则用 `*.verbose=false` 合法形式。
+3. ~~重复实现~~ ✅ **已修（Phase 0）**：5 处线性映射（DrawContext 两处、QChartAxis.cpp 匿名命名空间、QChartLayer.cpp、Widget 两处）收敛为 `QChartCamera` 一份。
+4. `QChartWidget.h` 直接 include `QChartLayer.h` / `QChartProjection.h`（耦合偏紧；前向声明化解耦为可选项，Phase 0 未做，留待需要时）。
 5. 根目录残留空目录 `QChartWidget/`（git 不追踪空目录，无实质影响）。
 
 ---
@@ -94,8 +99,15 @@ Data ──[Axis::toNumeric]──► Numeric ──[Projection::toCartesian]─
 | D4 | **静态库** | 默认 STATIC；共享库需给公共类加导出宏（暂缓）。 |
 | D5 | **git 全部由用户操作** | 主对话/团队不 commit、不 push、不 pull；只改文件。 |
 | D6 | **每阶段验收标准** | 最低验收 = Linux 编译绿 + `ctest` 全绿（旧 22 例 + 新增）；7 个 demo 行为不回归。Windows 双工具链编译由用户侧抽验（或在需要时再走 interop）。 |
+| D7 | **测试应用类型**（Phase 0） | `TestUnit` 用 `QGuiApplication`；ctest 在非 Windows 设 `QT_QPA_PLATFORM=offscreen` 无头跑，Windows 走默认平台（避免 offscreen 插件依赖）。 |
+| D8 | **Qt 日志规则限制**（Phase 0） | 规则的 `*` 通配符只能出现在模式末尾，否则整条规则被 Qt 忽略（告警 "Ignoring malformed logging rule"）；verbose 类分类统一默认 `QtWarningMsg` 静默。 |
+| D9 | **逐任务审查**（Phase 1 起） | 每个实现任务完成后立即由 reviewer 独立审查（必须实际运行测试/demo 挑错），不攒到阶段末合并审。 |
+| D10 | **设计先行**（Phase 1 起） | 新增独立 designer 角色：新功能先出设计（问卷→方案→设计文档→用户确认），定稿后才交给 engineer；设计期间不动代码。 |
+| D11 | **QChart 命名规范**（Phase 1） | 所有新公共类型一律 QChart 前缀：QChartTheme / QChartLegend / QChartScene（Phase 0 的 ChartScene 纯改名）/ QChartExportScope；裸枚举并入类内（QChartTheme::Preset）。 |
+| D12 | **颜色 override 双槽模型**（Phase 1） | axis/layer/series/legend/背景的颜色 =「显式 override ?? 主题默认」，主题只当默认值、显式设色优先，`clear*()` 回退主题默认。 |
+| D13 | **导出走 renderUncached**（Phase 1） | PNG/SVG/PDF 统一无缓存直绘（真矢量、不污染屏显缓存）；PDF 始终填背景（忽略透明开关）；导出跳过调试黄框（`QChartScene.exportMode`）。 |
 
-### 2.4 目标架构（Phase 0 完成后）
+### 2.4 当前架构（Phase 0 已落地）
 
 ```
 Projection（Data/Numeric → View Cartesian / World）
@@ -150,20 +162,27 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 
 ## 4. 路线图（阶段划分，按依赖链排序）
 
-### Phase 0 —— 抽缝 + 锁行为（纯重构，零新功能；决定后面能否安全加速）
+### Phase 0 —— 抽缝 + 锁行为（纯重构，零新功能）✅ **已完成**
 
-1. 抽 `QChartCamera`（viewRect + fit 策略 + toPixel/fromPixel；消灭 1.5-3 的重复实现；Q_PROPERTY center/zoom）
-2. 抽 `QChartRenderer` + `QPainterChartRenderer`（缓存 + 绘制编排；`render(scene, QPaintDevice*)`）
-3. 补单测锁行为：相机映射往返 / fit 策略 / 缓存失效 / hitTest / 投影包络
-4. 日志分类清理（1.5-2，verbose 默认静默、命名归位）
-5. （可选）`QChartWidget.h` 前向声明化解耦
+1. ✅ 抽 `QChartCamera`（viewRect + fit 策略 + toPixel/fromPixel；消灭 5 处重复映射；Q_PROPERTY center/zoom）
+2. ✅ 抽 `QChartRenderer` + `QPainterChartRenderer`（缓存 + 绘制编排；`render(scene, QPaintDevice*)`，QImage 渲染验证通过）
+3. ✅ 补单测锁行为：相机 9 例 / 投影 6 例 / 渲染器 4 例 / 命中 3 例（共 22 例新增）
+4. ✅ 日志分类清理（根因：非法通配符规则 + 定义名错位；verbose 默认静默）
+5. ⏭ 未做（可选项）：`QChartWidget.h` 前向声明化解耦
 
-**验收**：行为完全不变；Linux 编译绿 + 旧 22 例 + 新增全绿；7 demo 无回归。
+**验收结果（reviewer 独立验收 + captain 复核）**：行为完全不变；`--clean-first` 编译 0 error/0 warning；ctest 8 类 **44 用例全绿**（旧 22 + 新 22）；7 demo 冒烟无回归、无刷屏。
+**遗留小观察**：`QChartProjection.h:13` 有一行死注释可顺手清理。
 
-### Phase 1 —— 2D 补全（见效快，顺带解决深色模式）
+### Phase 1 —— 2D 补全（主题 / 图例 / 导出）✅ **已完成**
 
-主题/调色板（深色/浅色一键）· 图例 legend · 导出 PNG/SVG/PDF（借 Phase 0 渲染器 device 参数化）。
-**验收**：深色模式 demo、图例显示/交互、三格式导出与屏显一致。
+- ✅ 主题/调色板：`QChartTheme`（Light/Dark 预设）+ override 双槽（显式设色优先）+ 系列调色板循环取色 + `setFollowSystemPalette`（可选跟随系统）——深色模式色差解决。
+- ✅ 图例：独立 `QChartLegend`（plotArea 四角 overlay、点击切换系列 visible、文字色跟随主题）。
+- ✅ 导出：`saveAsPng/Svg/Pdf` + `QChartExportScope`（默认全 widget，可选仅 plotArea）；PNG 栅格 / SVG 真矢量 / PDF；透明开关；导出跳过调试黄框。
+- ✅ 深色演示 `demo_theme`（Dark 主题 + 图例 + 一键导出三格式）；旧 7 demo 去硬编码白轴。
+
+**验收结果（reviewer 逐任务审查 + t29 终验 + captain 复核）**：干净构建 0 error/0 warning；ctest **12 类 69 用例全绿**（旧 44 + 新 25）；8 demo 冒烟无回归；theme 三格式产物复核通过（PNG 640×480 暗底 / SVG 15 个 `<path>` 无栅格 / PDF `%PDF-1.4`）。
+**设计文档**：`design_theme.md` / `design_legend.md` / `design_export.md`（拆分 + QChart 命名规范 + QChartScene 说明）。
+**遗留小观察**：`Test/test.cpp` 提示文案漏写 "theme"（demos[] 已含）；`QChartProjection.h:13` 死注释（Phase 0 遗留）。
 
 ### Phase 2 —— 3D 数学先行（不碰 GPU）
 
@@ -184,8 +203,12 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 
 ## 5. 协作约定（AgentTeams 用法）
 
-- **主对话 = 统筹**：只做决策、验收、文档维护；具体编码交给团队。
-- **每个阶段 = 一支队/一批任务**：任务描述必须引用本文档对应章节 + `design_notes.md` 相关小节 + 验收标准（D6）。
+- **主对话 = 统筹**：只做决策、验收、文档维护、任务派发，并作为**用户与团队之间的唯一中转**（团队成员的问卷/问题经 captain 转达用户，用户决定再转回）；具体设计/编码/审校交给团队。
+- **角色分工（Phase 1 起）**：
+  - `designer`（设计者）：与用户沟通设计——发问卷、提方案、出设计文档；**设计定稿前不动代码**；沟通经 captain 中转。
+  - `engineer`（实现者）：按设计文档实现；每完成一个 task 立即交付，不等批量。
+  - `reviewer`（校验员）：**每个 engineer task 完成后立即独立审查**（不做阶段末合并审查）；审查必须**实际运行**测试与 demo 找问题，尽可能挑错、宁可错杀不放过；不只通读代码。
+- **每个阶段 = 一串小任务**：设计任务（designer）→ 用户确认设计 → 实现任务×N（engineer），**每个实现任务后紧跟一个审查任务（reviewer）**，审查通过才进下一个实现任务。任务描述必须引用本文档对应章节 + `design_notes.md` + 验收标准（D6）。
 - **阶段结束回写本文**：勾选完成项、更新 1.3 验证状态、记录新增决策（D7、D8…）。
-- **红线**：不碰 moc 所有权约定（1.3）；不改 CMake target 结构除非阶段目标要求；git 操作留给用户（D5）。
+- **红线**：不碰 moc 所有权约定（1.3）；不改 CMake target 结构除非阶段目标要求；git 操作留给用户（D5）；任何设计分歧/阻塞必须上报 captain 转用户商讨，不得自作主张。
 - 工作区路径：`/home/unidu/dsh/QChartWidget`；构建命令见 1.4。

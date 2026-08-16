@@ -1,6 +1,7 @@
 // QChartLayer.cpp —— 图层基类实现
 #include "QChartLayer.h"
 #include "QChartWidget.h"
+#include "QChartCamera.h"
 #include "QChartSeries.h"
 #include <QDebug>
 #include <QLoggingCategory>
@@ -41,8 +42,8 @@ void QChartLayer::setGridVisible(bool v) {
 }
 
 void QChartLayer::setGridColor(const QColor& c) {
-    if (m_gridColor == c) return;
-    m_gridColor = c;
+    if (m_gridColorOverride && *m_gridColorOverride == c) return;
+    m_gridColorOverride = c;
     emit gridChanged();
 }
 
@@ -75,15 +76,9 @@ std::function<QPointF(QVariant,QVariant)> QChartLayer::makeToPixel(DrawContext& 
         if (!std::isfinite(cartesian.x()) || !std::isfinite(cartesian.y()))
             return QPointF(qQNaN(), qQNaN());
 
-        // View Cartesian → Pixel（线性映射）
-        qreal px = ctx.plotArea.left()
-            + (cartesian.x() - ctx.viewRect.left()) / ctx.viewRect.width()
-            * ctx.plotArea.width();
-        qreal py = ctx.plotArea.bottom()
-            - (cartesian.y() - ctx.viewRect.top()) / ctx.viewRect.height()
-            * ctx.plotArea.height();
-
-        return QPointF(px, py);
+        // View Cartesian → Pixel（线性映射，唯一实现在 QChartCamera）
+        return QChartCamera::cartesianToPixel(ctx.viewRect, ctx.plotArea,
+                                              cartesian.x(), cartesian.y());
     };
 }
 
@@ -115,13 +110,13 @@ void QChartLayer::drawGrid(QPainter* painter, const DrawContext& ctx) const {
         qreal tickVal = ticksY[i];
         QString label = labelsY.value(i);               // 直接取对应标签
         if (i % 2 == 0) {
-            gridPen = QPen(m_gridColor, 1.0, Qt::DashLine);
+            gridPen = QPen(gridColor(), 1.0, Qt::DashLine);
             m_axisX->drawAtPosition(painter, ctx, tickVal,
                 /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
                 /*label=*/label, /*pen=*/&gridPen);
         }
         else {
-            gridPen = QPen(m_gridColor, 1.0, Qt::SolidLine);
+            gridPen = QPen(gridColor(), 1.0, Qt::SolidLine);
             m_axisX->drawAtPosition(painter, ctx, tickVal,
                 /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
                 /*label=*/label, /*pen=*/&gridPen);
@@ -136,13 +131,13 @@ void QChartLayer::drawGrid(QPainter* painter, const DrawContext& ctx) const {
         qreal tickVal = ticksX[i];
         QString label = labelsX.value(i);
         if (i % 2 == 0) {
-            gridPen = QPen(m_gridColor, 1.0, Qt::DashLine);
+            gridPen = QPen(gridColor(), 1.0, Qt::DashLine);
             m_axisY->drawAtPosition(painter, ctx, tickVal,
                 /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
                 /*label=*/label, /*pen=*/&gridPen);
         }
         else {
-            gridPen = QPen(m_gridColor, 1.0, Qt::SolidLine);
+            gridPen = QPen(gridColor(), 1.0, Qt::SolidLine);
             m_axisY->drawAtPosition(painter, ctx, tickVal,
                 /*axisLine=*/true, /*labels=*/true, /*ticks=*/true,
                 /*label=*/label, /*pen=*/&gridPen);

@@ -107,11 +107,11 @@ void QPolygonSeries::draw(QPainter* painter,
 
     // ── fill ──
     painter->save();
-    QColor fill = m_fillColor.isValid() ? m_fillColor : m_color;
+    QColor fill = m_fillColor.isValid() ? m_fillColor : color();
     fill.setAlpha(m_fillColor.isValid() ? fill.alpha() : 96);
     painter->setBrush(fill);
     if (m_strokeVisible) {
-        QPen pen(m_color, 1.5);
+        QPen pen(color(), 1.5);
         pen.setCosmetic(true);
         painter->setPen(pen);
     } else {

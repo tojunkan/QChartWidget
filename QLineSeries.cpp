@@ -44,7 +44,7 @@ bool segmentOutsideViaSampling(const QPointF& nPrev, const QPointF& nCurr,
 
 QLineSeries::QLineSeries(const QString& name, QObject* parent)
     : QXYSeries(name, parent) {
-    m_color = QColor("#2196F3");
+    m_themeColor = QColor("#2196F3");
 }
 
 // ===== 绘制：混合策略——近点直线，远点 Numeric Lerp→createPath 曲线边 =====
@@ -82,7 +82,7 @@ void QLineSeries::draw(QPainter* painter,
     const qreal threshold = qMax(20.0, m_lineWidth * 4.0); // 像素距离阈值（近/远段分界）
 
     painter->save();
-    QPen pen(m_color, m_lineWidth, m_lineStyle);
+    QPen pen(color(), m_lineWidth, m_lineStyle);
     pen.setCosmetic(true);
     painter->setPen(pen);
     painter->setBrush(Qt::NoBrush); // 折线不需要填充

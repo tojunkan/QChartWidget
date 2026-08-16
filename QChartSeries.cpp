@@ -5,7 +5,7 @@
 #include <QLoggingCategory>
 
 Q_LOGGING_CATEGORY(logSeries, "chart.series")
-Q_LOGGING_CATEGORY(logSeriesVerbose, "chart.series.verbose")
+Q_LOGGING_CATEGORY(logSeriesVerbose, "chart.series.verbose", QtWarningMsg)
 
 QChartSeries::QChartSeries(const QString& n, QObject* p)
     : QObject(p), m_name(n) {

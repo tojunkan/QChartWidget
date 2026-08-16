@@ -1,0 +1,93 @@
+// QChartCamera.h —— 2D 相机
+// 职责（分工红线）：
+//   只负责 viewRect 几何：拥有 viewRect + fit 策略 + View Cartesian ↔ Pixel 线性映射
+//   + setViewRect/pan/zoom 的视窗几何运算。
+// 不知道 Projection、不反算 dataBounds（dataBounds 依赖 projection->computeDataBounds，
+//   由 QChartWidget 持有并维护）、不拥有 plotArea（映射/拟合均以参数传入）。
+// 2D 相机是未来 3D 相机（position/lookAt/up/FOV → viewProjectionMatrix()）的退化特例。
+#ifndef QCHARTCAMERA_H
+#define QCHARTCAMERA_H
+
+#include <QObject>
+#include <QRectF>
+#include <QPointF>
+
+// viewRect 与 plotArea 长宽比匹配策略
+enum class ViewRectFitMode {
+    Stretch,  // 不调整 viewRect——cartesianToPixel 直接拉伸，图形可能变形
+    Fit,      // 扩张 viewRect 较小维度以匹配 plotArea 长宽比，数据始终完整（默认）
+    Crop,     // 收缩 viewRect 较大维度以匹配 plotArea 长宽比，可能裁掉部分数据
+    Fixed     // 强制 viewRect 匹配指定长宽比（fixedAspectRatio()），忽略 plotArea
+};
+
+class QChartCamera : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QRectF viewRect READ viewRect WRITE setViewRect NOTIFY viewChanged)
+    Q_PROPERTY(QPointF center READ center WRITE setCenter NOTIFY viewChanged)
+    Q_PROPERTY(qreal zoom READ zoom WRITE setZoom NOTIFY viewChanged)
+public:
+    explicit QChartCamera(QObject* parent = nullptr);
+
+    // ===== 视窗状态（主状态）=====
+    QRectF viewRect() const { return m_viewRect; }
+    /// 绝对设置 viewRect（动画等）。设置什么就是什么，不做 fit 修正。
+    void setViewRect(const QRectF& r);
+
+    // ===== center / zoom（供 QPropertyAnimation 直接驱动平移/缩放）=====
+    /// center == viewRect.center()。
+    /// setCenter(c)：平移 viewRect 使中心变为 c；zoom（= viewRect.width()）保持不变。
+    QPointF center() const { return m_viewRect.center(); }
+    void setCenter(const QPointF& c);
+
+    /// zoom == viewRect.width()（zoom 值约定以视窗宽度度量）。
+    /// setZoom(z)：以当前 center 为中心、保持 viewRect 长宽比不变，把宽度设为 z
+    /// （高度按当前长宽比同步缩放）。center 保持不变。
+    qreal zoom() const { return m_viewRect.width(); }
+    void setZoom(qreal z);
+
+    // ===== 视窗几何操作（平移/缩放，仅改 viewRect，不反算 dataBounds）=====
+    /// 平移 viewRect（dx/dy 在 View Cartesian 空间）
+    void panViewCartesian(qreal dx, qreal dy);
+    /// 以 (cx,cy) 为中心缩放 viewRect。factorX/factorY 独立控制两维
+    /// （禁交互轴所在维度传 1.0 = 不缩放）。factor<1=放大，>1=缩小
+    void zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY);
+
+    // ===== fit 策略 =====
+    ViewRectFitMode fitMode() const { return m_fitMode; }
+    void setFitMode(ViewRectFitMode mode) { m_fitMode = mode; }
+    qreal fixedAspectRatio() const { return m_fixedAspectRatio; }
+    void setFixedAspectRatio(qreal ratio) { m_fixedAspectRatio = ratio; }
+
+    // ===== fit 几何 =====
+    enum class FitStrategy { KeepWidth, KeepHeight, KeepCenter };
+    /// 调整 viewRect 使长宽比匹配 plotArea（只做几何，不反算 dataBounds）。
+    /// 返回 true 表示 viewRect 实际被修改（调用方据此决定是否重算 dataBounds）。
+    bool fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy strategy);
+
+    // ===== 坐标转换（唯一实现，供 Widget / DrawContext / Layer 复用）=====
+    /// View Cartesian → Pixel：线性映射 viewRect → plotArea（纯函数）
+    static QPointF cartesianToPixel(const QRectF& viewRect, const QRectF& plotArea,
+                                    qreal cx, qreal cy);
+    /// Pixel → View Cartesian：逆线性映射（纯函数）
+    static QPointF pixelToCartesian(const QRectF& viewRect, const QRectF& plotArea,
+                                    const QPointF& pixel);
+
+    /// 实例版：使用 m_viewRect（plotArea 由调用方传入）
+    QPointF cartesianToPixel(const QRectF& plotArea, qreal cx, qreal cy) const {
+        return cartesianToPixel(m_viewRect, plotArea, cx, cy);
+    }
+    QPointF pixelToCartesian(const QRectF& plotArea, const QPointF& pixel) const {
+        return pixelToCartesian(m_viewRect, plotArea, pixel);
+    }
+
+signals:
+    /// viewRect（或其派生属性 center/zoom）发生变化
+    void viewChanged();
+
+private:
+    QRectF m_viewRect;
+    ViewRectFitMode m_fitMode = ViewRectFitMode::Fit;
+    qreal m_fixedAspectRatio = 1.0; // Fixed 模式下使用
+};
+
+#endif // QCHARTCAMERA_H

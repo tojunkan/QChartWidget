@@ -15,13 +15,11 @@ QChartWidget* buildDemoPolar() {
     w->setProjection(QChartProjectionFactory::create(CoordinateSystem::Polar));
 
     auto* angleAxis = new QValueAxis(w, Qt::AlignHCenter);
-    angleAxis->setColor(Qt::white);
     w->addAxis(angleAxis);
     angleAxis->setLabelFormat("%g°");
     angleAxis->setRange(0, 360);
 
     auto* radialAxis = new QValueAxis(w, Qt::AlignVCenter);
-    radialAxis->setColor(Qt::white);
     w->addAxis(radialAxis);
     radialAxis->setRange(0, 5);
 

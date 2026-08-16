@@ -6,6 +6,8 @@
 #include "QBarSeries.h"
 #include "QDataPoint.h"
 #include "QChartProjectionFactory.h"
+#include "QPainterChartRenderer.h"
+#include "QChartLegend.h"
 #include "QChartDebug.h"
 #include <QPainter>
 #include <QMouseEvent>
@@ -13,6 +15,14 @@
 #include <QToolTip>
 #include <QDebug>
 #include <QLoggingCategory>
+#include <QGuiApplication>
+#include <QImage>
+#include <QSize>
+#include <QFileInfo>
+#include <QDir>
+#include <QSvgGenerator>
+#include <QPdfWriter>
+#include <QPageSize>
 
 Q_LOGGING_CATEGORY(logWidget, "chart.widget")
 Q_LOGGING_CATEGORY(logProjection, "chart.projection")
@@ -20,9 +30,18 @@ Q_LOGGING_CATEGORY(logFactory, "chart.projection.factory")
 Q_LOGGING_CATEGORY(logRender, "chart.render")
 
 // ===== 构造 & 析构 =====
-QChartWidget::QChartWidget(QWidget* parent) : QWidget(parent) {
+QChartWidget::QChartWidget(QWidget* parent)
+    : QWidget(parent)
+    , m_camera(std::make_unique<QChartCamera>())
+    , m_renderer(std::make_unique<QPainterChartRenderer>()) {
     setMouseTracking(true);
     setMinimumSize(200, 150);
+
+    m_legend = new QChartLegend(this);
+    connect(m_legend, &QChartLegend::visibleChanged,   this, [this]() { invalidateForeground(); });
+    connect(m_legend, &QChartLegend::alignmentChanged, this, [this]() { invalidateForeground(); });
+    connect(m_legend, &QChartLegend::textColorChanged, this, [this]() { invalidateForeground(); });
+
     qCDebug(logWidget) << "QChartWidget created";
 }
 
@@ -40,10 +59,10 @@ void QChartWidget::addLayer(QChartLayer* g) {
         m_projection = QChartProjectionFactory::create(g->coordinateSystem());
         if (!m_viewInitialized && m_projection) {
             m_dataBounds = m_projection->defaultDataBounds();
-            m_viewRect = m_projection->computeViewRect(m_dataBounds);
+            m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
             m_viewInitialized = true;
             qCDebug(logWidget) << "viewRect initialized from defaultDataBounds:"
-                               << m_viewRect;
+                               << m_camera->viewRect();
             fitViewRectToPlotArea(FitStrategy::KeepCenter);
         }
     }
@@ -54,13 +73,21 @@ void QChartWidget::addLayer(QChartLayer* g) {
 
     g->setParent(this);
     m_layers.append(g);
+    // 主题默认补推（网格色）
+    g->setThemeGridColor(m_theme.gridColor);
 
     // 动画覆盖层每帧变化 → 刷新前景缓存（不动背景/布局）
     connect(g, &QChartLayer::seriesAdded, this, [this](QChartSeries* s) {
+        // A5 调色板循环取色（仅无 override 才占位推进；显式色不占位）
+        assignSeriesPaletteColor(s);
         // 样式属性变化（含 QPropertyAnimation 驱动）→ 刷新前景
         connect(s, &QChartSeries::colorChanged,   this, [this]() { invalidateForeground(); });
         connect(s, &QChartSeries::opacityChanged, this, [this]() { invalidateForeground(); });
         connect(s, &QChartSeries::visibleChanged, this, [this]() { invalidateForeground(); });
+        connect(s, &QChartSeries::nameChanged, this, [this](const QString&) {
+            rebuildLegendItems();          // name 变化影响是否被跳过
+            invalidateForeground();
+        });
         // 动画覆盖层每帧变化 → 刷新前景缓存
         if (auto* xy = qobject_cast<QXYSeries*>(s)) {
             connect(xy, &QXYSeries::renderOverrideChanged,
@@ -69,8 +96,16 @@ void QChartWidget::addLayer(QChartLayer* g) {
             connect(bar, &QBarSeries::renderOverrideChanged,
                     this, [this]() { invalidateForeground(); });
         }
+        rebuildLegendItems();   // 新增 series → 重建图例条目
     });
 
+    // series 移除 → 重建图例条目
+    connect(g, &QChartLayer::seriesRemoved, this, [this](QChartSeries*) {
+        rebuildLegendItems();
+        invalidateForeground();
+    });
+
+    rebuildLegendItems();   // 兜底：layer 可能已带 series
     invalidateForeground();
     qCDebug(logWidget) << "Layer added, total:" << m_layers.size();
 }
@@ -78,6 +113,7 @@ void QChartWidget::addLayer(QChartLayer* g) {
 void QChartWidget::removeLayer(QChartLayer* g) {
     m_layers.removeAll(g);
     delete g;
+    rebuildLegendItems();
     invalidateForeground();
 }
 
@@ -92,6 +128,8 @@ void QChartWidget::addAxis(QChartAxis* a) {
 
     a->setParent(this);
     m_axes.append(a);
+    // 主题默认补推（轴色）
+    a->setThemeColor(m_theme.axisColor);
 
     // 语法糖：rangeChanged 信号 → setDataRangeDim0/Dim1
     connect(a, &QChartAxis::rangeChanged, this, [this, a](qreal min, qreal max) {
@@ -122,8 +160,8 @@ void QChartWidget::removeAxis(QChartAxis* a) {
 
 // ===== viewRect ↔ plotArea 长宽比同步 =====
 void QChartWidget::setViewRectFitMode(ViewRectFitMode mode) {
-    if (m_fitMode == mode) return;
-    m_fitMode = mode;
+    if (m_camera->fitMode() == mode) return;
+    m_camera->setFitMode(mode);
     qCDebug(logWidget) << "viewRectFitMode:" << (int)mode;
     // 立即按新模式重排
     fitViewRectToPlotArea(FitStrategy::KeepCenter);
@@ -136,7 +174,7 @@ void QChartWidget::setFixedAspectRatio(qreal ratio) {
         qWarning() << "setFixedAspectRatio: ratio must be > 0, ignoring" << ratio;
         return;
     }
-    m_fixedAspectRatio = ratio;
+    m_camera->setFixedAspectRatio(ratio);
     qCDebug(logWidget) << "fixedAspectRatio:" << ratio;
     fitViewRectToPlotArea(FitStrategy::KeepCenter);
     invalidateBackground();
@@ -146,116 +184,24 @@ void QChartWidget::setFixedAspectRatio(qreal ratio) {
 void QChartWidget::fitViewRectToPlotArea(FitStrategy strategy) {
     if (!m_projection) return;
 
-    // Stretch 模式：不调整 viewRect，直接拉伸
-    if (m_fitMode == ViewRectFitMode::Stretch) return;
-
-    if (m_plotArea.width() <= 0.0 || m_plotArea.height() <= 0.0) return;
-
-    // 目标长宽比：Fixed 模式用用户指定的，否则用 plotArea 的
-    qreal targetAspect = (m_fitMode == ViewRectFitMode::Fixed)
-        ? m_fixedAspectRatio
-        : m_plotArea.width() / m_plotArea.height();
-
-    qreal viewAspect = m_viewRect.width() / m_viewRect.height();
-
-    // 长宽比已经匹配（1% 容差）→ 跳过
-    if (qAbs(targetAspect - viewAspect) < 0.01 * targetAspect) return;
-
-    qCDebug(logWidget) << "fitViewRectToPlotArea: before" << m_viewRect
-                       << "mode=" << (int)m_fitMode
-                       << "strategy=" << (int)strategy
-                       << "targetAspect=" << targetAspect << "viewAspect=" << viewAspect;
-
-    bool expand; // true=扩张，false=收缩
-    if (m_fitMode == ViewRectFitMode::Crop) {
-        // Crop：收缩较大维度，裁掉超出部分
-        expand = false;
-    } else {
-        // Fit / Fixed：扩张较小维度，数据完整
-        expand = true;
+    // 相机只做 viewRect 几何拟合；dataBounds 依赖 projection，故由 Widget 反算。
+    // 仅在 viewRect 实际变化时反算，保持与旧实现一致（避免 Polar 下
+    // computeDataBounds(computeViewRect(dataBounds)) 的往返漂移）。
+    if (m_camera->fitViewRectToPlotArea(m_plotArea, strategy)) {
+        m_dataBounds = m_projection->computeDataBounds(m_camera->viewRect());
+        qCDebug(logWidget) << "fitViewRectToPlotArea: after" << m_camera->viewRect()
+                           << "dataBounds=" << m_dataBounds;
     }
-
-    if (expand) {
-        switch (strategy) {
-        case FitStrategy::KeepWidth:
-            // 用户设了 dim0 → 锁宽度，只调高度
-            {
-                qreal newH = m_viewRect.width() / targetAspect;
-                qreal d = (newH - m_viewRect.height()) / 2.0;
-                m_viewRect.adjust(0.0, -d, 0.0, d);
-            }
-            break;
-        case FitStrategy::KeepHeight:
-            // 用户设了 dim1 → 锁高度，只调宽度
-            {
-                qreal newW = m_viewRect.height() * targetAspect;
-                qreal d = (newW - m_viewRect.width()) / 2.0;
-                m_viewRect.adjust(-d, 0.0, d, 0.0);
-            }
-            break;
-        case FitStrategy::KeepCenter:
-            // 初始化/布局变化 → 双向均等扩张
-            if (targetAspect > viewAspect) {
-                qreal newW = m_viewRect.height() * targetAspect;
-                qreal d = (newW - m_viewRect.width()) / 2.0;
-                m_viewRect.adjust(-d, 0.0, d, 0.0);
-            } else {
-                qreal newH = m_viewRect.width() / targetAspect;
-                qreal d = (newH - m_viewRect.height()) / 2.0;
-                m_viewRect.adjust(0.0, -d, 0.0, d);
-            }
-            break;
-        }
-    } else {
-        // Crop：收缩较大维度
-        if (viewAspect > targetAspect) {
-            // 太宽 → 收缩宽度
-            qreal newW = m_viewRect.height() * targetAspect;
-            qreal d = (m_viewRect.width() - newW) / 2.0;
-            m_viewRect.adjust(d, 0.0, -d, 0.0);
-        } else {
-            // 太高 → 收缩高度
-            qreal newH = m_viewRect.width() / targetAspect;
-            qreal d = (m_viewRect.height() - newH) / 2.0;
-            m_viewRect.adjust(0.0, d, 0.0, -d);
-        }
-    }
-
-    // 反算可见数据范围
-    m_dataBounds = m_projection->computeDataBounds(m_viewRect);
-
-    qCDebug(logWidget) << "fitViewRectToPlotArea: after" << m_viewRect
-                       << "dataBounds=" << m_dataBounds;
 }
 
 // ===== 坐标转换（对所有投影类型通用）=====
+// 线性映射的唯一实现在 QChartCamera；此处仅为 Widget 公共 API 转发。
 QPointF QChartWidget::cartesianToPixel(qreal cx, qreal cy) const {
-    // View Cartesian → ViewNorm → Pixel（线性）
-	// c就是Cartesian；n就是Normalized；p就是Pixel
-    qreal nx = (cx - m_viewRect.left()) / m_viewRect.width();
-    qreal ny = (cy - m_viewRect.top())  / m_viewRect.height();
-    qreal px = m_plotArea.left() + nx * m_plotArea.width();
-    qreal py = m_plotArea.bottom() - ny * m_plotArea.height();
-
-    static bool first = true;
-    if (first) {
-        qCDebug(logRender) << "cartesianToPixel: (cx,cy)=(" << cx << "," << cy
-            << ") → (nx,ny)=(" << nx << "," << ny
-            << ") → (px,py)=(" << px << "," << py << ")";
-        first = false;
-    }
-
-    return QPointF(px, py);
+    return m_camera->cartesianToPixel(m_plotArea, cx, cy);
 }
 
 QPointF QChartWidget::pixelToCartesian(const QPointF& pixel) const {
-    // Pixel → ViewNorm → View Cartesian（逆线性）
-    qreal nx = (pixel.x() - m_plotArea.left()) / m_plotArea.width();
-    qreal ny = (m_plotArea.bottom() - pixel.y()) / m_plotArea.height();
-    return QPointF(
-        m_viewRect.left() + nx * m_viewRect.width(),
-        m_viewRect.top()  + ny * m_viewRect.height()
-    );
+    return m_camera->pixelToCartesian(m_plotArea, pixel);
 }
 
 // ===== 视窗操作 =====
@@ -264,10 +210,10 @@ QPointF QChartWidget::pixelToCartesian(const QPointF& pixel) const {
 // 不做 fit 修正——长宽比由调用者负责（QViewRectAnimation 内部用 plotArea
 // 快照保证）。fit 只在数据范围/投影变更时发生
 void QChartWidget::setViewRect(const QRectF& r) {
-    m_viewRect = r;
+    m_camera->setViewRect(r);
     if (m_projection)
-        m_dataBounds = m_projection->computeDataBounds(m_viewRect);
-    qCDebug(logWidget) << "setViewRect:" << r << "→ viewRect=" << m_viewRect
+        m_dataBounds = m_projection->computeDataBounds(m_camera->viewRect());
+    qCDebug(logWidget) << "setViewRect:" << r << "→ viewRect=" << m_camera->viewRect()
                        << "dataBounds=" << m_dataBounds;
     invalidateBackground();
     invalidateForeground();
@@ -275,12 +221,12 @@ void QChartWidget::setViewRect(const QRectF& r) {
 }
 
 void QChartWidget::panViewCartesian(qreal dx, qreal dy) {
-    m_viewRect.translate(dx, dy);
+    m_camera->panViewCartesian(dx, dy);
     // 重算 dataBounds
     if (m_projection)
-        m_dataBounds = m_projection->computeDataBounds(m_viewRect);
+        m_dataBounds = m_projection->computeDataBounds(m_camera->viewRect());
     qCDebug(logWidget) << "panViewCartesian: dx=" << dx << "dy=" << dy
-                       << "→ viewRect=" << m_viewRect
+                       << "→ viewRect=" << m_camera->viewRect()
                        << "dataBounds=" << m_dataBounds;
     invalidateBackground();
     invalidateForeground();
@@ -289,17 +235,12 @@ void QChartWidget::panViewCartesian(qreal dx, qreal dy) {
 
 void QChartWidget::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY) {
     if (factorX <= 0.0 || factorY <= 0.0 || !m_projection) return;
-    // 以 (cx, cy) 为中心缩放 viewRect，两维独立（禁交互维度传 1.0）
-    qreal newW = m_viewRect.width()  * factorX;
-    qreal newH = m_viewRect.height() * factorY;
-    qreal newLeft = cx - (cx - m_viewRect.left()) * factorX;
-    qreal newTop  = cy - (cy - m_viewRect.top())  * factorY;
-    m_viewRect = QRectF(newLeft, newTop, newW, newH);
-    m_dataBounds = m_projection->computeDataBounds(m_viewRect);
+    m_camera->zoomViewCartesian(cx, cy, factorX, factorY);
+    m_dataBounds = m_projection->computeDataBounds(m_camera->viewRect());
     fitViewRectToPlotArea(FitStrategy::KeepCenter);
     qCDebug(logWidget) << "zoomViewCartesian: factorX=" << factorX
                        << "factorY=" << factorY
-                       << "→ viewRect=" << m_viewRect
+                       << "→ viewRect=" << m_camera->viewRect()
                        << "dataBounds=" << m_dataBounds;
     invalidateBackground();
     invalidateForeground();
@@ -321,9 +262,9 @@ void QChartWidget::setDataRangeDim0(qreal min, qreal max) {
     m_dataBounds.setLeft(min);
     m_dataBounds.setWidth(max - min);
     if (m_projection) {
-        m_viewRect = m_projection->computeViewRect(m_dataBounds);
+        m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
         qCDebug(logWidget) << "setDataRangeDim0:" << min << "→" << max
-                           << "viewRect=" << m_viewRect;
+                           << "viewRect=" << m_camera->viewRect();
         fitViewRectToPlotArea(FitStrategy::KeepWidth);
     }
     invalidateBackground();
@@ -335,9 +276,9 @@ void QChartWidget::setDataRangeDim1(qreal min, qreal max) {
     m_dataBounds.setTop(min);
     m_dataBounds.setHeight(max - min);
     if (m_projection) {
-        m_viewRect = m_projection->computeViewRect(m_dataBounds);
+        m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
         qCDebug(logWidget) << "setDataRangeDim1:" << min << "→" << max
-                           << "viewRect=" << m_viewRect;
+                           << "viewRect=" << m_camera->viewRect();
         fitViewRectToPlotArea(FitStrategy::KeepHeight);
     }
     invalidateBackground();
@@ -349,10 +290,10 @@ void QChartWidget::setProjection(std::unique_ptr<QChartProjection> proj) {
     m_projection = std::move(proj);
     if (m_projection && !m_viewInitialized) {
         m_dataBounds = m_projection->defaultDataBounds();
-        m_viewRect = m_projection->computeViewRect(m_dataBounds);
+        m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
         m_viewInitialized = true;
         qCDebug(logWidget) << "setProjection: viewRect initialized from defaultDataBounds:"
-                           << m_viewRect;
+                           << m_camera->viewRect();
         fitViewRectToPlotArea(FitStrategy::KeepCenter);
     }
     // 同步 projection 类型给所有 Layer
@@ -374,6 +315,16 @@ void QChartWidget::setMargins(qreal l, qreal t, qreal r, qreal b) {
 }
 
 void QChartWidget::layoutAxes() {
+    m_plotArea = plotAreaForSize(this->size());
+    qCDebug(logWidget) << "layoutAxes: plotArea=" << m_plotArea;
+    // 注意：resize 只更新 plotArea，不动 viewRect。
+    // viewRect 是数据窗口（相机状态），plotArea 是像素窗口——两者解耦：
+    // 拉伸窗口 = 变相调整视图（像素映射拉伸），fit 只在数据范围/投影
+    // 显式变更时发生（setDataRange/setProjection/setViewRectFitMode）。
+    // 若 resize 也去 fit，会从"已收缩的当前值"反复收缩 → 累积漂移
+}
+
+QRectF QChartWidget::plotAreaForSize(const QSize& size) const {
     qreal left   = m_marginLeft;
     qreal top    = m_marginTop;
     qreal right  = m_marginRight;
@@ -392,25 +343,20 @@ void QChartWidget::layoutAxes() {
         }
     }
 
-    m_plotArea = QRectF(left, top,
-                        width() - left - right,
-                        height() - top - bottom);
-    qCDebug(logWidget) << "layoutAxes: plotArea=" << m_plotArea;
-    // 注意：resize 只更新 plotArea，不动 viewRect。
-    // viewRect 是数据窗口（相机状态），plotArea 是像素窗口——两者解耦：
-    // 拉伸窗口 = 变相调整视图（像素映射拉伸），fit 只在数据范围/投影
-    // 显式变更时发生（setDataRange/setProjection/setViewRectFitMode）。
-    // 若 resize 也去 fit，会从"已收缩的当前值"反复收缩 → 累积漂移
+    return QRectF(left, top,
+                  size.width() - left - right,
+                  size.height() - top - bottom);
 }
 
 // ===== 缓存控制 =====
-void QChartWidget::invalidateBackground() { m_bgDirty = true; update(); }
-void QChartWidget::invalidateForeground() { m_fgDirty = true; update(); }
+void QChartWidget::invalidateBackground() { m_renderer->invalidateBackground(); update(); }
+void QChartWidget::invalidateForeground() { m_renderer->invalidateForeground(); update(); }
 void QChartWidget::invalidateLayout()      { m_layoutDirty = true; update(); }
 
 // ===== 事件 =====
 void QChartWidget::resizeEvent(QResizeEvent*) {
-    m_bgDirty = m_fgDirty = true;
+    m_renderer->invalidateBackground();
+    m_renderer->invalidateForeground();
     layoutAxes();
 }
 
@@ -418,133 +364,201 @@ void QChartWidget::paintEvent(QPaintEvent*) {
     if (m_layoutDirty) {
         layoutAxes();
         m_layoutDirty = false;
-        m_bgDirty = true;
-        m_fgDirty = true;
+        m_renderer->invalidateBackground();
+        m_renderer->invalidateForeground();
     }
 
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
+    // 组装场景快照，渲染器只依赖快照 + 目标 device，不反向依赖 Widget
+    QChartScene scene;
+    scene.plotArea   = m_plotArea;
+    scene.dataBounds = m_dataBounds;
+    scene.viewRect   = m_camera->viewRect();
+    scene.projection = m_tempProjection ? m_tempProjection : m_projection.get();
+    scene.axes       = m_axes;
+    scene.layers     = m_layers;
+    scene.backgroundColor = backgroundColor();   // 有效色（override 或主题默认）
+    scene.legend     = m_legend;
+    scene.legendItems = m_legendItems;
 
-    if (!m_cachingEnabled) {
-        drawBackground(&p);
-        drawForeground(&p);
-        return;
-    }
-
-    qreal dpr = devicePixelRatioF();
-    QSize sz = size() * dpr;
-
-    if (m_bgDirty || m_bgCache.isNull()) {
-        m_bgCache = QPixmap(sz);
-        m_bgCache.setDevicePixelRatio(dpr);
-        m_bgCache.fill(Qt::transparent);
-        QPainter bg(&m_bgCache);
-        bg.setRenderHint(QPainter::Antialiasing, true);
-        drawBackground(&bg);
-        m_bgDirty = false;
-    }
-    p.drawPixmap(0, 0, m_bgCache);
-
-    if (m_fgDirty || m_fgCache.isNull()) {
-        m_fgCache = QPixmap(sz);
-        m_fgCache.setDevicePixelRatio(dpr);
-        m_fgCache.fill(Qt::transparent);
-        QPainter fg(&m_fgCache);
-        fg.setRenderHint(QPainter::Antialiasing, true);
-        drawForeground(&fg);
-        m_fgDirty = false;
-    }
-    p.drawPixmap(0, 0, m_fgCache);
+    m_renderer->render(scene, this);
 }
 
-// ===== drawBackground =====
-void QChartWidget::drawBackground(QPainter* p) {
-    p->fillRect(m_plotArea, Qt::transparent);
-    QFont f = p->font();
-    f.setPointSize(f.pointSize() - 1);
-    p->setFont(f);
+// ===== 主题 =====
+void QChartWidget::setTheme(QChartTheme::Preset preset) {
+    setTheme(preset == QChartTheme::Preset::Dark ? QChartTheme::dark()
+                                                 : QChartTheme::light());
+}
 
-    // 构建 DrawContext —— 所有 draw 调用共用
-    DrawContext ctx;
-    ctx.plotArea   = m_plotArea;
-    ctx.dataBounds = m_dataBounds;
-    ctx.viewRect   = m_viewRect;
-    ctx.projection = m_tempProjection ? m_tempProjection : m_projection.get();
+void QChartWidget::setTheme(const QChartTheme& theme) {
+    m_theme = theme;
+    pushTheme();
+    invalidateBackground();
+    invalidateForeground();
+}
 
-    qCDebug(logRender) << "drawBackground: plotArea=" << m_plotArea
-        << "viewRect=" << m_viewRect
-        << "dataBounds=" << m_dataBounds
-        << "projection type=" << (m_projection ? (int)m_projection->type() : -1);
+void QChartWidget::setBackgroundColor(const QColor& c) {
+    m_backgroundColorOverride = c;
+    invalidateBackground();
+}
 
-    // ── 绘制所有轴 ──
-    for (auto* a : m_axes) {
-        if (!a || !a->isVisible()) continue;
+void QChartWidget::clearBackgroundColor() {
+    m_backgroundColorOverride.reset();
+    invalidateBackground();
+}
 
-        qCDebug(logRender) << "drawBackground: drawing axis alignment=" << a->alignment()
-            << "color=" << a->color()
-            << "isInterior=" << (a->alignment() == Qt::AlignHCenter || a->alignment() == Qt::AlignVCenter);
+QColor QChartWidget::backgroundColor() const {
+    return m_backgroundColorOverride.value_or(m_theme.backgroundColor);
+}
 
-        bool isInterior = (a->alignment() == Qt::AlignHCenter
-                        || a->alignment() == Qt::AlignVCenter);
-        if (isInterior) {
-            // 数据主脊：画在 offset = 0 的位置（通过 dataBounds 确定默认位置）
-            // offset=0 意味着画在 Numeric dim0=0 或 dim1=0 的等值线上
-            // 对于 Cartesian，这条线通过 plotArea；Polar 下它通过原点
-            qreal defaultOffset = 0.0;
-            if (a->alignment() == Qt::AlignHCenter)
-                defaultOffset = ctx.dataBounds.top();  // Y 维度在默认位置
-            else
-                defaultOffset = ctx.dataBounds.left(); // X 维度在默认位置
+void QChartWidget::setFollowSystemPalette(bool on) {
+    m_followSystemPalette = on;
+}
 
-            QString nullLabel = "";
-            p->save();
-            p->setClipRect(m_plotArea);
-            a->drawAtPosition(p, ctx, defaultOffset,
-                              /*axisLine=*/true, /*labels=*/false, /*ticks=*/true, /*label=*/nullLabel, /*pen=*/nullptr);
-            p->restore();
-        } else {
-            // 边框轴：画在 plotArea 边缘
-            a->drawAtEdge(p, ctx,
-                          /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+bool QChartWidget::event(QEvent* e) {
+    // A4：系统深/浅自动跟随。paletteChanged 信号在 Qt 6.4 已废弃，
+    // 改用 QEvent::ApplicationPaletteChange（setPalette 时同步投递给所有 widget）。
+    if (e->type() == QEvent::ApplicationPaletteChange && m_followSystemPalette) {
+        const QPalette& pal = QGuiApplication::palette();
+        setTheme(pal.color(QPalette::Window).lightness() < 128
+                 ? QChartTheme::Preset::Dark
+                 : QChartTheme::Preset::Light);
+    }
+    return QWidget::event(e);
+}
+
+void QChartWidget::pushTheme() {
+    // 轴 / 网格 / 系列 / 图例文字色（A5：系列按 add 顺序循环取色，重排索引）
+    for (auto* a : m_axes)
+        if (a) a->setThemeColor(m_theme.axisColor);
+
+    if (m_legend)
+        m_legend->setThemeTextColor(m_theme.textColor);
+
+    m_seriesColorIndex = 0;   // 重排：按 m_layers add 顺序重新分配调色板
+    for (auto* g : m_layers) {
+        if (!g) continue;
+        g->setThemeGridColor(m_theme.gridColor);
+        for (auto* s : g->seriesList())
+            assignSeriesPaletteColor(s);
+    }
+}
+
+bool QChartWidget::assignSeriesPaletteColor(QChartSeries* s) {
+    if (!s) return false;
+    if (s->colorOverride()) return false;               // 显式色不占位（可预测）
+    if (m_theme.seriesPalette.isEmpty()) return false;  // 空调色板退化为不配色
+    s->setThemeColor(m_theme.seriesPalette[m_seriesColorIndex % m_theme.seriesPalette.size()]);
+    ++m_seriesColorIndex;
+    return true;
+}
+
+void QChartWidget::rebuildLegendItems() {
+    m_legendItems.clear();
+    for (auto* g : m_layers) {
+        if (!g) continue;
+        for (auto* s : g->seriesList()) {
+            if (!s) continue;
+            if (s->name().isEmpty()) continue;   // B3：跳过空 name
+            m_legendItems.append(s);
         }
     }
-
-    // ── 绘制网格（取最后一个几何体）──
-    if (!m_layers.isEmpty()) {
-        auto* geo = m_layers.last();
-        p->save();
-        p->setClipRect(m_plotArea);
-        geo->drawGrid(p, ctx);
-        p->restore();
-    }
-
-    // ── 调试：黄色 plotArea 边框 ──
-    if (logWidget().isDebugEnabled()) {
-        p->save();
-        p->setPen(Qt::yellow);
-        p->drawRect(m_plotArea);
-        p->restore();
-    }
 }
 
-// ===== drawForeground =====
-void QChartWidget::drawForeground(QPainter* p) {
-    DrawContext ctx;
-    ctx.plotArea   = m_plotArea;
-    ctx.dataBounds = m_dataBounds;
-    ctx.viewRect   = m_viewRect;
-    ctx.projection = m_tempProjection ? m_tempProjection : m_projection.get();
+// ===== 导出（C1/C3/C4/C5，统一走 renderUncached）=====
+QChartScene QChartWidget::buildExportScene(QChartExportScope scope, const QSize& size,
+                                           QSizeF& outDeviceSize) const {
+    QChartScene scene;
+    scene.dataBounds = m_dataBounds;
+    scene.viewRect   = m_camera->viewRect();
+    scene.projection = m_projection.get();   // 导出用真实投影（不用 temp 动画投影）
+    scene.axes       = m_axes;
+    scene.layers     = m_layers;
+    scene.legend     = m_legend;
+    scene.legendItems = m_legendItems;
+    scene.exportMode = true;   // 导出模式：跳过调试黄框等屏显专用绘制
+    // C5：透明开关开启 → 背景置 invalid（不填充）
+    scene.backgroundColor = m_exportTransparentBackground ? QColor() : backgroundColor();
 
-    for (auto* g : m_layers) {
-        p->save();
-        p->setClipRect(m_plotArea);
-        g->drawAllSeries(p, ctx);
-        p->restore();
+    if (scope == QChartExportScope::PlotArea) {
+        outDeviceSize = size.isEmpty() ? m_plotArea.size() : QSizeF(size);
+        scene.plotArea = QRectF(QPointF(0, 0), outDeviceSize);   // 整设备 = plotArea
+    } else {
+        outDeviceSize = size.isEmpty() ? QSizeF(this->size()) : QSizeF(size);
+        scene.plotArea = plotAreaForSize(outDeviceSize.toSize()); // 等比重算（含边距/轴）
     }
+    return scene;
+}
+
+bool QChartWidget::saveAsPng(const QString& path, const QSize& size, qreal devicePixelRatio) {
+    return saveAsPng(path, QChartExportScope::WholeWidget, size, devicePixelRatio);
+}
+
+bool QChartWidget::saveAsPng(const QString& path, QChartExportScope scope,
+                             const QSize& size, qreal devicePixelRatio) {
+    if (path.isEmpty() || devicePixelRatio <= 0.0) return false;
+    QSizeF deviceSize;
+    const QChartScene scene = buildExportScene(scope, size, deviceSize);
+
+    // PNG 输出像素 = size * dpr（写进 QImage 的 dpr）
+    QSize pixelSize(qCeil(deviceSize.width() * devicePixelRatio),
+                    qCeil(deviceSize.height() * devicePixelRatio));
+    QImage img(pixelSize, QImage::Format_ARGB32_Premultiplied);
+    img.setDevicePixelRatio(devicePixelRatio);
+    img.fill(Qt::transparent);
+    m_renderer->renderUncached(scene, &img);
+    return img.save(path, "PNG");
+}
+
+bool QChartWidget::saveAsSvg(const QString& path, const QSize& size) {
+    return saveAsSvg(path, QChartExportScope::WholeWidget, size);
+}
+
+bool QChartWidget::saveAsSvg(const QString& path, QChartExportScope scope, const QSize& size) {
+    if (path.isEmpty()) return false;
+    if (!QFileInfo(path).absoluteDir().exists()) return false;   // 非法路径
+    QSizeF deviceSize;
+    const QChartScene scene = buildExportScene(scope, size, deviceSize);
+
+    QSvgGenerator gen;
+    gen.setFileName(path);
+    gen.setSize(deviceSize.toSize());
+    gen.setViewBox(QRectF(QPointF(0, 0), deviceSize));
+    gen.setTitle("QChartWidget");
+    m_renderer->renderUncached(scene, &gen);
+    return QFileInfo::exists(path);   // 写失败则文件不存在 → false
+}
+
+bool QChartWidget::saveAsPdf(const QString& path, const QSize& size) {
+    return saveAsPdf(path, QChartExportScope::WholeWidget, size);
+}
+
+bool QChartWidget::saveAsPdf(const QString& path, QChartExportScope scope, const QSize& size) {
+    if (path.isEmpty()) return false;
+    if (!QFileInfo(path).absoluteDir().exists()) return false;   // 非法路径
+    QSizeF deviceSize;
+    QChartScene scene = buildExportScene(scope, size, deviceSize);
+    // PDF 无 alpha：忽略透明开关，始终填充背景（design_export.md C5）
+    scene.backgroundColor = backgroundColor();
+
+    QPdfWriter writer(path);
+    writer.setPageSize(QPageSize(deviceSize, QPageSize::Point));
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0));
+    writer.setResolution(72);   // 1 point = 1 px，保证 1:1
+    m_renderer->renderUncached(scene, &writer);
+    return QFileInfo::exists(path);   // 写失败则文件不存在 → false
 }
 
 // ===== 鼠标事件 =====
 void QChartWidget::mousePressEvent(QMouseEvent* e) {
+    // B4：图例点击切换系列可见性（先于 pan 分支）
+    if (e->button() == Qt::LeftButton && m_legend->isVisible()) {
+        QChartSeries* s = m_legend->seriesAt(e->pos(), m_plotArea, m_legendItems);
+        if (s) {
+            s->setVisible(!s->isVisible());
+            return;   // 命中图例：不进入 pan
+        }
+    }
+
     if (e->button() == Qt::LeftButton && m_panEnabled) {
         m_panStart = e->pos();
         m_panning = true;
@@ -578,7 +592,7 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
     DrawContext ctx;
     ctx.plotArea   = m_plotArea;
     ctx.dataBounds = m_dataBounds;
-    ctx.viewRect   = m_viewRect;
+    ctx.viewRect   = m_camera->viewRect();
     ctx.projection = m_tempProjection ? m_tempProjection : m_projection.get();
 
     QChartSeries* hoverSeries = nullptr;

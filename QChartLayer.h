@@ -10,6 +10,7 @@
 #include <QPainter>
 #include <QColor>
 #include <functional>
+#include <optional>
 #include "QChartAxis.h" // DrawContext 在此定义
 
 class QChartSeries;
@@ -61,8 +62,20 @@ public:
     // ===== Grid 样式 =====
     bool isGridVisible() const { return m_gridVisible; }
     void setGridVisible(bool v);
-    QColor gridColor() const { return m_gridColor; }
+    QColor gridColor() const { return m_gridColorOverride.value_or(m_themeGridColor); }
     void setGridColor(const QColor& c);
+    /// 主题注入默认网格色（内部，Widget 推送）：仅当无显式覆盖时才真正变化
+    void setThemeGridColor(const QColor& c) {
+        m_themeGridColor = c;
+        if (!m_gridColorOverride) emit gridChanged();
+    }
+    /// 清除显式覆盖，回到主题默认网格色
+    void clearGridColor() {
+        if (!m_gridColorOverride) return;
+        m_gridColorOverride.reset();
+        emit gridChanged();
+    }
+    std::optional<QColor> gridColorOverride() const { return m_gridColorOverride; }
 
 protected:
     /// 组装 toPixel(lambda): Data(QVariant,QVariant) → Pixel(px,py)
@@ -74,7 +87,8 @@ protected:
     QList<QChartSeries*> m_series;
     CoordinateSystem m_coordSys = CoordinateSystem::Cartesian;
     bool m_gridVisible = true;
-    QColor m_gridColor = QColor(220, 220, 220);
+    std::optional<QColor> m_gridColorOverride;           // 用户显式设过（setGridColor）
+    QColor m_themeGridColor = QColor(220, 220, 220);     // 主题注入默认（setThemeGridColor）
 };
 
 #endif // QCHARTLAYER_H

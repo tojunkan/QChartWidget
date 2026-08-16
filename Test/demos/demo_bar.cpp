@@ -16,13 +16,11 @@ QChartWidget* buildDemoBar() {
     w->setViewRectFitMode(ViewRectFitMode::Stretch); // Cartesian 下直接拉伸即可
 
     auto* xAxis = new QBarCategoryAxis(w, Qt::AlignBottom);
-    xAxis->setColor(Qt::white);
     w->addAxis(xAxis);
     xAxis->setCategories({"苹果","香蕉","橙子","葡萄","西瓜"});
     xAxis->setNumericMapping(-0.5, 4.5);  // 槽位居中：索引0→-0.5, 索引4→4.5
 
     auto* valAxis = new QValueAxis(w, Qt::AlignLeft);
-    valAxis->setColor(Qt::white);
     w->addAxis(valAxis);
     valAxis->setRange(0, 100);
 

@@ -35,7 +35,9 @@ int main(int argc, char* argv[]) {
     }
     g_logStream.setDevice(&g_logFile);
     qInstallMessageHandler(logToFile);
-    QLoggingCategory::setFilterRules("chart.*.verbose=false");
+    // 关闭所有 *.verbose 每帧细节日志（verbose 分类默认已静默，此规则确保显式关闭；
+    // 注意：Qt 规则的 '*' 通配符只能出现在模式末尾，`chart.*.verbose` 是非法规则会被忽略）
+    QLoggingCategory::setFilterRules("*.verbose=false");
 
     QApplication app(argc, argv);
     qDebug() << "========== 测试开始 ==========";
@@ -43,7 +45,7 @@ int main(int argc, char* argv[]) {
 
     // ── 演示调用表 ──
     //   无参数：全部启动；带参数：只启动指定名称
-    //   用法：QChartDemo.exe [polar bar pendulum sort camera swirl stress]
+    //   用法：QChartDemo.exe [polar bar pendulum sort camera swirl stress theme]
     struct Demo { const char* name; QChartWidget* (*build)(); };
     const Demo demos[] = {
         { "polar",    buildDemoPolar },
@@ -53,6 +55,7 @@ int main(int argc, char* argv[]) {
         { "camera",   buildDemoCamera },
         { "swirl",    buildDemoSwirl },
         { "stress",   buildDemoStress },
+        { "theme",    buildDemoTheme },
     };
 
     QStringList selected;
@@ -74,7 +77,7 @@ int main(int argc, char* argv[]) {
         qDebug() << "已启动演示:" << d.name;
     }
     if (shown == 0) {
-        qWarning() << "没有匹配的演示。可用名称: polar bar pendulum sort camera swirl stress";
+        qWarning() << "没有匹配的演示。可用名称: polar bar pendulum sort camera swirl stress theme";
         return 1;
     }
 

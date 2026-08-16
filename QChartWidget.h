@@ -1,6 +1,7 @@
 // QChartWidget.h —— 图表控件
-// 持有唯一 Projection、所有 Axis 和 Layer，管理 viewRect + plotArea
-// 坐标链路：View Cartesian → ViewNorm → Pixel（在此完成）
+// 持有唯一 Projection、所有 Axis 和 Layer；viewRect 几何已抽到 QChartCamera，
+// 这里保留 m_dataBounds（依赖 projection->computeDataBounds）与交互/绘制编排。
+// 坐标链路：View Cartesian → ViewNorm → Pixel（由 QChartCamera 完成）
 #ifndef QCHARTWIDGET_H
 #define QCHARTWIDGET_H
 #include <QWidget>
@@ -9,18 +10,18 @@
 #include <QPoint>
 #include <QRectF>
 #include <memory>
+#include <optional>
+#include "QChartCamera.h"  // ViewRectFitMode + 相机
 #include "QChartLayer.h"
 #include "QChartProjection.h"
+#include "QChartRenderer.h" // QChartScene + 渲染器接口
+#include "QChartTheme.h"    // QChartTheme + Preset
+#include "QChartLegend.h"   // 图例（内联方法需完整类型）
 
 class QChartSeries;
 
-// viewRect 与 plotArea 长宽比匹配策略
-enum class ViewRectFitMode {
-    Stretch,  // 不调整 viewRect——cartesianToPixel 直接拉伸，图形可能变形
-    Fit,      // 扩张 viewRect 较小维度以匹配 plotArea 长宽比，数据始终完整（默认）
-    Crop,     // 收缩 viewRect 较大维度以匹配 plotArea 长宽比，可能裁掉部分数据
-    Fixed     // 强制 viewRect 匹配指定长宽比（m_fixedAspectRatio），忽略 plotArea
-};
+// 导出范围（C3：默认全 widget；「仅 plotArea」可选，会丢刻度标签/轴标题）
+enum class QChartExportScope { WholeWidget, PlotArea };
 
 class QChartWidget : public QWidget {
     Q_OBJECT
@@ -66,7 +67,7 @@ public:
     /// 动画结束后必须 clearTemporaryProjection()
     void setTemporaryProjection(QChartProjection* p) { m_tempProjection = p; invalidateForeground(); }
     void clearTemporaryProjection() { m_tempProjection = nullptr; invalidateForeground(); }
-    QRectF viewRect() const { return m_viewRect; }
+    QRectF viewRect() const { return m_camera->viewRect(); }
     QRectF dataBounds() const { return m_dataBounds; }
 
     // ===== 布局 =====
@@ -74,14 +75,52 @@ public:
     void setMargins(qreal l, qreal t, qreal r, qreal b);
 
     // ===== viewRect 匹配策略 =====
-    ViewRectFitMode viewRectFitMode() const { return m_fitMode; }
+    ViewRectFitMode viewRectFitMode() const { return m_camera->fitMode(); }
     void setViewRectFitMode(ViewRectFitMode mode);
-    qreal fixedAspectRatio() const { return m_fixedAspectRatio; }
+    qreal fixedAspectRatio() const { return m_camera->fixedAspectRatio(); }
     void setFixedAspectRatio(qreal ratio);
 
+    // ===== 主题 =====
+    /// 一键切换预设主题（A2）
+    void setTheme(QChartTheme::Preset preset);
+    /// 进阶：自定义主题（同 struct）
+    void setTheme(const QChartTheme& theme);
+    /// 当前应用的主题（base，不含 override）
+    QChartTheme theme() const { return m_theme; }
+
+    // 背景逐项覆盖（override 模式，与轴/网格/系列一致）
+    void setBackgroundColor(const QColor& c);
+    void clearBackgroundColor();
+    QColor backgroundColor() const;
+
+    // 系统深/浅自动跟随（A4：默认关）
+    void setFollowSystemPalette(bool on);
+    bool followSystemPalette() const { return m_followSystemPalette; }
+
+    // ===== 图例（Phase 1 overlay）=====
+    QChartLegend* legend() const { return m_legend; }
+    void setLegendVisible(bool v) { m_legend->setVisible(v); }
+    bool isLegendVisible() const { return m_legend->isVisible(); }
+    void setLegendAlignment(Qt::Alignment a) { m_legend->setAlignment(a); }
+    /// 当前图例条目（汇总所有 layer、跳过空 name、按 add 顺序；供测试/交互）
+    QList<QChartSeries*> legendItems() const { return m_legendItems; }
+
+    // ===== 导出（C1/C3/C4/C5）=====
+    /// 便捷重载（默认 WholeWidget）
+    bool saveAsPng(const QString& path, const QSize& size = {}, qreal devicePixelRatio = 1.0);
+    bool saveAsSvg(const QString& path, const QSize& size = {});
+    bool saveAsPdf(const QString& path, const QSize& size = {});
+    /// 显式范围重载
+    bool saveAsPng(const QString& path, QChartExportScope scope, const QSize& size = {}, qreal devicePixelRatio = 1.0);
+    bool saveAsSvg(const QString& path, QChartExportScope scope, const QSize& size = {});
+    bool saveAsPdf(const QString& path, QChartExportScope scope, const QSize& size = {});
+    /// 透明背景开关（C5：默认 false = 用主题背景填充）
+    void setExportTransparentBackground(bool v) { m_exportTransparentBackground = v; }
+    bool exportTransparentBackground() const { return m_exportTransparentBackground; }
+
     // ===== 缓存与交互 =====
-    bool isCachingEnabled() const { return m_cachingEnabled; }
-    void setCachingEnabled(bool v) { m_cachingEnabled = v; update(); }
+    bool isCachingEnabled() const { return m_renderer->isCachingEnabled(); }
+    void setCachingEnabled(bool v) { m_renderer->setCachingEnabled(v); update(); }
     bool isPanEnabled() const { return m_panEnabled; }
     void setPanEnabled(bool v) { m_panEnabled = v; }
     bool isZoomEnabled() const { return m_zoomEnabled; }
@@ -98,6 +137,7 @@ signals:
 protected:
     void paintEvent(QPaintEvent*) override;
     void resizeEvent(QResizeEvent*) override;
+    bool event(QEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -105,11 +145,10 @@ protected:
     void leaveEvent(QEvent*) override;
 
     virtual void layoutAxes();
-    virtual void drawBackground(QPainter* p);
-    virtual void drawForeground(QPainter* p);
 
     /// 调整 viewRect 使长宽比匹配 plotArea——Polar 下圆不变椭圆
-    enum class FitStrategy { KeepWidth, KeepHeight, KeepCenter };
+    /// 只负责触发相机拟合几何 + 反算 dataBounds（dataBounds 依赖 projection，故留在 Widget）
+    using FitStrategy = QChartCamera::FitStrategy;
     void fitViewRectToPlotArea(FitStrategy strategy);
 
     /// 悬停 tooltip 内容：命中点的 Data → Numeric 坐标
@@ -122,21 +161,17 @@ protected:
     // ===== 视窗状态 =====
     std::unique_ptr<QChartProjection> m_projection;
     QChartProjection* m_tempProjection = nullptr; // 动画临时投影（非持有，仅渲染用）
-    QRectF m_viewRect;              // View Cartesian 窗口（主状态）
-    QRectF m_dataBounds;            // 对应的 Numeric 范围（从 viewRect 反算）
+    std::unique_ptr<QChartCamera> m_camera;   // viewRect 几何 + fit 策略 + View↔Pixel 映射
+    std::unique_ptr<QChartRenderer> m_renderer; // 渲染后端（缓存 + 绘制编排）
+    QRectF m_dataBounds;            // 对应的 Numeric 范围（从 viewRect 反算，Widget 持有）
     bool m_viewInitialized = false; // 是否已初始化 viewRect
-
-    // viewRect 与 plotArea 的匹配策略
-    ViewRectFitMode m_fitMode = ViewRectFitMode::Fit;
-    qreal m_fixedAspectRatio = 1.0; // Fixed 模式下使用
 
     QList<QChartLayer*> m_layers;
     QList<QChartAxis*> m_axes;
     QRectF m_plotArea;
 
-    // 缓存
-    QPixmap m_bgCache, m_fgCache;
-    bool m_bgDirty = true, m_fgDirty = true, m_layoutDirty = true, m_cachingEnabled = true;
+    // 布局脏标记（缓存脏标记已迁入渲染器）
+    bool m_layoutDirty = true;
 
     // 交互
     bool m_panEnabled = true, m_zoomEnabled = true;
@@ -150,6 +185,28 @@ protected:
     qreal m_marginTop    = 20.0;
     qreal m_marginRight  = 20.0;
     qreal m_marginBottom = 20.0;
+
+private:
+    /// 推送当前主题默认色到所有子组件（axis/layer/series/legend，A5 调色板循环）
+    void pushTheme();
+    /// A5：给无 override 的 series 分配 palette[index % size]，推进索引；
+    /// 显式色/空调色板时不分配、不推进。返回是否分配。
+    bool assignSeriesPaletteColor(QChartSeries* s);
+    /// 重建 m_legendItems（汇总所有 layer、跳过空 name、按 add 顺序）
+    void rebuildLegendItems();
+    /// 给定尺寸下重算 plotArea（复用 layoutAxes 的 margin/sizeHint 逻辑，供 WholeWidget 导出）
+    QRectF plotAreaForSize(const QSize& size) const;
+    /// 组装导出场景：按 scope/size 计算设备尺寸与 plotArea
+    QChartScene buildExportScene(QChartExportScope scope, const QSize& size,
+                                 QSizeF& outDeviceSize) const;
+
+    QChartTheme m_theme = QChartTheme::light();
+    std::optional<QColor> m_backgroundColorOverride;   // 显式背景覆盖（setBackgroundColor）
+    bool m_followSystemPalette = false;
+    int m_seriesColorIndex = 0;                        // A5 全局 add 顺序索引（跨 layer）
+    QChartLegend* m_legend = nullptr;                  // 图例（构造函数创建，parented）
+    QList<QChartSeries*> m_legendItems;                // 图例条目（paint 前重建）
+    bool m_exportTransparentBackground = false;        // C5：导出透明背景开关
 };
 
 #endif

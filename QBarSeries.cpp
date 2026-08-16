@@ -8,7 +8,7 @@
 
 QBarSeries::QBarSeries(const QString& name, QObject* parent)
     : QChartSeries(name, parent) {
-    m_color = QColor("#2196F3");
+    m_themeColor = QColor("#2196F3");
 }
 
 // ===== 数据操作 =====
@@ -64,7 +64,7 @@ void QBarSeries::draw(QPainter* painter,
     if (!m_hasOverride && !toPixel) return;
 
     painter->save();
-    QColor fill = m_fillColor.isValid() ? m_fillColor : m_color;
+    QColor fill = m_fillColor.isValid() ? m_fillColor : color();
     painter->setBrush(fill);
     painter->setPen(m_pen);
 

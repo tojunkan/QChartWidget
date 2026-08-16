@@ -11,3 +11,4 @@ QChartWidget* buildDemoSort();      // 冒泡排序动画
 QChartWidget* buildDemoCamera();    // 相机漫游
 QChartWidget* buildDemoSwirl();     // 投影切换（恒等 ↔ Swirl）
 QChartWidget* buildDemoStress();    // 折线粗筛压力（1M 点缩放）
+QChartWidget* buildDemoTheme();     // 深色模式（主题 + 图例 + 一键导出）

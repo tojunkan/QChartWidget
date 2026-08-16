@@ -20,8 +20,6 @@ QChartWidget* buildDemoCamera() {
 
     auto* xAxis = new QValueAxis(w, Qt::AlignBottom);
     auto* yAxis = new QValueAxis(w, Qt::AlignLeft);
-    xAxis->setColor(Qt::white);
-    yAxis->setColor(Qt::white);
     w->addAxis(xAxis);
     w->addAxis(yAxis);
     xAxis->setRange(-10, 10);

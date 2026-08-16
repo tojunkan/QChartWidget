@@ -21,10 +21,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(BUILD_DEMOS "构建演示程序" ON)
 option(BUILD_TESTS "构建单元测试" ON)
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Svg)
 
 # ---- 库源码 ----
 set(QCHART_SOURCES
+    QChartCamera.cpp
+    QChartRenderer.cpp
+    QPainterChartRenderer.cpp
     QChartAxis.cpp
     QChartLayer.cpp
     QChartSeries.cpp
@@ -45,6 +48,8 @@ set(QCHART_SOURCES
     QViewRectAnimation.cpp
     QProjectionSwitchAnimation.cpp
     QInterpolatedProjection.cpp
+    QChartTheme.cpp
+    QChartLegend.cpp
 )
 
 # ---- 库目标 ----
@@ -54,7 +59,7 @@ add_library(QChartWidget STATIC ${QCHART_SOURCES})
 add_library(QChartWidget::QChartWidget ALIAS QChartWidget)
 
 target_include_directories(QChartWidget PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(QChartWidget PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets)
+target_link_libraries(QChartWidget PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg)
 
 # moc 的唯一持有者：库内所有 Q_OBJECT 类的 moc 在此生成并编入静态库，
 # 消费目标（demo/test）一律关掉 AUTOMOC，避免重复 moc 导致链接符号冲突。
@@ -71,6 +76,7 @@ if(BUILD_DEMOS)
         Test/demos/demo_camera.cpp
         Test/demos/demo_swirl.cpp
         Test/demos/demo_stress.cpp
+        Test/demos/demo_theme.cpp
     )
     # 演示源码不含 Q_OBJECT，moc 全在库内，故关闭 AUTOMOC
     set_target_properties(QChartDemo PROPERTIES AUTOMOC OFF)
@@ -86,10 +92,18 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qbarcategoryaxis.h
         TestUnit/tests/test_qlogaxis.h
         TestUnit/tests/test_qdatetimeaxis.h
+        TestUnit/tests/test_qchartcamera.h
+        TestUnit/tests/test_qchartprojection.h
+        TestUnit/tests/test_qchartrenderer.h
+        TestUnit/tests/test_hittest.h
+        TestUnit/tests/test_qcharttheme.h
+        TestUnit/tests/test_qchartlegend.h
+        TestUnit/tests/test_legend_interact.h
+        TestUnit/tests/test_export.h
     )
 
     # 测试类自身带 Q_OBJECT，但关闭 AUTOMOC 以免重复 moc 库头文件，
-    # 改为仅对 4 个测试头做手动 moc。
+    # 改为仅对测试头做手动 moc。
     qt6_wrap_cpp(QCHART_TEST_MOCS ${QCHART_TEST_HEADERS})
 
     add_executable(QChartTests
@@ -98,6 +112,14 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qbarcategoryaxis.cpp
         TestUnit/tests/test_qlogaxis.cpp
         TestUnit/tests/test_qdatetimeaxis.cpp
+        TestUnit/tests/test_qchartcamera.cpp
+        TestUnit/tests/test_qchartprojection.cpp
+        TestUnit/tests/test_qchartrenderer.cpp
+        TestUnit/tests/test_hittest.cpp
+        TestUnit/tests/test_qcharttheme.cpp
+        TestUnit/tests/test_qchartlegend.cpp
+        TestUnit/tests/test_legend_interact.cpp
+        TestUnit/tests/test_export.cpp
         ${QCHART_TEST_MOCS}
     )
     set_target_properties(QChartTests PROPERTIES AUTOMOC OFF)
@@ -109,4 +131,10 @@ if(BUILD_TESTS)
 
     enable_testing()
     add_test(NAME QChartTests COMMAND QChartTests)
+
+    # 无头跑测试：QGuiApplication 需要平台插件。非 Windows（Linux CI/无 DISPLAY）
+    # 用 offscreen 保证 ctest 可无头执行；Windows 有桌面，走默认平台（可能短暂弹窗）。
+    if(NOT WIN32)
+        set_tests_properties(QChartTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
 endif()

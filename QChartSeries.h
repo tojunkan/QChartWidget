@@ -10,6 +10,7 @@
 #include <QPainter>
 #include <QVariant>
 #include <functional>
+#include <optional>
 
 class QChartSeries : public QObject
 {
@@ -48,12 +49,26 @@ public:
     qreal opacity() const { return m_opacity; }
     void setOpacity(qreal o);
 
-    QColor color() const { return m_color; }
+    QColor color() const { return m_colorOverride.value_or(m_themeColor); }
+    /// 用户显式设色（A3：写 override，永久盖过主题直到 clearColor）
     void setColor(const QColor& c) {
-        if (m_color == c) return;
-        m_color = c;
+        if (m_colorOverride && *m_colorOverride == c) return;
+        m_colorOverride = c;
         emit colorChanged();
     }
+    /// 主题注入默认色（内部，Widget 推送）：仅当无显式覆盖时才真正变化
+    void setThemeColor(const QColor& c) {
+        m_themeColor = c;
+        if (!m_colorOverride) emit colorChanged();
+    }
+    /// 清除显式覆盖，回到主题默认色
+    void clearColor() {
+        if (!m_colorOverride) return;
+        m_colorOverride.reset();
+        emit colorChanged();
+    }
+    /// 显式覆盖（供主题/调色板判断）
+    std::optional<QColor> colorOverride() const { return m_colorOverride; }
 
 signals:
     void nameChanged(const QString&);
@@ -65,6 +80,7 @@ protected:
     QString m_name;
     bool m_visible = true;
     qreal m_opacity = 1.0;
-    QColor m_color;
+    std::optional<QColor> m_colorOverride;   // 用户显式设过（setColor）
+    QColor m_themeColor;                     // 主题注入默认（setThemeColor）
 };
 #endif // QCHARTSERIES_H

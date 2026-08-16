@@ -19,11 +19,9 @@ QChartWidget* buildDemoSort() {
     w->setViewRectFitMode(ViewRectFitMode::Stretch);
 
     auto* xAxis = new QBarCategoryAxis(w, Qt::AlignBottom);
-    xAxis->setColor(Qt::white);
     w->addAxis(xAxis);
 
     auto* yAxis = new QValueAxis(w, Qt::AlignLeft);
-    yAxis->setColor(Qt::white);
     w->addAxis(yAxis);
     yAxis->setRange(0, 10);
 

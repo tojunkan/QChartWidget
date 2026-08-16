@@ -26,6 +26,8 @@ ui_*.h
 # Debug log
 debug.log
 test_log.txt
+# demo 导出产物
+demo_export.*
 
 # CMake build dirs
 build-*/

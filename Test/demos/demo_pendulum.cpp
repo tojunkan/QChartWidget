@@ -19,12 +19,10 @@ QChartWidget* buildDemoPendulum() {
     w->setViewRectFitMode(ViewRectFitMode::Crop); // 物理模拟不能变形
 
     auto* xAxis = new QValueAxis(w, Qt::AlignBottom);
-    xAxis->setColor(Qt::white);
     w->addAxis(xAxis);
     xAxis->setRange(-5, 5);
 
     auto* yAxis = new QValueAxis(w, Qt::AlignLeft);
-    yAxis->setColor(Qt::white);
     w->addAxis(yAxis);
     yAxis->setRange(-5, 1);
 

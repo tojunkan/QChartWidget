@@ -9,7 +9,7 @@
 QScatterSeries::QScatterSeries(const QString& name, QObject* parent)
     : QXYSeries(name, parent) {
     // 默认给个显眼颜色
-    m_color = QColor("#F44336");
+    m_themeColor = QColor("#F44336");
 }
 
 // ===== 绘制 =====
@@ -77,7 +77,7 @@ void QScatterSeries::drawMarker(QPainter* p, const QPointF& pos) const {
 
     // 填充 + 描边
     p->save();
-    QColor fill = (m_fillColor.alpha() == 0) ? m_color : m_fillColor;
+    QColor fill = (m_fillColor.alpha() == 0) ? color() : m_fillColor;
     QBrush brush(fill);
     if (m_pen.style() != Qt::NoPen)
         brush = QBrush(fill);  // 有描边时也填充
