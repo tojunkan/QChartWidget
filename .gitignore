@@ -25,9 +25,14 @@ ui_*.h
 
 # Debug log
 debug.log
+test_log.txt
 
-# Build scripts
-build_qchart.bat
+# CMake build dirs
+build-*/
+
+# Agent local config
+.claude/
+.superpowers/
 
 # QtMsBuild
 QtMsBuild/

@@ -57,6 +57,11 @@ void QChartWidget::addLayer(QChartLayer* g) {
 
     // 动画覆盖层每帧变化 → 刷新前景缓存（不动背景/布局）
     connect(g, &QChartLayer::seriesAdded, this, [this](QChartSeries* s) {
+        // 样式属性变化（含 QPropertyAnimation 驱动）→ 刷新前景
+        connect(s, &QChartSeries::colorChanged,   this, [this]() { invalidateForeground(); });
+        connect(s, &QChartSeries::opacityChanged, this, [this]() { invalidateForeground(); });
+        connect(s, &QChartSeries::visibleChanged, this, [this]() { invalidateForeground(); });
+        // 动画覆盖层每帧变化 → 刷新前景缓存
         if (auto* xy = qobject_cast<QXYSeries*>(s)) {
             connect(xy, &QXYSeries::renderOverrideChanged,
                     this, [this]() { invalidateForeground(); });
@@ -255,11 +260,13 @@ QPointF QChartWidget::pixelToCartesian(const QPointF& pixel) const {
 
 // ===== 视窗操作 =====
 // ===== 绝对设置 viewRect（相机动画等场景）=====
+// 按解耦哲学：viewRect 是数据窗口（相机状态），这里"设置什么就是什么"，
+// 不做 fit 修正——长宽比由调用者负责（QViewRectAnimation 内部用 plotArea
+// 快照保证）。fit 只在数据范围/投影变更时发生
 void QChartWidget::setViewRect(const QRectF& r) {
     m_viewRect = r;
     if (m_projection)
         m_dataBounds = m_projection->computeDataBounds(m_viewRect);
-    fitViewRectToPlotArea(FitStrategy::KeepCenter);
     qCDebug(logWidget) << "setViewRect:" << r << "→ viewRect=" << m_viewRect
                        << "dataBounds=" << m_dataBounds;
     invalidateBackground();
@@ -389,7 +396,11 @@ void QChartWidget::layoutAxes() {
                         width() - left - right,
                         height() - top - bottom);
     qCDebug(logWidget) << "layoutAxes: plotArea=" << m_plotArea;
-    fitViewRectToPlotArea(FitStrategy::KeepCenter);
+    // 注意：resize 只更新 plotArea，不动 viewRect。
+    // viewRect 是数据窗口（相机状态），plotArea 是像素窗口——两者解耦：
+    // 拉伸窗口 = 变相调整视图（像素映射拉伸），fit 只在数据范围/投影
+    // 显式变更时发生（setDataRange/setProjection/setViewRectFitMode）。
+    // 若 resize 也去 fit，会从"已收缩的当前值"反复收缩 → 累积漂移
 }
 
 // ===== 缓存控制 =====
@@ -458,7 +469,7 @@ void QChartWidget::drawBackground(QPainter* p) {
     ctx.plotArea   = m_plotArea;
     ctx.dataBounds = m_dataBounds;
     ctx.viewRect   = m_viewRect;
-    ctx.projection = m_projection.get();
+    ctx.projection = m_tempProjection ? m_tempProjection : m_projection.get();
 
     qCDebug(logRender) << "drawBackground: plotArea=" << m_plotArea
         << "viewRect=" << m_viewRect
@@ -522,7 +533,7 @@ void QChartWidget::drawForeground(QPainter* p) {
     ctx.plotArea   = m_plotArea;
     ctx.dataBounds = m_dataBounds;
     ctx.viewRect   = m_viewRect;
-    ctx.projection = m_projection.get();
+    ctx.projection = m_tempProjection ? m_tempProjection : m_projection.get();
 
     for (auto* g : m_layers) {
         p->save();
@@ -568,7 +579,7 @@ void QChartWidget::mouseMoveEvent(QMouseEvent* e) {
     ctx.plotArea   = m_plotArea;
     ctx.dataBounds = m_dataBounds;
     ctx.viewRect   = m_viewRect;
-    ctx.projection = m_projection.get();
+    ctx.projection = m_tempProjection ? m_tempProjection : m_projection.get();
 
     QChartSeries* hoverSeries = nullptr;
     int hoverIndex = -1;

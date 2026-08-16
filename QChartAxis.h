@@ -60,6 +60,23 @@ struct DrawContext {
         }
         return pixelPath;
     }
+
+    // ===== 像素空间可见性粗筛（所有投影通用）=====
+    // 可见性由投影输出（像素）定义，不由 Numeric 输入定义——只能在 pixel/plotArea 判
+    /// 点是否落在 plotArea 内（可加 margin 余量）
+    bool pixelVisible(const QPointF& p, qreal margin = 0.0) const {
+        return std::isfinite(p.x()) && std::isfinite(p.y())
+            && p.x() >= plotArea.left()  - margin
+            && p.x() <= plotArea.right() + margin
+            && p.y() >= plotArea.top()   - margin
+            && p.y() <= plotArea.bottom() + margin;
+    }
+    /// 像素 bbox 与 plotArea 是否相交（可加 margin 余量，margin>0 时更保守）
+    bool rectVisible(const QRectF& bbox, qreal margin = 0.0) const {
+        return bbox.normalized()
+            .adjusted(-margin, -margin, margin, margin)
+            .intersects(plotArea);
+    }
 };
 
 class QChartAxis : public QObject

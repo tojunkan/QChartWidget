@@ -7,8 +7,8 @@
 class QLineSeries : public QXYSeries
 {
     Q_OBJECT
-    Q_PROPERTY(qreal lineWidth READ lineWidth WRITE setLineWidth)
-    Q_PROPERTY(bool smooth READ smooth WRITE setSmooth)
+    Q_PROPERTY(qreal lineWidth READ lineWidth WRITE setLineWidth NOTIFY lineWidthChanged)
+    Q_PROPERTY(bool smooth READ smooth WRITE setSmooth NOTIFY smoothChanged)
 
 public:
     explicit QLineSeries(const QString& name = {}, QObject* parent = nullptr);
@@ -23,13 +23,26 @@ public:
                 std::function<QPointF(QVariant,QVariant)> toPixel,
                 const DrawContext* ctx = nullptr) const override;
 
-    // ===== 线样式 =====
+    // ===== 线样式（NOTIFY 供 QPropertyAnimation 驱动时实时刷新）=====
     qreal lineWidth() const { return m_lineWidth; }
-    void setLineWidth(qreal w) { m_lineWidth = qMax(0.5, w); }
+    void setLineWidth(qreal w) {
+        w = qMax(0.5, w);
+        if (qFuzzyCompare(m_lineWidth, w)) return;
+        m_lineWidth = w;
+        emit lineWidthChanged();
+    }
     Qt::PenStyle lineStyle() const { return m_lineStyle; }
     void setLineStyle(Qt::PenStyle s) { m_lineStyle = s; }
     bool smooth() const { return m_smooth; }
-    void setSmooth(bool s) { m_smooth = s; }
+    void setSmooth(bool s) {
+        if (m_smooth == s) return;
+        m_smooth = s;
+        emit smoothChanged();
+    }
+
+signals:
+    void lineWidthChanged();
+    void smoothChanged();
 
 private:
     // 平滑路径：Catmull-Rom 采样

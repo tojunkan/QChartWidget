@@ -62,6 +62,10 @@ public:
     // ===== Projection 与视窗状态 =====
     void setProjection(std::unique_ptr<QChartProjection> proj);
     const QChartProjection* projection() const { return m_projection.get(); }
+    /// 临时投影（动画用）：仅影响渲染路径（DrawContext），不参与管理逻辑。
+    /// 动画结束后必须 clearTemporaryProjection()
+    void setTemporaryProjection(QChartProjection* p) { m_tempProjection = p; invalidateForeground(); }
+    void clearTemporaryProjection() { m_tempProjection = nullptr; invalidateForeground(); }
     QRectF viewRect() const { return m_viewRect; }
     QRectF dataBounds() const { return m_dataBounds; }
 
@@ -117,6 +121,7 @@ protected:
 
     // ===== 视窗状态 =====
     std::unique_ptr<QChartProjection> m_projection;
+    QChartProjection* m_tempProjection = nullptr; // 动画临时投影（非持有，仅渲染用）
     QRectF m_viewRect;              // View Cartesian 窗口（主状态）
     QRectF m_dataBounds;            // 对应的 Numeric 范围（从 viewRect 反算）
     bool m_viewInitialized = false; // 是否已初始化 viewRect

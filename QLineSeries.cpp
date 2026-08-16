@@ -7,6 +7,41 @@
 #include <QtMath>
 #include <cmath>
 
+// ===== 折线粗筛常量与辅助（匿名 namespace）=====
+namespace {
+// 远段（曲线）过采样步数：仅稀疏段触发，判"弧是否拱进视口"
+constexpr int  kFarSegmentSampleCount = 8;
+// 远段采样近似误差余量（像素）：采样 bbox 与 plotArea 相离 > margin 才判"全在外"
+constexpr qreal kRejectMargin = 4.0;
+
+// 两端点像素 bbox（已归一化）
+inline QRectF segBbox(const QPointF& a, const QPointF& b) {
+    return QRectF(a, b).normalized();
+}
+
+// 远段（曲线）过采样判相交：在 Numeric 空间线性插值采样，落回像素累 bbox。
+// 采样 bbox 与 plotArea 相离超过 margin 才判"全在外"（保守：靠边交给 clip）。
+bool segmentOutsideViaSampling(const QPointF& nPrev, const QPointF& nCurr,
+                               const DrawContext* ctx, int K, qreal margin) {
+    if (!ctx || !ctx->projection) return false;   // 无 ctx → 保守不裁
+    const QPointF dn = nCurr - nPrev;
+    QRectF bbox;
+    bool first = true;
+    for (int i = 1; i < K; ++i) {
+        const qreal t = static_cast<qreal>(i) / static_cast<qreal>(K);
+        const QPointF p = ctx->numericToPixel(nPrev.x() + dn.x() * t,
+                                              nPrev.y() + dn.y() * t);
+        // 采样 NaN（如穿过奇点）→ 保守不裁，交 clip
+        if (!std::isfinite(p.x()) || !std::isfinite(p.y()))
+            return false;
+        if (first) { bbox = QRectF(p, p); first = false; }
+        else       { bbox = bbox.united(QRectF(p, p)); }
+    }
+    if (first) return false;   // 没采到点
+    return !ctx->rectVisible(bbox, margin);
+}
+} // namespace
+
 QLineSeries::QLineSeries(const QString& name, QObject* parent)
     : QXYSeries(name, parent) {
     m_color = QColor("#2196F3");
@@ -44,7 +79,7 @@ void QLineSeries::draw(QPainter* painter,
     }
     if (pts.size() < 2) return;
 
-    const qreal threshold = qMax(20.0, m_lineWidth * 4.0); // 像素距离阈值
+    const qreal threshold = qMax(20.0, m_lineWidth * 4.0); // 像素距离阈值（近/远段分界）
 
     painter->save();
     QPen pen(m_color, m_lineWidth, m_lineStyle);
@@ -53,63 +88,90 @@ void QLineSeries::draw(QPainter* painter,
     painter->setBrush(Qt::NoBrush); // 折线不需要填充
 
     QPainterPath path;
-    bool firstValid = true;
-    QPointF prevPixel;   // 上一个有效像素点
-    QPointF prevNumeric; // 上一个有效 Numeric 点（曲线边用）
+    bool havePrev = false;          // 是否有可连的上一有效点
+    bool skipRun = false;           // 是否处于连续屏外段
+    QPointF pendingAnchor;          // 最近被跳过的屏外点（重入锚点）
+    QPointF prevPixel;              // 上一个有效像素点
+    QPointF prevNumeric;            // 上一个有效 Numeric 点（曲线边用）
 
-    int curvesDrawn = 0, linesDrawn = 0;
+    int curvesDrawn = 0, linesDrawn = 0, culled = 0;
 
     for (const auto& pt : pts) {
         const QPointF& pixel = pt.pixel;
         if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
-            firstValid = true; // NaN → 断开路径
+            havePrev = false;   // NaN → 断开路径
+            skipRun = false;
+            prevPixel = pixel;
+            prevNumeric = pt.numeric;
             continue;
         }
 
-        if (firstValid) {
+        if (!havePrev) {
             path.moveTo(pixel);
+            havePrev = true;
             prevPixel = pixel;
             prevNumeric = pt.numeric;
-            firstValid = false;
             continue;
         }
 
         qreal dist = std::hypot(pixel.x() - prevPixel.x(), pixel.y() - prevPixel.y());
 
-        // 近点，或 Numeric 值不可用（无投影/转换失败）→ 像素直线
-        if (dist < threshold || !ctx || !ctx->projection
+        // 近段：像素直线（近点，或 Numeric 不可用）；远段：Numeric Lerp 曲线
+        bool near = (dist < threshold) || !ctx || !ctx->projection
             || !std::isfinite(pt.numeric.x()) || !std::isfinite(pt.numeric.y())
-            || !std::isfinite(prevNumeric.x()) || !std::isfinite(prevNumeric.y())) {
-            path.lineTo(pixel);
-            linesDrawn++;
+            || !std::isfinite(prevNumeric.x()) || !std::isfinite(prevNumeric.y());
+
+        bool outside = false;
+        if (near) {
+            // 近段直线：端点 bbox 即真实线段 bbox，精确判相交（margin=线宽出血）
+            outside = ctx && !ctx->rectVisible(segBbox(prevPixel, pixel), m_lineWidth);
         } else {
-            // ── 远点：Numeric 空间 Lerp → createPath → Pixel 曲线边 ──
-            // 在 Numeric 空间（真正的"坐标系直线"）线性插值
-            qreal dn0 = pt.numeric.x() - prevNumeric.x();
-            qreal dn1 = pt.numeric.y() - prevNumeric.y();
-            auto dataCurve = [prevNumeric, dn0, dn1](qreal t) -> QPointF {
-                return QPointF(prevNumeric.x() + t * dn0,
-                               prevNumeric.y() + t * dn1);
-            };
+            // 远段曲线：过采样判相交，防"两端在外但弧拱进视口"漏画
+            outside = segmentOutsideViaSampling(prevNumeric, pt.numeric, ctx,
+                                                kFarSegmentSampleCount,
+                                                m_lineWidth + kRejectMargin);
+        }
 
-            // 每 3 像素一个采样段（保证视觉平滑）
-            int segments = qMax(16, static_cast<int>(dist / 3.0));
-            qCDebug(logAxisVerbose) << "Line curve: dist=" << dist
-                                    << "n0=[" << prevNumeric.x() << "→" << pt.numeric.x()
-                                    << "] n1=[" << prevNumeric.y() << "→" << pt.numeric.y()
-                                    << "] segments=" << segments;
-            QPainterPath curve = ctx->toPixelCurve(dataCurve, segments);
-
-            // toPixelCurve 返回的路径起点是 moveTo ——需要改为已建立的路径继续
-            // 直接把 curve 的元素追加到 path（跳过第一个 moveTo）
-            for (int i = 0; i < curve.elementCount(); ++i) {
-                const auto& el = curve.elementAt(i);
-                if (i == 0 || el.isMoveTo())
-                    path.moveTo(QPointF(el.x, el.y));
-                else
-                    path.lineTo(QPointF(el.x, el.y));
+        if (outside) {
+            // 跳过整段：只记录锚点，不产生任何路径元素（折叠连续屏外段）
+            pendingAnchor = pixel;
+            skipRun = true;
+            culled++;
+        } else {
+            if (skipRun) {
+                path.moveTo(pendingAnchor);  // 重入：从最后一个屏外点连回
+                skipRun = false;
             }
-            curvesDrawn++;
+            if (near) {
+                path.lineTo(pixel);
+                linesDrawn++;
+            } else {
+                // ── 远点：Numeric 空间 Lerp → createPath → Pixel 曲线边 ──
+                qreal dn0 = pt.numeric.x() - prevNumeric.x();
+                qreal dn1 = pt.numeric.y() - prevNumeric.y();
+                auto dataCurve = [prevNumeric, dn0, dn1](qreal t) -> QPointF {
+                    return QPointF(prevNumeric.x() + t * dn0,
+                                   prevNumeric.y() + t * dn1);
+                };
+
+                // 每 3 像素一个采样段（保证视觉平滑）
+                int segments = qMax(16, static_cast<int>(dist / 3.0));
+                qCDebug(logAxisVerbose) << "Line curve: dist=" << dist
+                                        << "n0=[" << prevNumeric.x() << "→" << pt.numeric.x()
+                                        << "] n1=[" << prevNumeric.y() << "→" << pt.numeric.y()
+                                        << "] segments=" << segments;
+                QPainterPath curve = ctx->toPixelCurve(dataCurve, segments);
+
+                // toPixelCurve 返回的路径起点是 moveTo —— 追加到 path（跳过第一个 moveTo）
+                for (int i = 0; i < curve.elementCount(); ++i) {
+                    const auto& el = curve.elementAt(i);
+                    if (i == 0 || el.isMoveTo())
+                        path.moveTo(QPointF(el.x, el.y));
+                    else
+                        path.lineTo(QPointF(el.x, el.y));
+                }
+                curvesDrawn++;
+            }
         }
 
         prevPixel = pixel;
@@ -121,6 +183,7 @@ void QLineSeries::draw(QPainter* painter,
     if (curvesDrawn > 0 || linesDrawn > 0)
         qCDebug(logSeriesVerbose) << "QLineSeries::draw:" << curvesDrawn << "curves,"
                                   << linesDrawn << "lines,"
+                                  << culled << "culled,"
                                   << pts.size() << "total points";
 
     // ── 边界诊断：多少点在 plotArea 外被浪费了？ ──
