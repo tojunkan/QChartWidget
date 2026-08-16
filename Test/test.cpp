@@ -6,6 +6,7 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QLoggingCategory>
+#include <QStringList>
 #include "../QChartWidget.h"
 #include "demos/demos.h"
 
@@ -40,15 +41,42 @@ int main(int argc, char* argv[]) {
     qDebug() << "========== 测试开始 ==========";
     qDebug() << "日志文件:" << logPath;
 
-    // ── 演示调用表：想跑哪个解注释哪个 ──
-    auto* w = buildDemoSwirl();      // 投影切换（当前验证目标）
-    // auto* w = buildDemoPolar();   // Polar 五边形
-    // auto* w = buildDemoBar();     // Cartesian 柱状图
-    // auto* w = buildDemoPendulum();// 单摆动画
-    // auto* w = buildDemoSort();    // 冒泡排序
-    // auto* w = buildDemoCamera();  // 相机漫游
-    // auto* w = buildDemoStress();  // 折线粗筛压力（1M 点缩放）
-    if (w) w->show();
+    // ── 演示调用表 ──
+    //   无参数：全部启动；带参数：只启动指定名称
+    //   用法：QChartDemo.exe [polar bar pendulum sort camera swirl stress]
+    struct Demo { const char* name; QChartWidget* (*build)(); };
+    const Demo demos[] = {
+        { "polar",    buildDemoPolar },
+        { "bar",      buildDemoBar },
+        { "pendulum", buildDemoPendulum },
+        { "sort",     buildDemoSort },
+        { "camera",   buildDemoCamera },
+        { "swirl",    buildDemoSwirl },
+        { "stress",   buildDemoStress },
+    };
+
+    QStringList selected;
+    for (int i = 1; i < argc; ++i)
+        selected << QString::fromLocal8Bit(argv[i]);
+    const bool runAll = selected.isEmpty();
+
+    int shown = 0;
+    for (const Demo& d : demos) {
+        if (!runAll && !selected.contains(QString::fromLatin1(d.name)))
+            continue;
+        QChartWidget* w = d.build();
+        if (!w) {
+            qWarning() << "构建演示失败:" << d.name;
+            continue;
+        }
+        w->show();
+        ++shown;
+        qDebug() << "已启动演示:" << d.name;
+    }
+    if (shown == 0) {
+        qWarning() << "没有匹配的演示。可用名称: polar bar pendulum sort camera swirl stress";
+        return 1;
+    }
 
     return app.exec();
 }
