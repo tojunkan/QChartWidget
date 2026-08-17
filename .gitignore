@@ -5,6 +5,8 @@
 
 # Build output
 x64/
+build-msvc/
+build-mingw/
 Debug/
 Release/
 *.exe

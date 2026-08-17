@@ -1,0 +1,8 @@
+@echo off
+REM 复制此文件为 config.local.bat（注意后缀没有.example），并根据你的实际路径修改
+REM 如果你是mingw就只换mingw的位置并运行对应的bat文件即可，如果是msvc就换msvc的位置即可
+set MINGW_BIN=C:\Qt\Tools\mingw1310_64\bin
+set VCVARS=D:\VisualStudio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
+set QT_DIR=C:\Qt\6.5.3\msvc2022_64
+set NINJA=C:\Qt\Tools\Ninja\ninja.exe
+set BUILD_DIR=C:\MyBuilds\qchart_build  REM 可选，不定义则使用默认
