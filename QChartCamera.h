@@ -1,7 +1,8 @@
-// QChartCamera.h —— 2D 相机
+// QChartCamera.h —— 相机基类 + 2D 相机
 // 职责（分工红线）：
-//   只负责 viewRect 几何：拥有 viewRect + fit 策略 + View Cartesian ↔ Pixel 线性映射
-//   + setViewRect/pan/zoom 的视窗几何运算。
+//   基类 QChartCamera：QObject + viewChanged 信号（2D/3D 视图状态变化共用）。
+//   2D 相机 QChartCamera2D：只负责 viewRect 几何：拥有 viewRect + fit 策略
+//   + View Cartesian ↔ Pixel 线性映射 + setViewRect/pan/zoom 的视窗几何运算。
 // 不知道 Projection、不反算 dataBounds（dataBounds 依赖 projection->computeDataBounds，
 //   由 QChartWidget 持有并维护）、不拥有 plotArea（映射/拟合均以参数传入）。
 // 2D 相机是未来 3D 相机（position/lookAt/up/FOV → viewProjectionMatrix()）的退化特例。
@@ -20,13 +21,27 @@ enum class ViewRectFitMode {
     Fixed     // 强制 viewRect 匹配指定长宽比（fixedAspectRatio()），忽略 plotArea
 };
 
+/// 相机基类：共同信号（2D/3D 视图状态变化都发 viewChanged）
 class QChartCamera : public QObject {
+    Q_OBJECT
+public:
+    explicit QChartCamera(QObject* parent = nullptr);
+    ~QChartCamera() override;
+
+signals:
+    /// viewRect（或其派生属性 center/zoom）发生变化
+    void viewChanged();
+};
+
+/// 2D 相机 = 现有 QChartCamera 整体搬入（行为零变化）：
+/// viewRect + fit 策略 + center/zoom 属性 + cartesianToPixel/pixelToCartesian + pan/zoom 几何
+class QChartCamera2D : public QChartCamera {
     Q_OBJECT
     Q_PROPERTY(QRectF viewRect READ viewRect WRITE setViewRect NOTIFY viewChanged)
     Q_PROPERTY(QPointF center READ center WRITE setCenter NOTIFY viewChanged)
     Q_PROPERTY(qreal zoom READ zoom WRITE setZoom NOTIFY viewChanged)
 public:
-    explicit QChartCamera(QObject* parent = nullptr);
+    explicit QChartCamera2D(QObject* parent = nullptr);
 
     // ===== 视窗状态（主状态）=====
     QRectF viewRect() const { return m_viewRect; }
@@ -79,10 +94,6 @@ public:
     QPointF pixelToCartesian(const QRectF& plotArea, const QPointF& pixel) const {
         return pixelToCartesian(m_viewRect, plotArea, pixel);
     }
-
-signals:
-    /// viewRect（或其派生属性 center/zoom）发生变化
-    void viewChanged();
 
 private:
     QRectF m_viewRect;

@@ -10,7 +10,7 @@
 #include <QtMath>
 #include <QDebug>
 
-QChartWidget* buildDemoTheme() {
+QWidget* buildDemoTheme() {
     qDebug() << "\n========== 深色模式演示 ==========";
 
     auto* w = new QChartWidget();

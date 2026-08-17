@@ -10,7 +10,7 @@
 #include <QtMath>
 #include <QDebug>
 
-QChartWidget* buildDemoPendulum() {
+QWidget* buildDemoPendulum() {
     qDebug() << "\n========== 单摆动画 ==========";
 
     auto* w = new QChartWidget();

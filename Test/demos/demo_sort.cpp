@@ -10,7 +10,7 @@
 #include <QSequentialAnimationGroup>
 #include <QDebug>
 
-QChartWidget* buildDemoSort() {
+QWidget* buildDemoSort() {
     qDebug() << "\n========== 冒泡排序动画 ==========";
 
     auto* w = new QChartWidget();

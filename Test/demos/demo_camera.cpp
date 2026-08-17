@@ -10,7 +10,7 @@
 #include <QtMath>
 #include <QDebug>
 
-QChartWidget* buildDemoCamera() {
+QWidget* buildDemoCamera() {
     qDebug() << "\n========== 相机漫游 ==========";
 
     auto* w = new QChartWidget();

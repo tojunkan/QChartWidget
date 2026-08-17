@@ -1,7 +1,7 @@
 // QChartWidget.h —— 图表控件
-// 持有唯一 Projection、所有 Axis 和 Layer；viewRect 几何已抽到 QChartCamera，
+// 持有唯一 Projection、所有 Axis 和 Layer；viewRect 几何已抽到 QChartCamera2D，
 // 这里保留 m_dataBounds（依赖 projection->computeDataBounds）与交互/绘制编排。
-// 坐标链路：View Cartesian → ViewNorm → Pixel（由 QChartCamera 完成）
+// 坐标链路：View Cartesian → ViewNorm → Pixel（由 QChartCamera2D 完成）
 #ifndef QCHARTWIDGET_H
 #define QCHARTWIDGET_H
 #include <QWidget>
@@ -144,11 +144,20 @@ protected:
     void wheelEvent(QWheelEvent*) override;
     void leaveEvent(QEvent*) override;
 
+    /// §8.2 钩子：组装屏显场景快照（默认 = 2D 场景组装；3D 子类重写填 3D 段）
+    /// 由 paintEvent 调用；渲染器只依赖快照 + 目标 device，不反向依赖 Widget
+    virtual QChartScene buildScreenScene() const;
+
+    /// §8.2 钩子：组装导出场景（按 scope/size 计算设备尺寸与 plotArea）；
+    /// 改 protected virtual，3D 子类可注入 3D 段（导出 3D 场景低成本；验收不要求）
+    virtual QChartScene buildExportScene(QChartExportScope scope, const QSize& size,
+                                         QSizeF& outDeviceSize) const;
+
     virtual void layoutAxes();
 
     /// 调整 viewRect 使长宽比匹配 plotArea——Polar 下圆不变椭圆
     /// 只负责触发相机拟合几何 + 反算 dataBounds（dataBounds 依赖 projection，故留在 Widget）
-    using FitStrategy = QChartCamera::FitStrategy;
+    using FitStrategy = QChartCamera2D::FitStrategy;
     void fitViewRectToPlotArea(FitStrategy strategy);
 
     /// 悬停 tooltip 内容：命中点的 Data → Numeric 坐标
@@ -161,7 +170,7 @@ protected:
     // ===== 视窗状态 =====
     std::unique_ptr<QChartProjection> m_projection;
     QChartProjection* m_tempProjection = nullptr; // 动画临时投影（非持有，仅渲染用）
-    std::unique_ptr<QChartCamera> m_camera;   // viewRect 几何 + fit 策略 + View↔Pixel 映射
+    std::unique_ptr<QChartCamera2D> m_camera;   // viewRect 几何 + fit 策略 + View↔Pixel 映射
     std::unique_ptr<QChartRenderer> m_renderer; // 渲染后端（缓存 + 绘制编排）
     QRectF m_dataBounds;            // 对应的 Numeric 范围（从 viewRect 反算，Widget 持有）
     bool m_viewInitialized = false; // 是否已初始化 viewRect
@@ -196,9 +205,6 @@ private:
     void rebuildLegendItems();
     /// 给定尺寸下重算 plotArea（复用 layoutAxes 的 margin/sizeHint 逻辑，供 WholeWidget 导出）
     QRectF plotAreaForSize(const QSize& size) const;
-    /// 组装导出场景：按 scope/size 计算设备尺寸与 plotArea
-    QChartScene buildExportScene(QChartExportScope scope, const QSize& size,
-                                 QSizeF& outDeviceSize) const;
 
     QChartTheme m_theme = QChartTheme::light();
     std::optional<QColor> m_backgroundColorOverride;   // 显式背景覆盖（setBackgroundColor）

@@ -9,7 +9,7 @@
 #include <QTimer>
 #include <QDebug>
 
-QChartWidget* buildDemoSwirl() {
+QWidget* buildDemoSwirl() {
     qDebug() << "\n========== 投影切换（恒等 ↔ Swirl）==========";
 
     auto* w = new QChartWidget();

@@ -32,7 +32,7 @@ Q_LOGGING_CATEGORY(logRender, "chart.render")
 // ===== 构造 & 析构 =====
 QChartWidget::QChartWidget(QWidget* parent)
     : QWidget(parent)
-    , m_camera(std::make_unique<QChartCamera>())
+    , m_camera(std::make_unique<QChartCamera2D>())
     , m_renderer(std::make_unique<QPainterChartRenderer>()) {
     setMouseTracking(true);
     setMinimumSize(200, 150);
@@ -195,7 +195,7 @@ void QChartWidget::fitViewRectToPlotArea(FitStrategy strategy) {
 }
 
 // ===== 坐标转换（对所有投影类型通用）=====
-// 线性映射的唯一实现在 QChartCamera；此处仅为 Widget 公共 API 转发。
+// 线性映射的唯一实现在 QChartCamera2D；此处仅为 Widget 公共 API 转发。
 QPointF QChartWidget::cartesianToPixel(qreal cx, qreal cy) const {
     return m_camera->cartesianToPixel(m_plotArea, cx, cy);
 }
@@ -368,7 +368,15 @@ void QChartWidget::paintEvent(QPaintEvent*) {
         m_renderer->invalidateForeground();
     }
 
-    // 组装场景快照，渲染器只依赖快照 + 目标 device，不反向依赖 Widget
+    // 组装场景快照（§8.2 钩子：3D 子类重写 buildScreenScene 注入 3D 段），
+    // 渲染器只依赖快照 + 目标 device，不反向依赖 Widget
+    const QChartScene scene = buildScreenScene();
+
+    m_renderer->render(scene, this);
+}
+
+// §8.2：默认屏显场景组装（= 原 paintEvent 内逻辑，行为保持；3D 子类重写）
+QChartScene QChartWidget::buildScreenScene() const {
     QChartScene scene;
     scene.plotArea   = m_plotArea;
     scene.dataBounds = m_dataBounds;
@@ -379,8 +387,7 @@ void QChartWidget::paintEvent(QPaintEvent*) {
     scene.backgroundColor = backgroundColor();   // 有效色（override 或主题默认）
     scene.legend     = m_legend;
     scene.legendItems = m_legendItems;
-
-    m_renderer->render(scene, this);
+    return scene;
 }
 
 // ===== 主题 =====

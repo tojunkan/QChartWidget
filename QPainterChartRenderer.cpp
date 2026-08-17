@@ -2,6 +2,7 @@
 #include "QPainterChartRenderer.h"
 #include "QChartAxis.h"    // DrawContext + 轴绘制
 #include "QChartLayer.h"   // drawGrid / drawAllSeries
+#include "QChartLayer3D.h" // 3D 图层 collectPrimitives
 #include "QChartLegend.h"  // 图例绘制
 #include "QChartDebug.h"   // logRender / logWidget
 #include <QPainter>
@@ -9,6 +10,7 @@
 #include <QDebug>
 #include <QLoggingCategory>
 #include <QtMath>
+#include <algorithm>
 
 // 渲染每帧细节（createPath 采样等）——默认静默（QtWarningMsg），
 // 可用规则 `*.verbose=true` / `chart.render.verbose=true` 精确打开。
@@ -75,6 +77,13 @@ void QPainterChartRenderer::drawDirect(QPainter* p, const QChartScene& scene) {
 
 // ===== 背景层（背景填充 + 轴 + 网格 + 调试黄框）=====
 void QPainterChartRenderer::drawBackground(QPainter* p, const QChartScene& scene) {
+    // 3D 模式：只填背景色（3D Widget 不向 scene.axes 添加轴，2D 网格/轴路径自然不画，D-3D-9）
+    if (scene.is3D()) {
+        if (scene.backgroundColor.isValid())
+            p->fillRect(QRectF(p->window()), scene.backgroundColor);
+        return;
+    }
+
     // 画布底色：整 device 矩形填充（plotArea 跟随，无独立填充）；invalid 不填
     if (scene.backgroundColor.isValid())
         p->fillRect(QRectF(p->window()), scene.backgroundColor);
@@ -148,6 +157,12 @@ void QPainterChartRenderer::drawBackground(QPainter* p, const QChartScene& scene
 
 // ===== 前景层（系列）=====
 void QPainterChartRenderer::drawForeground(QPainter* p, const QChartScene& scene) {
+    // 3D 子路径：2D 路径一行不动（3D 场景走 drawForeground3D）
+    if (scene.is3D()) {
+        drawForeground3D(p, scene);
+        return;
+    }
+
     DrawContext ctx;
     ctx.plotArea   = scene.plotArea;
     ctx.dataBounds = scene.dataBounds;
@@ -162,6 +177,44 @@ void QPainterChartRenderer::drawForeground(QPainter* p, const QChartScene& scene
     }
 
     // 图例（B1 overlay，clip 到 plotArea）
+    if (scene.legend && scene.legend->isVisible()) {
+        p->save();
+        p->setClipRect(scene.plotArea);
+        scene.legend->draw(p, scene.plotArea, scene.legendItems);
+        p->restore();
+    }
+}
+
+// ===== 3D 前景子路径（design_3d.md §7.4）：collect → depth 降序 → 绘制 → 2D overlay 后画 =====
+void QPainterChartRenderer::drawForeground3D(QPainter* p, const QChartScene& scene) {
+    // 1. collect：遍历 3D 图层收集图元（深度已在闭包内算好：-viewZ，越大越远）
+    QVector<QChartPrimitive> items;
+    for (auto* layer3D : scene.layers3D) {
+        if (!layer3D) continue;
+        layer3D->collectPrimitives(scene.camera3D, scene.plotArea, items);
+    }
+
+    // 2. sort：depth 降序（远→近），远先画、近后画覆盖远者（painter's algorithm，designer 定案）
+    std::sort(items.begin(), items.end(),
+              [](const QChartPrimitive& a, const QChartPrimitive& b) { return a.depth > b.depth; });
+
+    // 3. draw：逐图元绘制（Point=drawEllipse、LineSegment=drawLine，pen=color+penWidth）
+    p->save();
+    p->setClipRect(scene.plotArea);
+    for (const QChartPrimitive& prim : items) {
+        p->setPen(QPen(prim.color, prim.penWidth));
+        if (prim.type == QChartPrimitive::Type::Point) {
+            p->setBrush(prim.color);
+            const qreal r = prim.markerSize * 0.5;
+            p->drawEllipse(prim.a, r, r);
+        } else {
+            p->setBrush(Qt::NoBrush);
+            p->drawLine(prim.a, prim.b);
+        }
+    }
+    p->restore();
+
+    // 4. 2D overlay（图例等）后画，不参与深度（D-3D-9）
     if (scene.legend && scene.legend->isVisible()) {
         p->save();
         p->setClipRect(scene.plotArea);

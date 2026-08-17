@@ -76,9 +76,9 @@ std::function<QPointF(QVariant,QVariant)> QChartLayer::makeToPixel(DrawContext& 
         if (!std::isfinite(cartesian.x()) || !std::isfinite(cartesian.y()))
             return QPointF(qQNaN(), qQNaN());
 
-        // View Cartesian → Pixel（线性映射，唯一实现在 QChartCamera）
-        return QChartCamera::cartesianToPixel(ctx.viewRect, ctx.plotArea,
-                                              cartesian.x(), cartesian.y());
+        // View Cartesian → Pixel（线性映射，唯一实现在 QChartCamera2D）
+        return QChartCamera2D::cartesianToPixel(ctx.viewRect, ctx.plotArea,
+                                                cartesian.x(), cartesian.y());
     };
 }
 

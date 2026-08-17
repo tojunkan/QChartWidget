@@ -7,7 +7,7 @@
 #include "../../QValueAxis.h"
 #include <QDebug>
 
-QChartWidget* buildDemoPolar() {
+QWidget* buildDemoPolar() {
     qDebug() << "\n========== Polar 五边形 ==========";
 
     auto* w = new QChartWidget();

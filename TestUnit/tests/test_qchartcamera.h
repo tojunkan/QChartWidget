@@ -1,8 +1,8 @@
-// test_qchartcamera.h —— QChartCamera 单元测试声明
+// test_qchartcamera.h —— QChartCamera2D 单元测试声明
 #pragma once
 #include <QObject>
 
-class TestQChartCamera : public QObject {
+class TestQChartCamera2D : public QObject {
     Q_OBJECT
 private slots:
     void cartesianToPixel_roundtrip();      // View→Pixel→View 恒等

@@ -14,7 +14,7 @@
 #include <QtMath>
 #include <QDebug>
 
-QChartWidget* buildDemoStress() {
+QWidget* buildDemoStress() {
     qDebug() << "\n========== 折线粗筛压力测量 ==========";
 
     const int N = 1000000;   // 1M 点

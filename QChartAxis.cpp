@@ -28,8 +28,8 @@ namespace {
         if (!std::isfinite(cartesian.x()) || !std::isfinite(cartesian.y()))
             return QPointF(qQNaN(), qQNaN());
 
-        return QChartCamera::cartesianToPixel(ctx.viewRect, ctx.plotArea,
-                                              cartesian.x(), cartesian.y());
+        return QChartCamera2D::cartesianToPixel(ctx.viewRect, ctx.plotArea,
+                                                cartesian.x(), cartesian.y());
     }
 
     // 2. View Cartesian 路径 → Pixel 路径
@@ -40,8 +40,8 @@ namespace {
 
         for (int i = 0; i < viewPath.elementCount(); ++i) {
             const auto& el = viewPath.elementAt(i);
-            QPointF p = QChartCamera::cartesianToPixel(ctx.viewRect, ctx.plotArea,
-                                                       el.x, el.y);
+            QPointF p = QChartCamera2D::cartesianToPixel(ctx.viewRect, ctx.plotArea,
+                                                         el.x, el.y);
             if (i == 0 || el.isMoveTo())
                 pixelPath.moveTo(p);
             else

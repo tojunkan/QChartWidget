@@ -39,6 +39,9 @@ public:
         m_smooth = s;
         emit smoothChanged();
     }
+    // 视口裁剪（culling）：屏外线段跳过不画。默认 true（=旧行为）
+    bool isCullingEnabled() const { return m_cullingEnabled; }
+    void setCullingEnabled(bool v) { m_cullingEnabled = v; }
 
 signals:
     void lineWidthChanged();
@@ -51,4 +54,5 @@ private:
     qreal m_lineWidth = 2.0;
     Qt::PenStyle m_lineStyle = Qt::SolidLine;
     bool m_smooth = false;
+    bool m_cullingEnabled = true;
 };

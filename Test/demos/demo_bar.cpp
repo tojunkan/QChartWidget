@@ -7,7 +7,7 @@
 #include "../../QBarCategoryAxis.h"
 #include <QDebug>
 
-QChartWidget* buildDemoBar() {
+QWidget* buildDemoBar() {
     qDebug() << "\n========== Cartesian 柱状图 ==========";
 
     auto* w = new QChartWidget();

@@ -45,8 +45,8 @@ int main(int argc, char* argv[]) {
 
     // ── 演示调用表 ──
     //   无参数：全部启动；带参数：只启动指定名称
-    //   用法：QChartDemo.exe [polar bar pendulum sort camera swirl stress theme]
-    struct Demo { const char* name; QChartWidget* (*build)(); };
+    //   用法：QChartDemo.exe [polar bar pendulum sort camera swirl stress theme scatter3d line3d surface3d]
+    struct Demo { const char* name; QWidget* (*build)(); };
     const Demo demos[] = {
         { "polar",    buildDemoPolar },
         { "bar",      buildDemoBar },
@@ -56,6 +56,9 @@ int main(int argc, char* argv[]) {
         { "swirl",    buildDemoSwirl },
         { "stress",   buildDemoStress },
         { "theme",    buildDemoTheme },
+        { "scatter3d", buildDemoScatter3D },
+        { "line3d",   buildDemoLine3D },
+        { "surface3d", buildDemoSurface3D },
     };
 
     QStringList selected;
@@ -67,7 +70,7 @@ int main(int argc, char* argv[]) {
     for (const Demo& d : demos) {
         if (!runAll && !selected.contains(QString::fromLatin1(d.name)))
             continue;
-        QChartWidget* w = d.build();
+        QWidget* w = d.build();
         if (!w) {
             qWarning() << "构建演示失败:" << d.name;
             continue;
@@ -77,7 +80,7 @@ int main(int argc, char* argv[]) {
         qDebug() << "已启动演示:" << d.name;
     }
     if (shown == 0) {
-        qWarning() << "没有匹配的演示。可用名称: polar bar pendulum sort camera swirl stress theme";
+        qWarning() << "没有匹配的演示。可用名称: polar bar pendulum sort camera swirl stress theme scatter3d line3d surface3d";
         return 1;
     }
 

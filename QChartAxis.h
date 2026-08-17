@@ -39,7 +39,7 @@ struct DrawContext {
         QPointF c = projection->toCartesian(num0, num1);
         if (!std::isfinite(c.x()) || !std::isfinite(c.y()))
             return QPointF(qQNaN(), qQNaN());
-        return QChartCamera::cartesianToPixel(viewRect, plotArea, c.x(), c.y());
+        return QChartCamera2D::cartesianToPixel(viewRect, plotArea, c.x(), c.y());
     }
 
     /// Numeric 空间曲线 → Pixel 路径（创建 createPath + cartesian→pixel in one shot）
@@ -50,7 +50,7 @@ struct DrawContext {
         QPainterPath viewPath = projection->createPath(dataCurve, segments);
         for (int i = 0; i < viewPath.elementCount(); ++i) {
             const auto& el = viewPath.elementAt(i);
-            QPointF p = QChartCamera::cartesianToPixel(viewRect, plotArea, el.x, el.y);
+            QPointF p = QChartCamera2D::cartesianToPixel(viewRect, plotArea, el.x, el.y);
             if (i == 0 || el.isMoveTo()) pixelPath.moveTo(p);
             else                         pixelPath.lineTo(p);
         }

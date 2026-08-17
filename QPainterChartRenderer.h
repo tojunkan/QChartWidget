@@ -26,6 +26,8 @@ public:
 private:
     void drawBackground(QPainter* p, const QChartScene& scene);
     void drawForeground(QPainter* p, const QChartScene& scene);
+    /// 3D 子路径：collect（Layer3D）→ depth 降序（远→近）→ 逐图元绘制 → 2D overlay 后画
+    void drawForeground3D(QPainter* p, const QChartScene& scene);
     /// 无缓存直接绘制（drawBackground + drawForeground）
     void drawDirect(QPainter* p, const QChartScene& scene);
 

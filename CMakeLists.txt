@@ -20,12 +20,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ---- 构建选项 ----
 option(BUILD_DEMOS "构建演示程序" ON)
 option(BUILD_TESTS "构建单元测试" ON)
+option(BUILD_BENCH "构建性能基准" ON)
 
 find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Svg)
 
 # ---- 库源码 ----
 set(QCHART_SOURCES
     QChartCamera.cpp
+    QChartCamera3D.cpp
+    QChartSeries3D.cpp
+    QChartScatterSeries3D.cpp
+    QChartLineSeries3D.cpp
+    QChartSurfaceSeries.cpp
+    QChartLayer3D.cpp
+    QChartWidget3D.cpp
     QChartRenderer.cpp
     QPainterChartRenderer.cpp
     QChartAxis.cpp
@@ -77,6 +85,9 @@ if(BUILD_DEMOS)
         Test/demos/demo_swirl.cpp
         Test/demos/demo_stress.cpp
         Test/demos/demo_theme.cpp
+        Test/demos/demo_scatter3d.cpp
+        Test/demos/demo_line3d.cpp
+        Test/demos/demo_surface3d.cpp
     )
     # 演示源码不含 Q_OBJECT，moc 全在库内，故关闭 AUTOMOC
     set_target_properties(QChartDemo PROPERTIES AUTOMOC OFF)
@@ -93,8 +104,12 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qlogaxis.h
         TestUnit/tests/test_qdatetimeaxis.h
         TestUnit/tests/test_qchartcamera.h
+        TestUnit/tests/test_qchartcamera3d.h
+        TestUnit/tests/test_qchartmath.h
         TestUnit/tests/test_qchartprojection.h
+        TestUnit/tests/test_qchartsurface3d.h
         TestUnit/tests/test_qchartrenderer.h
+        TestUnit/tests/test_qchartrenderer3d.h
         TestUnit/tests/test_hittest.h
         TestUnit/tests/test_qcharttheme.h
         TestUnit/tests/test_qchartlegend.h
@@ -113,8 +128,12 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qlogaxis.cpp
         TestUnit/tests/test_qdatetimeaxis.cpp
         TestUnit/tests/test_qchartcamera.cpp
+        TestUnit/tests/test_qchartcamera3d.cpp
+        TestUnit/tests/test_qchartmath.cpp
         TestUnit/tests/test_qchartprojection.cpp
+        TestUnit/tests/test_qchartsurface3d.cpp
         TestUnit/tests/test_qchartrenderer.cpp
+        TestUnit/tests/test_qchartrenderer3d.cpp
         TestUnit/tests/test_hittest.cpp
         TestUnit/tests/test_qcharttheme.cpp
         TestUnit/tests/test_qchartlegend.cpp
@@ -137,4 +156,14 @@ if(BUILD_TESTS)
     if(NOT WIN32)
         set_tests_properties(QChartTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
+endif()
+
+# ---- 性能基准 ----
+if(BUILD_BENCH)
+    add_executable(QChartBench
+        Test/bench/bench_main.cpp
+    )
+    # 基准源码不含 Q_OBJECT，moc 全在库内，故关闭 AUTOMOC
+    set_target_properties(QChartBench PROPERTIES AUTOMOC OFF)
+    target_link_libraries(QChartBench PRIVATE QChartWidget::QChartWidget)
 endif()

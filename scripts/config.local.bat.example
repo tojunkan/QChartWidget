@@ -5,4 +5,5 @@ set MINGW_BIN=C:\Qt\Tools\mingw1310_64\bin
 set VCVARS=D:\VisualStudio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
 set QT_DIR=C:\Qt\6.5.3\msvc2022_64
 set NINJA=C:\Qt\Tools\Ninja\ninja.exe
-set BUILD_DIR=C:\MyBuilds\qchart_build  REM 可选，不定义则使用默认
+set BUILD_DIR=C:\MyBuilds\qchart_build
+REM 可选：不定义则使用默认（%ROOT_DIR%\build-msvc / build-mingw）

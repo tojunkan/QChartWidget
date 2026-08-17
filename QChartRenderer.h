@@ -7,14 +7,34 @@
 
 #include <QColor>
 #include <QList>
+#include <QPointF>
 #include <QRectF>
+#include <QVector3D>
+#include "QChartProjection3D.h"   // QChartWorldBox（QChartScene::worldBounds 按值）
 
 class QChartAxis;
 class QChartLayer;
 class QChartProjection;
 class QChartLegend;
 class QChartSeries;
+class QChartCamera3D;
+class QChartLayer3D;
 class QPaintDevice;
+
+// ===== 3D 图元（design_3d.md §7.3，D-3D-9 / D-3D-10 ③；t11 按 designer 修订：去 worldAnchor、加 dataIndex）=====
+// painter's algorithm 命令缓冲雏形：Renderer 3D 路径收集 → 深度排序（depth 降序=远→近）→ 绘制。
+// depth 由 ProjectFn3D 全链闭包（Layer3D 组装）返回直接填充（= camera project 的 viewDepth，-viewZ，越大越远）。
+struct QChartPrimitive {
+    enum class Type { Point, LineSegment };
+    Type type = Type::Point;
+    QPointF a;                // 屏幕坐标：Point 位置 / LineSegment 起点
+    QPointF b;                // 屏幕坐标：LineSegment 终点（Point 忽略）
+    qreal depth = 0.0;        // 排序键：-viewZ（越大越远；绘制按 depth 降序 = 远→近，近者后画覆盖远者）
+    int dataIndex = -1;       // 数据点索引（系列图元=起点/单点索引；网格地板=-1）；hover 用它定位 (u,v)
+    qreal markerSize = 4.0;   // Point 标记半径（px）
+    QColor color;             // 绘制色（收集时已按系列主题/override 展开）
+    qreal penWidth = 1.0;     // 线宽（px）
+};
 
 // 场景快照：render 时由 QChartWidget 组装。
 // projection 已解析临时投影优先级（tempProjection ? tempProjection : projection）。
@@ -29,6 +49,12 @@ struct QChartScene {
     QChartLegend* legend = nullptr;  // 图例（Phase 1 overlay）
     QList<QChartSeries*> legendItems; // 图例条目（widget 组装：汇总所有 layer、跳过空 name）
     bool exportMode = false;         // 导出模式：跳过调试黄框等屏显专用绘制
+
+    // ===== 3D 段（design_3d.md §7.2；2D 场景保持默认值，零行为变化）=====
+    const QChartCamera3D* camera3D = nullptr;   // 非空 = 3D 场景（2D 场景保持 null）
+    QList<QChartLayer3D*> layers3D;             // 3D 图层（camera3D 非空时有效）
+    QChartWorldBox worldBounds;                 // 当前可见 World 盒（fit/网格地板用）
+    bool is3D() const { return camera3D != nullptr; }
 };
 
 class QChartRenderer {

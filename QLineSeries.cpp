@@ -122,14 +122,16 @@ void QLineSeries::draw(QPainter* painter,
             || !std::isfinite(prevNumeric.x()) || !std::isfinite(prevNumeric.y());
 
         bool outside = false;
-        if (near) {
-            // 近段直线：端点 bbox 即真实线段 bbox，精确判相交（margin=线宽出血）
-            outside = ctx && !ctx->rectVisible(segBbox(prevPixel, pixel), m_lineWidth);
-        } else {
-            // 远段曲线：过采样判相交，防"两端在外但弧拱进视口"漏画
-            outside = segmentOutsideViaSampling(prevNumeric, pt.numeric, ctx,
-                                                kFarSegmentSampleCount,
-                                                m_lineWidth + kRejectMargin);
+        if (m_cullingEnabled) {
+            if (near) {
+                // 近段直线：端点 bbox 即真实线段 bbox，精确判相交（margin=线宽出血）
+                outside = ctx && !ctx->rectVisible(segBbox(prevPixel, pixel), m_lineWidth);
+            } else {
+                // 远段曲线：过采样判相交，防"两端在外但弧拱进视口"漏画
+                outside = segmentOutsideViaSampling(prevNumeric, pt.numeric, ctx,
+                                                    kFarSegmentSampleCount,
+                                                    m_lineWidth + kRejectMargin);
+            }
         }
 
         if (outside) {
