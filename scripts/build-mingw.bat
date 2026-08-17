@@ -23,7 +23,7 @@ if not defined ROOT_DIR set "ROOT_DIR=%SCRIPT_DIR%.."
 if not defined BUILD_DIR set "BUILD_DIR=%ROOT_DIR%\build-mingw"
 set "PATH=%MINGW_BIN%;%PATH%"
 
-cmake -G Ninja -S ../ -B "%BUILD_DIR%" ^
+cmake -G Ninja -S "%ROOT_DIR%" -B "%BUILD_DIR%" ^
   -DCMAKE_BUILD_TYPE=Debug ^
   -DCMAKE_C_COMPILER="%MINGW_BIN%\gcc.exe" ^
   -DCMAKE_CXX_COMPILER="%MINGW_BIN%\g++.exe" ^
@@ -42,7 +42,8 @@ if errorlevel 1 (
 
 REM 构建完成后，执行 windeployqt 部署依赖
 "%QT_DIR%\bin\windeployqt.exe" "%BUILD_DIR%\QChartDemo.exe"
-"%QT_DIR%\bin\windeployqt.exe" "%BUILD_DIR%\QChartTests.exe"  REM 测试也需要，但一般测试在CI里跑，可以省略
+REM 测试程序的依赖部署（CI 场景可省略）
+"%QT_DIR%\bin\windeployqt.exe" "%BUILD_DIR%\QChartTests.exe"
 
 echo.
 echo 构建完成: %BUILD_DIR%\QChartDemo.exe   %BUILD_DIR%\QChartTests.exe
