@@ -84,10 +84,11 @@ private:
     }
 };
 
-// ===== 左：3D 按键过滤 'S'/'M'（无 Q_OBJECT）=====
+// ===== 左：3D 按键过滤 'S'/'M'/'A'（无 Q_OBJECT）=====
 class SurfaceKeyFilter : public QObject {
 public:
     QChartWidget3D* w = nullptr;
+    QChartLayer3D* layer = nullptr;   // 'A' 键开关轴/网格（axes3D->setVisible，§12）
     bool eventFilter(QObject* obj, QEvent* ev) override {
         if (ev->type() == QEvent::KeyPress) {
             auto* ke = static_cast<QKeyEvent*>(ev);
@@ -99,6 +100,15 @@ public:
             if (ke->key() == Qt::Key_M) {
                 w->setProjection3D(makeMobiusProjection());
                 qDebug() << "曲面切换：莫比乌斯环";
+                return true;
+            }
+            if (ke->key() == Qt::Key_A) {
+                if (layer) {
+                    layer->axes3D()->setVisible(!layer->axes3D()->visible());
+                    qDebug() << "轴/网格开关:" << (layer->axes3D()->visible() ? "开" : "关");
+                    w->invalidateForeground();
+                    w->update();
+                }
                 return true;
             }
         }
@@ -123,8 +133,25 @@ QWidget* buildDemoSurface3D() {
     w3->installEventFilter(filter);
 
     auto* layer3 = new QChartLayer3D(w3);
-    layer3->setGridFloorVisible(true);
-    layer3->setGridFloorHalfSize(1.6);   // 略大于球半径 1
+    // §8.5：gridFloor API 已移除——地板网格并入 Box 模式（gridVisible 总控 + widget3D 驱动盒）
+    // §12：3D 侧加盒/spine/刻度点/标签——轴绑定（tickCount 压 2~3，A6）；
+    // 球面/莫比乌斯为 FunctionalProjection3D（无反向）→ A9 静态域盒路径（轴盒=默认域盒，不随视图重算）
+    auto* axisU3D = new QValueAxis(w3, Qt::AlignBottom);
+    auto* axisV3D = new QValueAxis(w3, Qt::AlignLeft);
+    auto* axisZ3D = new QValueAxis(w3, Qt::AlignBottom);
+    axisU3D->setRange(0, 360);
+    axisV3D->setRange(-90, 90);
+    axisZ3D->setRange(0, 1);
+    axisU3D->setTickCount(3);
+    axisV3D->setTickCount(3);
+    axisZ3D->setTickCount(3);
+    axisU3D->setColor(QColor("#E53935"));
+    axisV3D->setColor(QColor("#43A047"));
+    axisZ3D->setColor(QColor("#1E88E5"));
+    layer3->setAxisX(axisU3D);
+    layer3->setAxisY(axisV3D);
+    layer3->setAxisZ(axisZ3D);
+    filter->layer = layer3;
 
     auto* surface = new QChartSurfaceSeries("曲面", layer3);
     surface->setParametricGrid(64, 64, 0, 360, -90, 90);   // (u,v) 网格

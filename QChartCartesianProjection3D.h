@@ -16,4 +16,8 @@ public:
     QVector3D fromWorld(const QVector3D& w) const override {
         return w;
     }
+
+    // ── 恒等快速通道（design_3d_axes.md §5.4）：直线两点即可、反算免采样 ──
+    int samplingSegmentsHint() const override { return 2; }
+    bool isIdentityMapping() const override { return true; }
 };

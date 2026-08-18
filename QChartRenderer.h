@@ -9,7 +9,9 @@
 #include <QList>
 #include <QPointF>
 #include <QRectF>
+#include <QString>
 #include <QVector3D>
+#include <Qt>
 #include "QChartProjection3D.h"   // QChartWorldBox（QChartScene::worldBounds 按值）
 
 class QChartAxis;
@@ -21,19 +23,37 @@ class QChartCamera3D;
 class QChartLayer3D;
 class QPaintDevice;
 
-// ===== 3D 图元（design_3d.md §7.3，D-3D-9 / D-3D-10 ③；t11 按 designer 修订：去 worldAnchor、加 dataIndex）=====
+// ===== 3D 图元（design_3d.md §7.3 / design_3d_axes.md §7.1，D-3D-9 / D-3D-10 ③）=====
 // painter's algorithm 命令缓冲雏形：Renderer 3D 路径收集 → 深度排序（depth 降序=远→近）→ 绘制。
 // depth 由 ProjectFn3D 全链闭包（Layer3D 组装）返回直接填充（= camera project 的 viewDepth，-viewZ，越大越远）。
+// 分层（§7.1，v2 定案）：Grid 与 Series 统一深度排序（Grid 项 depth 减 kGridDepthBias 保证同深度系列优先）；
+// ForegroundDecor 恒后画（盒边/spine/刻度点，不与系列/网格比较深度）。
 struct QChartPrimitive {
     enum class Type { Point, LineSegment };
+    enum class Layer { Grid, Series, ForegroundDecor };
     Type type = Type::Point;
     QPointF a;                // 屏幕坐标：Point 位置 / LineSegment 起点
     QPointF b;                // 屏幕坐标：LineSegment 终点（Point 忽略）
     qreal depth = 0.0;        // 排序键：-viewZ（越大越远；绘制按 depth 降序 = 远→近，近者后画覆盖远者）
-    int dataIndex = -1;       // 数据点索引（系列图元=起点/单点索引；网格地板=-1）；hover 用它定位 (u,v)
+    int dataIndex = -1;       // 数据点索引（系列图元=起点/单点索引；轴/网格装饰=-1）；hover 用它定位 (u,v)
     qreal markerSize = 4.0;   // Point 标记半径（px）
     QColor color;             // 绘制色（收集时已按系列主题/override 展开）
     qreal penWidth = 1.0;     // 线宽（px）
+    Layer layer = Layer::Series;   // 默认 Series → 现有系列收集代码零改动
+};
+
+/// 网格深度偏置（§7.2，painter 版 polygon offset）：Grid 项 depth -= kGridDepthBias，
+/// 保证同深度处系列优先（z-fighting 时系列赢）。t29 Renderer 应用。
+static constexpr qreal kGridDepthBias = 1e-3;
+
+/// 3D billboard 文本标签（design_3d_axes.md §6.2；t27 Layer3D 收集、t29 Renderer 绘制）
+struct QChartTextLabel {
+    QPointF screenPos;          // 锚点屏幕坐标（已含偏移）
+    QString text;               // tickLabels 输出 或 轴标题
+    Qt::Alignment anchor = Qt::AlignLeft | Qt::AlignVCenter;  // 相对 screenPos 的对齐
+    qreal fontSize = 10.0;      // 像素字号
+    QColor color;               // 主题 textColor / axisColor
+    bool isTitle = false;       // 轴标题（渲染可加大加粗）
 };
 
 // 场景快照：render 时由 QChartWidget 组装。

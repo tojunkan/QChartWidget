@@ -26,8 +26,13 @@ public:
 private:
     void drawBackground(QPainter* p, const QChartScene& scene);
     void drawForeground(QPainter* p, const QChartScene& scene);
-    /// 3D 子路径：collect（Layer3D）→ depth 降序（远→近）→ 逐图元绘制 → 2D overlay 后画
+    /// 3D 子路径（design_3d_axes.md §7.2）：collect → 分桶（depthItems=Grid+Series / decor=ForegroundDecor）
+    /// → Grid 深度偏置 → depthItems 降序（远→近）→ decor 顺序 → labels → 2D overlay 后画
     void drawForeground3D(QPainter* p, const QChartScene& scene);
+    /// 逐图元绘制（Point=drawEllipse、LineSegment=drawLine，pen=color+penWidth）
+    void drawPrimitives(QPainter* p, const QVector<QChartPrimitive>& items);
+    /// billboard 文本（drawText，裁剪 plotArea；isTitle 加大加粗）
+    void drawLabels(QPainter* p, const QChartScene& scene, const QVector<QChartTextLabel>& labels);
     /// 无缓存直接绘制（drawBackground + drawForeground）
     void drawDirect(QPainter* p, const QChartScene& scene);
 

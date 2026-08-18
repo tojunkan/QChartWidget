@@ -185,22 +185,57 @@ void QPainterChartRenderer::drawForeground(QPainter* p, const QChartScene& scene
     }
 }
 
-// ===== 3D 前景子路径（design_3d.md §7.4）：collect → depth 降序 → 绘制 → 2D overlay 后画 =====
+// ===== 3D 前景子路径（design_3d_axes.md §7.2 v2）：collect → 分桶 → 偏置 → 统一排序 → decor → labels =====
 void QPainterChartRenderer::drawForeground3D(QPainter* p, const QChartScene& scene) {
-    // 1. collect：遍历 3D 图层收集图元（深度已在闭包内算好：-viewZ，越大越远）
+    // 1. collect：遍历 3D 图层收集图元（深度已在闭包内算好：-viewZ，越大越远）+ labels 出参
     QVector<QChartPrimitive> items;
+    QVector<QChartTextLabel> labels;
     for (auto* layer3D : scene.layers3D) {
         if (!layer3D) continue;
-        layer3D->collectPrimitives(scene.camera3D, scene.plotArea, items);
+        layer3D->collectPrimitives(scene.camera3D, scene.plotArea, items, &labels);
     }
 
-    // 2. sort：depth 降序（远→近），远先画、近后画覆盖远者（painter's algorithm，designer 定案）
-    std::sort(items.begin(), items.end(),
-              [](const QChartPrimitive& a, const QChartPrimitive& b) { return a.depth > b.depth; });
+    // 2. 分桶：depthItems（Grid+Series 统一深度排序）+ decorItems（ForegroundDecor 恒后画）
+    //    Grid 深度偏置（painter 版 polygon offset）：depth += kGridDepthBias →
+    //    同深度处网格视为更远、先画，系列后画覆盖（§10.2 #13 gridTie_seriesWins）
+    QVector<QChartPrimitive> depthItems, decorItems;
+    depthItems.reserve(items.size());
+    for (const QChartPrimitive& prim : items) {
+        if (prim.layer == QChartPrimitive::Layer::ForegroundDecor) {
+            decorItems.append(prim);
+        } else {
+            QChartPrimitive copy = prim;
+            if (copy.layer == QChartPrimitive::Layer::Grid)
+                copy.depth += kGridDepthBias;
+            depthItems.append(copy);
+        }
+    }
 
-    // 3. draw：逐图元绘制（Point=drawEllipse、LineSegment=drawLine，pen=color+penWidth）
+    // 3. depthItems 按 depth 降序（远→近）统一排序并绘制（球前网格 depth 大 → 后画 → 遮挡球 ✓）
+    std::sort(depthItems.begin(), depthItems.end(),
+              [](const QChartPrimitive& a, const QChartPrimitive& b) { return a.depth > b.depth; });
     p->save();
     p->setClipRect(scene.plotArea);
+    drawPrimitives(p, depthItems);
+
+    // 4. decorItems（顺序）：盒 12 边、spine、刻度点——恒可见，不被系列/网格遮挡（§7.1）
+    drawPrimitives(p, decorItems);
+    p->restore();
+
+    // 5. labels（billboard 文本）最上层
+    drawLabels(p, scene, labels);
+
+    // 6. 2D overlay（图例等）后画，不参与深度（D-3D-9）
+    if (scene.legend && scene.legend->isVisible()) {
+        p->save();
+        p->setClipRect(scene.plotArea);
+        scene.legend->draw(p, scene.plotArea, scene.legendItems);
+        p->restore();
+    }
+}
+
+// ===== 逐图元绘制 =====
+void QPainterChartRenderer::drawPrimitives(QPainter* p, const QVector<QChartPrimitive>& items) {
     for (const QChartPrimitive& prim : items) {
         p->setPen(QPen(prim.color, prim.penWidth));
         if (prim.type == QChartPrimitive::Type::Point) {
@@ -212,13 +247,23 @@ void QPainterChartRenderer::drawForeground3D(QPainter* p, const QChartScene& sce
             p->drawLine(prim.a, prim.b);
         }
     }
-    p->restore();
+}
 
-    // 4. 2D overlay（图例等）后画，不参与深度（D-3D-9）
-    if (scene.legend && scene.legend->isVisible()) {
-        p->save();
-        p->setClipRect(scene.plotArea);
-        scene.legend->draw(p, scene.plotArea, scene.legendItems);
-        p->restore();
+// ===== billboard 文本（A6：drawText 即 billboard，QPainter 无真 3D 文本）=====
+void QPainterChartRenderer::drawLabels(QPainter* p, const QChartScene& scene,
+                                       const QVector<QChartTextLabel>& labels) {
+    if (labels.isEmpty()) return;
+    p->save();
+    p->setClipRect(scene.plotArea);
+    QFont f = p->font();
+    for (const QChartTextLabel& lbl : labels) {
+        f.setPointSizeF(lbl.fontSize);
+        f.setBold(lbl.isTitle);
+        p->setFont(f);
+        p->setPen(lbl.color);
+        // 对齐锚定 screenPos（零矩形 + TextDontClip 防裁剪）
+        const int flags = int(lbl.anchor) | Qt::TextDontClip;
+        p->drawText(QRectF(lbl.screenPos, QSizeF(0, 0)), flags, lbl.text);
     }
+    p->restore();
 }

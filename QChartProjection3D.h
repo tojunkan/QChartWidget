@@ -77,6 +77,13 @@ public:
         return { QVector3D(0, 0, 0), QVector3D(10, 10, 10) }; // 与 2D QRectF(0,0,10,10) 对齐
     }
 
+    // ===== 快速通道与采样段数提示（design_3d_axes.md §5.4，additive）=====
+    /// 直线采样段数提示：弯曲投影 32，Cartesian3D 恒等 → 2（两点直线）
+    virtual int samplingSegmentsHint() const { return 32; }
+    /// 恒等映射快速通道（用户定案）：恒等映射下 fromWorld/toWorld ≡ 恒等，
+    /// 反算 dataBounds 免采样（§2.2 快速通道）、图元生成免 toWorld/分段（直接 Num→World 直通）
+    virtual bool isIdentityMapping() const { return false; }
+
     // ===== 数据曲线 → World 折线（NaN 断路径；返回子路径列表）=====
     /// dataCurve: t∈[0,1] → Numeric 三元组；每段子路径内连续，NaN 处断开
     QVector<QVector<QVector3D>>

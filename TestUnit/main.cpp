@@ -12,6 +12,7 @@
 #include "tests/test_qdatetimeaxis.h"
 #include "tests/test_qchartcamera.h"
 #include "tests/test_qchartcamera3d.h"
+#include "tests/test_qchartaxes3d.h"
 #include "tests/test_qchartmath.h"
 #include "tests/test_qchartprojection.h"
 #include "tests/test_qchartsurface3d.h"
@@ -35,6 +36,7 @@ int main(int argc, char* argv[])
     rc += QTest::qExec(new TestQDateTimeAxis, argc, argv);
     rc += QTest::qExec(new TestQChartCamera2D, argc, argv);
     rc += QTest::qExec(new TestQChartCamera3D, argc, argv);
+    rc += QTest::qExec(new TestQChartAxes3D, argc, argv);
     rc += QTest::qExec(new TestQChartMath, argc, argv);
     rc += QTest::qExec(new TestQChartProjection, argc, argv);
     rc += QTest::qExec(new TestQChartSurface3D, argc, argv);

@@ -34,6 +34,7 @@ set(QCHART_SOURCES
     QChartSurfaceSeries.cpp
     QChartLayer3D.cpp
     QChartWidget3D.cpp
+    QChartAxes3D.cpp
     QChartRenderer.cpp
     QPainterChartRenderer.cpp
     QChartAxis.cpp
@@ -105,6 +106,7 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qdatetimeaxis.h
         TestUnit/tests/test_qchartcamera.h
         TestUnit/tests/test_qchartcamera3d.h
+        TestUnit/tests/test_qchartaxes3d.h
         TestUnit/tests/test_qchartmath.h
         TestUnit/tests/test_qchartprojection.h
         TestUnit/tests/test_qchartsurface3d.h
@@ -129,6 +131,7 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qdatetimeaxis.cpp
         TestUnit/tests/test_qchartcamera.cpp
         TestUnit/tests/test_qchartcamera3d.cpp
+        TestUnit/tests/test_qchartaxes3d.cpp
         TestUnit/tests/test_qchartmath.cpp
         TestUnit/tests/test_qchartprojection.cpp
         TestUnit/tests/test_qchartsurface3d.cpp

@@ -366,3 +366,100 @@ void TestQChartMath::computeWorldBounds_sampling() {
     QVERIFY(qAbs(wb.min.z() + 1.0) < 1e-6 && qAbs(wb.max.z() - 1.0) < 1e-6);
     QVERIFY(wb.min.x() <= 0.0 && wb.max.x() >= 0.0);  // 含原点
 }
+
+// ===== 补项：samplingSegmentsHint（design_3d_axes.md §5.4）=====
+void TestQChartMath::samplingHint() {
+    QChartCartesianProjection3D cart;
+    QCOMPARE(cart.samplingSegmentsHint(), 2);          // 恒等 → 两点直线
+
+    QChartCylindricalProjection3D cyl;
+    QChartSphericalProjection3D sph;
+    QCOMPARE(cyl.samplingSegmentsHint(), 32);          // 弯曲投影默认 32
+    QCOMPARE(sph.samplingSegmentsHint(), 32);
+
+    QChartFunctionalProjection3D func(
+        [](qreal u, qreal v, qreal) -> QVector3D {
+            return QVector3D(u, v, 0);
+        });
+    QCOMPARE(func.samplingSegmentsHint(), 32);         // 函数式默认 32（不可断言直线）
+}
+
+// ===== 补项：isIdentityMapping（design_3d_axes.md §5.4 快速通道）=====
+void TestQChartMath::identityFastPath() {
+    QChartCartesianProjection3D cart;
+    QVERIFY(cart.isIdentityMapping());                 // 恒等 → 快速通道
+
+    QChartCylindricalProjection3D cyl;
+    QChartSphericalProjection3D sph;
+    QVERIFY(!cyl.isIdentityMapping());
+    QVERIFY(!sph.isIdentityMapping());
+
+    QChartFunctionalProjection3D func(
+        [](qreal u, qreal v, qreal) -> QVector3D {
+            return QVector3D(u, v, 0);
+        });
+    QVERIFY(!func.isIdentityMapping());                // 用户 lambda 不可假定恒等
+}
+
+// ===== 补项：unproject（design_3d_axes.md §2.3，Phase 3 预留；本任务实现并单测）=====
+void TestQChartMath::unproject_roundtrip() {
+    // 相机：lookAt 视图 + 透视/正交投影（与 §2.3 同构）
+    QMatrix4x4 view;
+    view.lookAt(QVector3D(0, 0, 10), QVector3D(0, 0, 0), QVector3D(0, 1, 0));
+
+    // 透视：前方点 project → clip → unproject 还原
+    {
+        const QMatrix4x4 vp = QChartMath::perspectiveMatrix(45.0, 4.0 / 3.0, 0.1, 100.0) * view;
+        const QVector3D worlds[] = {
+            QVector3D(0, 0, 0), QVector3D(1, 2, 0), QVector3D(-0.5f, 1.5f, -3.0f),
+            QVector3D(2, -1, 5), QVector3D(-3, 0.5f, 2),
+        };
+        for (const QVector3D& w : worlds) {
+            const QVector4D clip = vp * QVector4D(w, 1.0f);
+            QVERIFY2(clip.w() > 0.0f, "前方点 clip.w 应 > 0");
+            const QVector3D back = QChartMath::unproject(vp, clip);
+            // float 存储 → 1e-3 容差
+            QVERIFY2(nearVec3(back, w.x(), w.y(), w.z(), 1e-3),
+                     qPrintable(QString("透视 unproject 往返应还原 world (%1,%2,%3)→(%4,%5,%6)")
+                                .arg(w.x()).arg(w.y()).arg(w.z())
+                                .arg(back.x()).arg(back.y()).arg(back.z())));
+        }
+    }
+
+    // 正交：同上
+    {
+        const QMatrix4x4 vp = QChartMath::orthographicMatrix(-10, 10, -10, 10, 0.1, 100.0) * view;
+        const QVector3D worlds[] = {
+            QVector3D(0, 0, 0), QVector3D(4, -3, 2), QVector3D(-6, 7, -4),
+        };
+        for (const QVector3D& w : worlds) {
+            const QVector4D clip = vp * QVector4D(w, 1.0f);
+            const QVector3D back = QChartMath::unproject(vp, clip);
+            QVERIFY2(nearVec3(back, w.x(), w.y(), w.z(), 1e-3),
+                     qPrintable(QString("正交 unproject 往返应还原 world (%1,%2,%3)")
+                                .arg(w.x()).arg(w.y()).arg(w.z())));
+        }
+    }
+
+    // w<=0 → NaN 哨兵（相机背后/近平面外 + 输入齐次 w<=0）
+    {
+        const QMatrix4x4 vp = QChartMath::perspectiveMatrix(45.0, 4.0 / 3.0, 0.1, 100.0) * view;
+        QVector3D nan1 = QChartMath::unproject(vp, QVector4D(0, 0, 0, 0));
+        QVERIFY(qIsNaN(nan1.x()) && qIsNaN(nan1.y()) && qIsNaN(nan1.z()));
+        QVector3D nan2 = QChartMath::unproject(vp, QVector4D(1, 1, 1, -1));
+        QVERIFY(qIsNaN(nan2.x()) && qIsNaN(nan2.y()) && qIsNaN(nan2.z()));
+        // 相机背后点：clip.w<0 → NaN
+        QVector4D behind = vp * QVector4D(0, 0, 20, 1);   // 相机在 z=10 后方
+        QVERIFY(behind.w() < 0.0f);
+        QVector3D nan3 = QChartMath::unproject(vp, behind);
+        QVERIFY(qIsNaN(nan3.x()) && qIsNaN(nan3.y()) && qIsNaN(nan3.z()));
+    }
+
+    // 不可逆矩阵 → NaN
+    {
+        QMatrix4x4 singular;
+        singular.fill(0.0f);
+        QVector3D nan = QChartMath::unproject(singular, QVector4D(1, 1, 1, 1));
+        QVERIFY(qIsNaN(nan.x()) && qIsNaN(nan.y()) && qIsNaN(nan.z()));
+    }
+}

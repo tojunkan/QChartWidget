@@ -24,4 +24,9 @@ private slots:
     void cartesian3d_identity();        // 恒等映射
     void functional3d_mobiusSamples();  // 采样点 |dist−R| ≤ 带宽容差
     void computeWorldBounds_sampling(); // 采样包围盒；全 NaN 兜底
+
+    // ===== 补项数学前置（design_3d_axes.md §5.4 / §2.3，t21）=====
+    void samplingHint();                // Cartesian3D→2 段；球/柱/函数式→32 段
+    void identityFastPath();            // Cartesian3D→true；球/柱/函数式→false
+    void unproject_roundtrip();         // 正交/透视下 project→unproject 还原；w<=0→NaN
 };

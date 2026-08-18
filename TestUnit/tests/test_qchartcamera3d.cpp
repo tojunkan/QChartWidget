@@ -1,6 +1,6 @@
-// test_qchartcamera3d.cpp —— QChartCamera3D 单元测试
-// 覆盖（design_3d.md §11.1 TestQChartCamera3D 全部 8 组），含 D-3D-2 退化一致性硬验收。
-// 注：QMatrix4x4/QVector3D 为 float 存储 → 容差按 1e-4（屏幕 1e-3）取。
+// test_qchartcamera3d.cpp —— QChartCamera3D 单元测试（R5 重写：派生不变量）
+// 覆盖（design_3d.md §11.1 R5 8 例），含 D-3D-2 退化一致性硬验收（新形态论证）。
+// 注：QMatrix4x4/QVector3D 为 float 存储 → 屏幕 1e-3、距离/角度 1e-3 容差。
 #include <QtTest>
 #include <QVariantAnimation>
 #include <QPropertyAnimation>
@@ -10,63 +10,49 @@
 #include "test_qchartcamera3d.h"
 
 namespace {
+    // 保守拟合距离 d = radius / tan(fovY/2)，radius = 半对角线
+    qreal fitDistance(const QChartCamera3D& cam) {
+        const qreal radius = cam.viewCubeSize().length() * 0.5;
+        return radius / qTan(qDegreesToRadians(cam.fovY()) * 0.5);
+    }
     qreal elevationDeg(const QChartCamera3D& cam) {
-        QVector3D d = (cam.position() - cam.lookAt()).normalized();
+        const QVector3D d = (cam.position() - cam.lookAt()).normalized();
         const qreal sinP = qBound<qreal>(-1.0, QVector3D::dotProduct(d, QVector3D(0, 1, 0)), 1.0);
         return qRadiansToDegrees(qAsin(sinP));
     }
 }
 
-// ===== 1. lookAt：行向量正交 + 单位；平移项 = -R·eye =====
-void TestQChartCamera3D::lookAt_orthonormal() {
-    QChartCamera3D cam;
-    cam.setPosition(QVector3D(3, 4, 5));
-    cam.setLookAt(QVector3D(1, 1, 0));
-    cam.setUp(QVector3D(0, 1, 0));
+// ===== 1. 派生：position = lookAt − forward·d、|position−lookAt| == d、lookAt == 盒中心 =====
+void TestQChartCamera3D::derivedPosition_lookAt() {
+    QChartCamera3D cam;   // 默认 viewCube {0,0,0}-{10,10,10}、yaw45/pitch30、fov45
 
-    QMatrix4x4 v = cam.viewMatrix();
-    QVector3D r0(v(0, 0), v(0, 1), v(0, 2));   // side
-    QVector3D r1(v(1, 0), v(1, 1), v(1, 2));   // upv
-    QVector3D r2(v(2, 0), v(2, 1), v(2, 2));   // -forward
+    QCOMPARE(cam.lookAt(), QVector3D(5, 5, 5));          // = 盒中心
+    QCOMPARE(cam.viewCubeCenter(), QVector3D(5, 5, 5));
 
-    // 正交
-    QVERIFY(qAbs(QVector3D::dotProduct(r0, r1)) < 1e-4);
-    QVERIFY(qAbs(QVector3D::dotProduct(r0, r2)) < 1e-4);
-    QVERIFY(qAbs(QVector3D::dotProduct(r1, r2)) < 1e-4);
-    // 单位
-    QVERIFY(qAbs(r0.length() - 1.0) < 1e-4);
-    QVERIFY(qAbs(r1.length() - 1.0) < 1e-4);
-    QVERIFY(qAbs(r2.length() - 1.0) < 1e-4);
+    const qreal d = fitDistance(cam);
+    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - d) < 1e-3);
+    // near = max(0.01, d − 1.5r)；far = d + 1.5r
+    const qreal r = cam.viewCubeSize().length() * 0.5;
+    QVERIFY(qAbs(cam.nearPlane() - qMax<qreal>(0.01, d - 1.5 * r)) < 1e-3);
+    QVERIFY(qAbs(cam.farPlane() - (d + 1.5 * r)) < 1e-3);
 
-    // 平移项 = -R·eye：eye → 视图原点
-    QVector4D eyeView = v * QVector4D(3, 4, 5, 1);
-    QVERIFY(qAbs(eyeView.x()) < 1e-4 && qAbs(eyeView.y()) < 1e-4 && qAbs(eyeView.z()) < 1e-4);
-
-    // 目标 → (0, 0, -dist)
-    const qreal dist = (QVector3D(3, 4, 5) - QVector3D(1, 1, 0)).length();
-    QVector4D tgtView = v * QVector4D(1, 1, 0, 1);
-    QVERIFY(qAbs(tgtView.x()) < 1e-4 && qAbs(tgtView.y()) < 1e-4
-            && qAbs(tgtView.z() + dist) < 1e-3);
-
-    // 直接核对 m(0,3) = -side·eye、m(1,3) = -upv·eye、m(2,3) = forward·eye
-    const QVector3D eye(3, 4, 5);
-    QVERIFY(qAbs(v(0, 3) + QVector3D::dotProduct(r0, eye)) < 1e-4);
-    QVERIFY(qAbs(v(1, 3) + QVector3D::dotProduct(r1, eye)) < 1e-4);
-    QVERIFY(qAbs(v(2, 3) - QVector3D::dotProduct(-r2, eye)) < 1e-3);
+    // 换盒：半径/d 随盒尺寸重派生
+    cam.setViewCube(QChartWorldBox{ QVector3D(0, 0, 0), QVector3D(20, 4, 8) });
+    QCOMPARE(cam.lookAt(), QVector3D(10, 2, 4));
+    const qreal d2 = fitDistance(cam);
+    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - d2) < 1e-3);
+    QVERIFY(qAbs(cam.viewCubeSize().length() * 0.5 - 10.9544) < 1e-3);
 }
 
-// ===== 2. 【D-3D-2 硬验收】正交俯视 ≡ 2D cartesianToPixel（含 y 翻转）=====
+// ===== 2. 【D-3D-2 硬验收】正交 + viewCube=viewRect 范围 + 俯视 ≡ 2D cartesianToPixel =====
 void TestQChartCamera3D::orthographicTopDown_equals2D() {
     QChartCamera3D cam;
-    cam.setPosition(QVector3D(0, 0, 10));   // 俯视
-    cam.setLookAt(QVector3D(0, 0, 0));
-    cam.setUp(QVector3D(0, 1, 0));
     cam.setProjectionMode(QChartCamera3D::ProjectionMode::Orthographic);
-    const QRectF viewRect(0, 0, 10, 10);
-    cam.setOrthographicBox(viewRect);        // 正交盒 = viewRect
-    cam.setNearPlane(0.1);
-    cam.setFarPlane(100.0);
+    cam.setViewCube(QChartWorldBox{ QVector3D(0, 0, -1), QVector3D(10, 10, 1) });   // x/y = viewRect 范围，z 覆盖数据平面
+    cam.setYaw(0.0);     // 俯视：forward = (0,0,−1)
+    cam.setPitch(0.0);
 
+    const QRectF viewRect(0, 0, 10, 10);
     const QRectF plot(0, 0, 400, 300);
     const qreal xs[] = { -2.0, 0.0, 2.5, 5.0, 7.5, 10.0, 12.0 };
     const qreal ys[] = { -3.0, 0.0, 1.5, 5.0, 8.5, 10.0, 13.0 };
@@ -79,8 +65,9 @@ void TestQChartCamera3D::orthographicTopDown_equals2D() {
                      qPrintable(QString("正交俯视 != 2D at (%1,%2): 3D=(%3,%4) 2D=(%5,%6)")
                                 .arg(x).arg(y).arg(p.screen.x()).arg(p.screen.y())
                                 .arg(expected.x()).arg(expected.y())));
-            // 深度：z=0 在相机前方 10 单位
-            QVERIFY(qAbs(p.depth - 10.0) < 1e-3);
+            // 深度有限且 = d（数据平面在相机前方 d）
+            QVERIFY(std::isfinite(p.depth));
+            QVERIFY(qAbs(p.depth - fitDistance(cam)) < 1e-3);
         }
     }
 
@@ -90,145 +77,141 @@ void TestQChartCamera3D::orthographicTopDown_equals2D() {
     QVERIFY2(high.screen.y() < low.screen.y(), "y 翻转：View 上 → 像素上");
 }
 
-// ===== 3. orbit：距离不变、lookAt 不变、yaw 几何、pitch clamp ±89° =====
-void TestQChartCamera3D::orbit_yawPitch_geometry() {
-    // 默认相机：position(0,0,10)、lookAt(0,0,0)、距离 10
+// ===== 3. orbit：只转 orientation，viewCube 不动（R6）；距离不变、lookAt 不变、pitch clamp =====
+void TestQChartCamera3D::orbit_geometry() {
     QChartCamera3D cam;
-    const qreal dist0 = (cam.position() - cam.lookAt()).length();
-    QCOMPARE(dist0, 10.0);
+    const qreal d0 = fitDistance(cam);
+    const QChartWorldBox box0 = cam.viewCube();
 
-    // yaw 30°（绕 up 轴）：(0,0,10) → (5, 0, 8.660)
-    cam.orbit(30, 0);
-    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - dist0) < 1e-4);
-    QCOMPARE(cam.lookAt(), QVector3D(0, 0, 0));
-    QVERIFY(qAbs(cam.position().x() - 5.0) < 1e-3);
-    QVERIFY(qAbs(cam.position().y()) < 1e-6);
-    QVERIFY(qAbs(cam.position().z() - 8.660254) < 1e-3);
+    cam.orbit(30, 20);
+    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - d0) < 1e-3);  // 距离不变
+    QCOMPARE(cam.lookAt(), QVector3D(5, 5, 5));                            // 盒中心不变
+    QVERIFY(qAbs(cam.yaw() - 75.0) < 1e-6);
+    QVERIFY(qAbs(cam.pitch() - 50.0) < 1e-6);
+    QVERIFY(cam.viewCube().min == box0.min && cam.viewCube().max == box0.max);  // R6：viewCube 不动
 
-    // pitch clamp：orbit(0, -90) → 仰角压到 +89°（恰达极点 → 水平方向兜底）
+    // pitch clamp ±89°
     QChartCamera3D c2;
-    c2.orbit(0, -90);
-    QVERIFY(elevationDeg(c2) > 88.0 && elevationDeg(c2) <= 89.0 + 1e-3);
-    QVERIFY(qAbs((c2.position() - c2.lookAt()).length() - 10.0) < 1e-4);
-    QCOMPARE(c2.lookAt(), QVector3D(0, 0, 0));
-
-    // orbit(0, +90) → -89°
-    QChartCamera3D c3;
-    c3.orbit(0, 90);
-    QVERIFY(elevationDeg(c3) >= -89.0 - 1e-3 && elevationDeg(c3) < -88.0);
-    QVERIFY(qAbs((c3.position() - c3.lookAt()).length() - 10.0) < 1e-4);
-
-    // 反复大幅 orbit 不越界、距离/目标不变
-    QChartCamera3D c4;
-    for (int i = 0; i < 12; ++i)
-        c4.orbit(17, -43);
-    QVERIFY(qAbs(elevationDeg(c4)) <= 89.0 + 1e-3);
-    QVERIFY(qAbs((c4.position() - c4.lookAt()).length() - 10.0) < 1e-3);
-    QCOMPARE(c4.lookAt(), QVector3D(0, 0, 0));
+    c2.setPitch(88.0);
+    c2.orbit(0, 5);
+    QVERIFY(qAbs(c2.pitch() - 89.0) < 1e-6);
+    c2.orbit(0, -200);
+    QVERIFY(qAbs(c2.pitch() + 89.0) < 1e-6);
+    // 仰角（派生）不越界
+    QVERIFY(qAbs(elevationDeg(c2)) <= 89.0 + 1e-3);
 }
 
-// ===== 4. dolly：距离缩放、lookAt 不变、factor<=0 防除零 =====
-void TestQChartCamera3D::dolly_factor() {
+// ===== 4. dolly：viewCube 缩放 f 倍 → d' == f·d、lookAt 不变、同 world 点屏幕外扩 =====
+void TestQChartCamera3D::dolly_scale() {
     QChartCamera3D cam;
-    cam.dolly(0.5);                          // 10 → 5
-    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - 5.0) < 1e-4);
-    QVERIFY(qAbs(cam.position().x()) < 1e-6 && qAbs(cam.position().y()) < 1e-6
-            && qAbs(cam.position().z() - 5.0) < 1e-6);
-    QCOMPARE(cam.lookAt(), QVector3D(0, 0, 0));
+    const qreal d0 = fitDistance(cam);
+    const QRectF plot(0, 0, 400, 300);
+    const QPointF before = cam.project(QVector3D(4, 4, 4), plot).screen;
+    const QPointF center(200, 150);
 
-    cam.dolly(2.0);                          // 5 → 10
-    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - 10.0) < 1e-4);
-    QCOMPARE(cam.lookAt(), QVector3D(0, 0, 0));
+    cam.dolly(0.5);
+    // 盒尺寸减半 → 距离减半
+    QVERIFY(qAbs(cam.viewCubeSize().length() - 10.0 * qSqrt(3.0) * 0.5) < 1e-3);
+    QVERIFY(qAbs(fitDistance(cam) - 0.5 * d0) < 1e-3);
+    QCOMPARE(cam.lookAt(), QVector3D(5, 5, 5));   // 绕中心缩放 → 中心不变
+    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - 0.5 * d0) < 1e-3);
 
-    // factor<=0 忽略（无 NaN、位置不变）
-    const QVector3D before = cam.position();
+    // 同 world 点屏幕坐标外扩（内容放大）
+    const QPointF after = cam.project(QVector3D(4, 4, 4), plot).screen;
+    const qreal dBefore = std::sqrt(QPointF::dotProduct(before - center, before - center));
+    const qreal dAfter  = std::sqrt(QPointF::dotProduct(after - center, after - center));
+    QVERIFY2(dAfter > dBefore, "dolly(0.5) 内容放大 → 同点屏幕外扩");
+
+    // factor<=0 no-op
+    const QVector3D sizeKeep = cam.viewCubeSize();
     cam.dolly(0);
     cam.dolly(-1.0);
-    QCOMPARE(cam.position(), before);
-    QVERIFY(!qIsNaN(cam.position().x()) && !qIsNaN(cam.position().y()) && !qIsNaN(cam.position().z()));
+    QVERIFY(cam.viewCubeSize() == sizeKeep);
 }
 
-// ===== 5. panTarget：position/lookAt 同步平移、viewMatrix 平移项正确 =====
-void TestQChartCamera3D::panTarget_translatesBoth() {
-    QChartCamera3D cam;                      // 默认前方 -z → 相机平面 = 世界 X/Y
-    cam.panTarget(3.0, -4.0);
+// ===== 5. panViewCube：盒中心/position 同位移、viewMatrix 平移项正确 =====
+void TestQChartCamera3D::pan_translates() {
+    QChartCamera3D cam;
+    const QChartWorldBox box0 = cam.viewCube();
+    const QVector3D pos0 = cam.position();
 
-    // 同移 delta = (3, -4, 0)
-    QVERIFY(qAbs(cam.position().x() - 3.0) < 1e-4 && qAbs(cam.position().y() + 4.0) < 1e-4
-            && qAbs(cam.position().z() - 10.0) < 1e-4);
-    QVERIFY(qAbs(cam.lookAt().x() - 3.0) < 1e-4 && qAbs(cam.lookAt().y() + 4.0) < 1e-4
-            && qAbs(cam.lookAt().z()) < 1e-6);
+    cam.panViewCube(3.0, -4.0);
+    // 盒整体平移 (3,−4,0)
+    QVERIFY(cam.viewCube().min == box0.min + QVector3D(3, -4, 0));
+    QVERIFY(cam.viewCube().max == box0.max + QVector3D(3, -4, 0));
+    QCOMPARE(cam.lookAt(), QVector3D(8, 1, 5));       // 中心同位移
+    QVERIFY(cam.position() == pos0 + QVector3D(3, -4, 0));   // position 同位移
 
-    // viewMatrix 平移项：新 lookAt 映射到 (0, 0, -dist)
+    // viewMatrix 平移项：新 lookAt 映射到 (0,0,−d)
     QMatrix4x4 v = cam.viewMatrix();
     QVector4D t = v * QVector4D(cam.lookAt(), 1.0f);
-    QVERIFY(qAbs(t.x()) < 1e-4 && qAbs(t.y()) < 1e-4 && qAbs(t.z() + 10.0) < 1e-3);
-
-    // 相对距离与朝向不变
-    QVERIFY(qAbs((cam.position() - cam.lookAt()).length() - 10.0) < 1e-4);
+    QVERIFY(qAbs(t.x()) < 1e-3 && qAbs(t.y()) < 1e-3
+            && qAbs(t.z() + fitDistance(cam)) < 1e-3);
 }
 
 // ===== 6. 透视 vs 正交：同 world 点两模式屏幕坐标差异符合预期 =====
 void TestQChartCamera3D::perspectiveVsOrthographic() {
-    QChartCamera3D cam;                      // 默认透视：pos(0,0,10)、fov 45°
-    const QRectF plot(0, 0, 400, 300);       // aspect 4/3
+    QChartCamera3D cam;
+    cam.setViewCube(QChartWorldBox{ QVector3D(0, 0, -1), QVector3D(10, 10, 1) });
+    cam.setYaw(0.0);
+    cam.setPitch(0.0);
+    const QRectF plot(0, 0, 400, 300);
 
-    // 正交模式：盒 (0,0,10,10) → 世界 (5,5) 为盒中心
+    // 正交：盒中心 (5,5) → 视口中心；盒角 (0,0) → 左下角
     cam.setProjectionMode(QChartCamera3D::ProjectionMode::Orthographic);
-    cam.setOrthographicBox(QRectF(0, 0, 10, 10));
     QChartProjectedPoint o1 = cam.project(QVector3D(5, 5, 0), plot);
     QVERIFY(qAbs(o1.screen.x() - 200.0) < 1e-3 && qAbs(o1.screen.y() - 150.0) < 1e-3);
-    // 目标点 (0,0,0) → 正交盒左下角
     QChartProjectedPoint o2 = cam.project(QVector3D(0, 0, 0), plot);
     QVERIFY(qAbs(o2.screen.x()) < 1e-3 && qAbs(o2.screen.y() - 300.0) < 1e-3);
 
-    // 透视模式：同点 (5,5,0) 明显偏离中心（透视角差）；目标点 → 视口中心
+    // 透视：盒中心仍在视轴 → 视口中心；角点 (0,0) 明显偏离（透视收缩）
     cam.setProjectionMode(QChartCamera3D::ProjectionMode::Perspective);
     QChartProjectedPoint p1 = cam.project(QVector3D(5, 5, 0), plot);
     QVERIFY(std::isfinite(p1.screen.x()) && std::isfinite(p1.screen.y()));
-    QVERIFY2(qAbs(p1.screen.x() - 200.0) > 100.0 || qAbs(p1.screen.y() - 150.0) > 100.0,
-             "透视与正交屏幕坐标应有明显差异");
+    QVERIFY(qAbs(p1.screen.x() - 200.0) < 1e-3 && qAbs(p1.screen.y() - 150.0) < 1e-3);
     QChartProjectedPoint p2 = cam.project(QVector3D(0, 0, 0), plot);
-    QVERIFY(qAbs(p2.screen.x() - 200.0) < 1e-3 && qAbs(p2.screen.y() - 150.0) < 1e-3);
+    QVERIFY2(qAbs(p2.screen.x() - 0.0) > 30.0 || qAbs(p2.screen.y() - 300.0) > 30.0,
+             "透视下角点应偏离正交投影位置");
 }
 
-// ===== 7. 退化：position == lookAt → orbit/dolly no-op、无 NaN =====
-void TestQChartCamera3D::degenerate_positionEqualsLookAt() {
+// ===== 7. 退化：viewCube 零尺寸 → orbit/dolly no-op、无 NaN =====
+void TestQChartCamera3D::degenerate_zeroSize() {
     QChartCamera3D cam;
-    cam.setPosition(QVector3D(1, 2, 3));
-    cam.setLookAt(QVector3D(1, 2, 3));
-    const QVector3D pos = cam.position();
-    const QVector3D tgt = cam.lookAt();
+    cam.setViewCube(QChartWorldBox{ QVector3D(1, 2, 3), QVector3D(1, 2, 3) });
+    const qreal yaw0 = cam.yaw(), pitch0 = cam.pitch();
+    const QChartWorldBox box0 = cam.viewCube();
 
     cam.orbit(30, 45);
     cam.dolly(0.5);
     cam.dolly(2.0);
+    QCOMPARE(cam.yaw(), yaw0);       // no-op
+    QCOMPARE(cam.pitch(), pitch0);
+    QVERIFY(cam.viewCube().min == box0.min && cam.viewCube().max == box0.max);
 
-    // 设计只保证 orbit/dolly 为 no-op
-    QCOMPARE(cam.position(), pos);
-    QCOMPARE(cam.lookAt(), tgt);
-
-    // panTarget 不在 no-op 列表：应正常同步平移且无 NaN（position==lookAt 保持）
-    cam.panTarget(1, 1);
+    // 派生无 NaN
     QVERIFY(!qIsNaN(cam.position().x()) && !qIsNaN(cam.position().y()) && !qIsNaN(cam.position().z()));
-    QCOMPARE(cam.position(), cam.lookAt());
+    QVERIFY(!qIsNaN(cam.nearPlane()) && !qIsNaN(cam.farPlane()));
 }
 
-// ===== 8. 属性可动画：三 Q_PROPERTY、setter 发 viewChanged、QVector3D 插值器 =====
+// ===== 8. 属性可动画：五 Q_PROPERTY、setter 发 viewChanged、QVector3D 插值器 =====
 void TestQChartCamera3D::properties_animatable() {
     QChartCamera3D cam;
     const QMetaObject* mo = cam.metaObject();
-    QVERIFY(mo->indexOfProperty("position") >= 0);
-    QVERIFY(mo->indexOfProperty("lookAt") >= 0);
+    QVERIFY(mo->indexOfProperty("viewCubeCenter") >= 0);
+    QVERIFY(mo->indexOfProperty("viewCubeSize") >= 0);
+    QVERIFY(mo->indexOfProperty("yaw") >= 0);
+    QVERIFY(mo->indexOfProperty("pitch") >= 0);
     QVERIFY(mo->indexOfProperty("fovY") >= 0);
 
     // setter 发 viewChanged（值变化才发）
     int signalCount = 0;
     QObject::connect(&cam, &QChartCamera::viewChanged, [&signalCount]() { ++signalCount; });
-    cam.setPosition(QVector3D(1, 0, 10));
-    cam.setLookAt(QVector3D(1, 0, 0));
+    cam.setViewCubeCenter(QVector3D(6, 5, 5));
+    cam.setViewCubeSize(QVector3D(12, 10, 10));
+    cam.setYaw(60.0);
+    cam.setPitch(40.0);
     cam.setFovY(60.0);
-    QCOMPARE(signalCount, 3);
+    QCOMPARE(signalCount, 5);
 
     // QVector3D 插值器：QVariantAnimation 往返（Qt 内建或库内注册，线性插值）
     QVariantAnimation anim;
@@ -239,14 +222,13 @@ void TestQChartCamera3D::properties_animatable() {
     QVector3D mid = anim.currentValue().value<QVector3D>();
     QVERIFY(qAbs(mid.x() - 5.0) < 1e-4 && qAbs(mid.y()) < 1e-6 && qAbs(mid.z()) < 1e-6);
 
-    // QPropertyAnimation 驱动 position 属性（D-3D-3：3D 相机动画走 QPropertyAnimation）
-    QPropertyAnimation prop(&cam, "position");
-    prop.setStartValue(QVariant::fromValue(QVector3D(1, 0, 10)));
-    prop.setEndValue(QVariant::fromValue(QVector3D(1, 5, 10)));
+    // QPropertyAnimation 驱动 viewCubeCenter（R5：3D 相机动画走 QPropertyAnimation）
+    QPropertyAnimation prop(&cam, "viewCubeCenter");
+    prop.setStartValue(QVariant::fromValue(QVector3D(5, 5, 5)));
+    prop.setEndValue(QVariant::fromValue(QVector3D(5, 10, 5)));
     prop.setDuration(100);
     prop.start();
     prop.setCurrentTime(50);
-    QVector3D midPos = cam.position();
-    QVERIFY(qAbs(midPos.y() - 2.5) < 1e-3);
+    QVERIFY(qAbs(cam.viewCubeCenter().y() - 7.5) < 1e-3);
     prop.stop();
 }

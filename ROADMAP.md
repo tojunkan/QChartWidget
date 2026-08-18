@@ -11,24 +11,25 @@
 ### 1.1 定位与状态
 
 - **定位**：基于 QPainter 的通用坐标系图表库（容器 + 图层 + 系列 + 独立轴 + 投影）。
-- **当前状态**：2D 可用 + **3D 数学先行落地**（11 个 demo + 16 类 134 用例全绿，三套工具链验证过）；3D 线框渲染就绪，**GPU 实时渲染（Phase 3）未做**。
+- **当前状态**：2D 可用 + **3D 数学先行 + 轴/网格控制流落地**（11 个 demo + 17 类 158 用例全绿，三套工具链验证过）；3D 线框渲染与参照系（盒/spine/刻度/标签）就绪，**GPU 实时渲染（Phase 3）未做**。
 - **目标**：Manim 级 3D 动画能力，但要求**实时/可交互**（Manim 是离线渲染，这里要 60fps 交互）。
 
 ### 1.2 现有类清单（按职责）
 
 | 职责 | 类 |
 |---|---|
-| 容器 | `QChartWidget`（Phase 0 后：场景组装 + 交互 pan/zoom/hover + 布局；viewRect/缓存已外移）+ `QChartWidget3D`（Phase 2：3D 场景组装 + orbit/dolly/pan 交互 + 联动信号 uvHovered/uvSelected，基类仅两处虚化钩子） |
-| 相机 | `QChartCamera`（Phase 2 起为基类：QObject + viewChanged）+ `QChartCamera2D`（原 2D 相机改名：viewRect + fit 策略 + View↔Pixel 映射 + `Q_PROPERTY(center/zoom)`）+ `QChartCamera3D`（Phase 2：position/lookAt/up/FOV/near/far + 透视/正交 + `viewProjectionMatrix()` + orbit/dolly/panTarget + fitToBounds + `Q_PROPERTY(position/lookAt/fovY)`） |
-| 渲染器 | `QChartRenderer`（接口 + `QChartScene` 快照，含 Phase 2 3D 段：camera3D/layers3D/worldBounds/is3D）/ `QPainterChartRenderer`（双缓存 + 绘制编排 + `renderUncached` + 3D 子路径：图元列表 + painter's algorithm 深度降序） |
+| 容器 | `QChartWidget`（Phase 0 后：场景组装 + 交互 pan/zoom/hover + 布局；viewRect/缓存已外移）+ `QChartWidget3D`（Phase 2：3D 场景组装 + orbit/dolly 交互（平移仅 API）+ 联动信号 uvHovered/uvSelected + **控制器**（viewCube 5³ 反算 dataBounds/域盒链/轴盒推送），基类仅两处虚化钩子） |
+| 相机 | `QChartCamera`（Phase 2 起为基类：QObject + viewChanged）+ `QChartCamera2D`（原 2D 相机改名：viewRect + fit 策略 + View↔Pixel 映射 + `Q_PROPERTY(center/zoom)`）+ `QChartCamera3D`（Phase 2 补项 R5 重构：**viewCube 主状态** + orientation(yaw/pitch) + fovY，position/lookAt/up/near/far 派生只读，`Q_PROPERTY(viewCubeCenter/Size/yaw/pitch/fovY)`，orbit/dolly/panViewCube/setViewCubeToFit，正交模式 viewCube 即投影盒） |
+| 渲染器 | `QChartRenderer`（接口 + `QChartScene` 快照，含 Phase 2 3D 段：camera3D/layers3D/worldBounds/is3D）/ `QPainterChartRenderer`（双缓存 + 绘制编排 + `renderUncached` + 3D 子路径：图元分层 {Grid,Series,ForegroundDecor} + 深度降序 + 网格深度偏置 kGridDepthBias + billboard 标签） |
 | 主题 | `QChartTheme`（Phase 1 新增：`Preset{Light,Dark}` + 调色板 + override 双槽颜色模型） |
 | 图例 | `QChartLegend`（Phase 1 新增：plotArea 四角 overlay，点击切换系列 visible） |
 | 导出 | `QChartWidget::saveAsPng/Svg/Pdf` + `QChartExportScope`（Phase 1 新增：默认全 widget，PNG 真栅格 / SVG 真矢量） |
-| 轴 | `QChartAxis` + `QValueAxis` / `QLogAxis` / `QDateTimeAxis` / `QBarCategoryAxis`（3D 侧 axisX/Y/Z 只做 toNumeric，不画 3D 轴刻度） |
-| 图层 | `QChartLayer`（组合 X/Y 轴 + 持有 Series + 网格 + hitTest）+ `QChartLayer3D`（Phase 2：三轴 + 3D 系列 + ProjectFn3D 全链闭包组装 + 图元收集 + 网格地板） |
+| 轴 | `QChartAxis` + `QValueAxis` / `QLogAxis` / `QDateTimeAxis` / `QBarCategoryAxis`（3D 侧 axisX/Y/Z 只做 toNumeric；3D 参照系由 `QChartAxes3D` 编排器复用其 tickValues/tickLabels） |
+| 图层 | `QChartLayer`（组合 X/Y 轴 + 持有 Series + 网格 + hitTest）+ `QChartLayer3D`（Phase 2：三轴 + 3D 系列 + ProjectFn3D 全链闭包 + 图元收集 + **轴/网格编排**：QChartAxes3D×3 + axesDataBox + GridMode{Box,Lattice} + 盒 12 边/3 spine/tick 点/标签 + 快速通道） |
 | 系列 | 2D：`QChartSeries` + `QXYSeries` / `QLineSeries` / `QScatterSeries` / `QPolygonSeries` / `QBarSeries` / `QRegionSeries`；3D（Phase 2）：`QChartSeries3D` + `QChartScatterSeries3D` / `QChartLineSeries3D` / `QChartSurfaceSeries`（Data 层 QVariant 三元组、World 层 QVector3D 缓存，全链闭包注入零耦合） |
-| 投影 | 2D：`QChartProjection` + `QCartesianProjection` / `QPolarProjection` / `QFunctionalProjection` / `QInterpolatedProjection`；3D（Phase 2，header-only）：`QChartProjection3D` + `QChartCartesianProjection3D` / `QChartCylindricalProjection3D` / `QChartSphericalProjection3D` / `QChartFunctionalProjection3D`（2→3 参数曲面嵌入 + 3→3 坐标变换）；`QChartProjectionFactory`、`ProjectionToolKit.h` |
-| 动画 | `QChartAnimation`（基类）+ `QNumericSeriesAnimation`（数值 morph）/ `QBarAnimation`（柱 morph）/ `QViewRectAnimation`（2D 相机漫游：waypoint 贝塞尔 + sizeCurve + Generator）/ `QProjectionSwitchAnimation`（投影间插值）；3D 相机动画走 QPropertyAnimation（position/lookAt/fovY） |
+| 投影 | 2D：`QChartProjection` + `QCartesianProjection` / `QPolarProjection` / `QFunctionalProjection` / `QInterpolatedProjection`；3D（Phase 2，header-only）：`QChartProjection3D` + `QChartCartesianProjection3D` / `QChartCylindricalProjection3D` / `QChartSphericalProjection3D` / `QChartFunctionalProjection3D`（2→3 参数曲面嵌入 + 3→3 坐标变换 + **快速通道** `isIdentityMapping()`/`samplingSegmentsHint`）；`QChartProjectionFactory`、`ProjectionToolKit.h` |
+| 3D 参照系 | `QChartAxes3D`（Phase 2 补项：非 Q_OBJECT 编排器，组合复用 QChartAxis 刻度/标签，产 Numeric 空间几何——盒 12 边/3 spine/tick 锚点/标签配置；三层分离红线） |
+| 动画 | `QChartAnimation`（基类）+ `QNumericSeriesAnimation`（数值 morph）/ `QBarAnimation`（柱 morph）/ `QViewRectAnimation`（2D 相机漫游：waypoint 贝塞尔 + sizeCurve + Generator）/ `QProjectionSwitchAnimation`（投影间插值）；3D 相机动画走 QPropertyAnimation（viewCubeCenter/Size/yaw/pitch/fovY） |
 | 3D 数学/工具 | `QChartMath.h`（Phase 2：Clip→NDC→Screen 纯函数 + 透视/正交矩阵 + viewDepth + projectBatch 批量投影入口）、`QDataPoint.h`、`QDataPoint3D.h`、`QDataRect.h`、`QChartWorldBox`/`QChartProjectedPoint`/`QChartPrimitive`（图元列表，Phase 3 命令缓冲雏形）、`QChartDebug.h`（日志分类） |
 
 ### 1.3 构建与验证状态
@@ -43,7 +44,7 @@
   - MSVC（Qt 6.11.1 msvc2022_64 + VS2026 v145）编译 ✅，测试退出码 0 ✅
   - MinGW（Qt 6.11.0 mingw_64 + mingw1310_64）编译 ✅，测试退出码 0 ✅
   - Linux 原生（Qt 6.4.2 + cmake 3.28 + ninja + g++13.2，WSLg）编译 ✅，`ctest` 1/1 通过 ✅，7 个 demo 弹窗运行并干净退出 ✅
-- **测试现状**：16 类 134 用例全绿（旧 69 + Phase 2 新增 33 功能用例：math 14 / camera3d 10 / surface3d 7 / renderer3d 6，另 32 init/cleanup）。**仍零测试**：动画、tooltip/交互事件、布局 sizeHint（Phase 2 的 3D 交互由 demo + 合成事件实证覆盖）。
+- **测试现状**：17 类 158 用例全绿（旧 69 + Phase 2 新增 33 + **补项新增 22**：axes3d 8 / 分层像素 5 / 反算三路径 3 / 计数与快速通道 6；另 34 init/cleanup）。**仍零测试**：动画、tooltip/交互事件、布局 sizeHint（3D 交互由 demo + 合成事件实证覆盖）。
 - **demo 入口**：`Test/test.cpp` 支持 argv 选择：`QChartDemo.exe [polar bar pendulum sort camera swirl stress theme scatter3d line3d surface3d]`，无参 = 全部。**注意：git 由用户操作，改动提交由用户完成。**
 - 演示清单：`demo_polar`（极坐标五边形）、`demo_bar`、`demo_pendulum`、`demo_sort`、`demo_camera`（2D 相机漫游）、`demo_swirl`（投影切换）、`demo_stress`（1M 点，验证视口裁剪：100 万点 → 只画约 1000 线）、`demo_theme`（Phase 1：深色主题 + 图例 + 三格式导出）、`demo_scatter3d`（Phase 2：球面均匀采样 3D 散点 + 球面/柱面投影切换）、`demo_line3d`（Phase 2：3D 螺旋线 + 相机飞行动画）、`demo_surface3d`（Phase 2：球面/莫比乌斯环切换 + 网格地板 + **双 Widget 联动**：左 3D ↔ 右 (u,v) 平面互显）。
 
@@ -71,6 +72,8 @@
 7. **MinGW 下动画更新吃力、MSVC 流畅**：swirl 投影切换动画在 MinGW 构建下明显卡顿，MSVC 构建流畅（同为 Debug）。QPainter 动画在 MinGW/GCC 与 MSVC 存在优化差距（或调试版开销差异）。**记入 Phase 3 性能评估输入**：性能指标必须双工具链实测，不能只测一边。（用户提出，必须记住）
 8. ~~`config.local.bat.example` 行内 REM 缺陷~~ ✅ **已修（Phase 2 终验）**：`set BUILD_DIR=... REM 可选` 行中 REM 会并入变量值，已改 REM 独占行（reviewer D14 自修）。
 9. **Phase 2 遗留观察**：`demo_line3d` 头注释「半径 1.5」指相机伴飞路径（绘制线 r=1.0），措辞含糊（非缺陷）；3D 悬停每 move 重收集图元 + 曲面 worldCache 每帧重填 → **Phase 3 优化点**（t12 基线：64×64 曲面 + 2000 散点 ≈ 44.5ms/帧，collect 占 47% 主成本）。
+10. **demo 无参运行时逐窗口依次加载，长耗时 demo（stress/3D）导致「未响应」**（用户反馈，低优先级）：建议主页面改为导航菜单（点击运行单个 demo），或单个 demo 独立进程/非阻塞加载——记入 backlog，不急。
+11. ~~**3D 控制流缺失（用户反馈，严重）**~~ ✅ **已修（Phase 2 补项）**：3D 轴/网格/刻度/标签控制流完整落地——viewCube 主状态相机（R5）+ 5³ 反算与笛卡尔快速通道 + 盒 12 边/3 spine/tick 点标记/billboard 标签 + Box/Lattice 网格 + 参考线分层与深度偏置（详见 §4 Phase 2 补项小节）。
 
 ---
 
@@ -117,7 +120,11 @@ Data ──[Axis::toNumeric]──► Numeric ──[Projection::toCartesian]─
 | D17 | **Widget 形态：QChartWidget3D 子类**（Phase 2） | 3D 场景/交互/联动隔离在子类；基类仅两处最小改动（场景组装抽 buildScreenScene 虚化 + buildExportScene 访问级虚化），2D 类可证明零回归。 |
 | D18 | **双 Widget 联动 = 信号互发 (u,v)**（Phase 2） | Series 单归属是硬约束（QObject 单父 + Layer qDeleteAll），不共享 Series 对象；两 Widget 同构数据副本 + 相同 Axis range → 同一 Numeric 空间，uvHovered/uvSelected/uvHoveredEnd 单向传值，高亮标记只收不发防回环。 |
 | D19 | **Phase 2 3D 渲染边界：数值型 Data**（Phase 2） | 渲染正确性保证限于数值型 Data（闭包内 QVariant→qreal 恒等）；非数值 Axis 渲染转换（QDateTime/QBarCategory）记入 Phase 3，与「数值预转换缓存」性能项合并实现。 |
-| D20 | **QChartCamera3D::orthographicBox**（Phase 2） | 正交模式投影盒显式访问器（非 Q_PROPERTY），「正交盒=viewRect」硬验收（3D 正交俯视 ≡ 2D cartesianToPixel）工程必需；默认 (0,0,10,10)。 |
+| D20 | **QChartCamera3D::orthographicBox**（Phase 2） | 正交模式投影盒显式访问器（非 Q_PROPERTY），「正交盒=viewRect」硬验收（3D 正交俯视 ≡ 2D cartesianToPixel）工程必需；默认 (0,0,10,10)。**R5 起废弃删除**（viewCube 即投影盒）。 |
+| D21 | **viewCube 主状态相机（R5，Phase 2 补项）** | 3D 取景框 = World 空间盒（2D viewRect 的 3D 对标物，与相机无关）+ orientation + fovY；position/lookAt/up/near/far 派生只读；Q_PROPERTY=viewCubeCenter/Size+yaw/pitch+fovY；dolly=缩放盒（2D zoom 同构）、orbit=转朝向（viewCube 不动）；D-3D-2 硬验收正交俯视 ≡ 2D 直接成立。 |
+| D22 | **平移无鼠标手势（R6，用户拍板）** | 三方向手势语义未定——viewCube 平移只经 API（panViewCube/setViewCubeCenter，代码/动画驱动）；拖拽=转相机角度。 |
+| D23 | **5³ 反算 + 笛卡尔快速通道（R6，用户拍板）** | viewCube→dataBounds 用 5×5×5=125 点网格采样（通用坐标系极值不在角上）；`isIdentityMapping()`（Cartesian3D=true）→ 反算免采样、图元免 toWorld、段数=2。 |
+| D24 | **3D 参照系分层与编排（Phase 2 补项）** | 网格与系列统一深度排序 + kGridDepthBias=1e-3（同深度系列赢）；spine/刻度点/标签前景层恒后画；`QChartAxes3D` 非 Q_OBJECT 编排器（组合复用 QChartAxis，三层分离：只产 Numeric 几何）；Box/Lattice 网格模式。 |
 
 ### 2.4 当前架构（Phase 0 已落地）
 
@@ -143,7 +150,7 @@ Renderer（Screen → 像素/缓存；QPainterRenderer | 未来 QOpenGLChartRend
 
 ### 3.2 3D 硬缺口（最大跨越）
 
-> **Phase 2 已落地**：1（数学链 World→Camera→Clip→NDC→Screen + QChartMath）✅、2（3D 相机 position/lookAt/up/FOV + orbit/dolly/pan，防万向锁）✅、4（3D 散点/参数曲线/曲面线框）✅、5（拾取降级为屏幕近邻命中，射线求交仍缺）◐；**仍缺口**：3（GL 渲染后端）、6（3D 轴/轴平面）。
+> **Phase 2 已落地**：1（数学链 World→Camera→Clip→NDC→Screen + QChartMath）✅、2（3D 相机 viewCube 主状态 + orbit/dolly，防万向锁）✅、4（3D 散点/参数曲线/曲面线框）✅、5（屏幕近邻命中；射线求交仍缺）◐、6（**3D 轴/网格/刻度/标签控制流，Phase 2 补项**）✅；**仍缺口**：3（GL 渲染后端）、5（射线拾取增强）。
 
 1. **数学维度**：全链路 `QPointF/QRectF/[0,1]²`。需 `QVector3D` + 3D 包围盒 + 视锥；ViewNorm 这套 2D 归一化要换成 **World → Camera → Clip → NDC → Screen**。
 2. **相机**：现有 `QViewRectAnimation` 是 2D 相机（center+zoom，做得完整）。缺 3D：position/lookAt/up/FOV/近远平面/透视与正交 + orbit/pan/dolly。
@@ -207,7 +214,10 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 - **瓶颈在 toPixel 投影而非绘制**：draw 对全部 N 点先 toPixel 再判裁剪（O(N) 无条件），culling 只省廉价 lineTo → **Phase 3/优化第一目标：裁剪前移（先粗筛数据点再做投影）或 GPU 批量投影**。
 - scatter 100k zoom 83.7ms vs full 417ms：收益主要来自 **QPainter clip**（setClipRect(plotArea)），不是 QChart 裁剪——bench 已注明，勿误读。
 - export PNG 1M ≈663-745ms、SVG 100k ≈141ms、PDF 100k ≈237ms；缓存重建 100k ≈73.8ms。
-- 工具链差距：MinGW 动画吃力 vs MSVC 流畅（§1.5-7），双工具链同测基线待 Windows 侧回填（QChartBench.exe 直接可跑）。
+- 工具链差距：MinGW 动画吃力 vs MSVC 流畅（§1.5-7）。**Windows MSVC 基线已回填（用户实测，Debug 构建）**：
+  - 10k 点：line_full on median **54.1ms** / off 49.6；line_zoom on **46.1** / off 95.9
+  - 100k 点：line_full on median **877.1ms** / off 815.5；line_zoom on **616.4** / off 752.0
+  - 结论与 Linux 一致（全览下 culling 收益为负、缩放场景有收益）；MSVC Debug 明显慢于 Linux 侧量级（100k ≈ 870ms vs Linux 1M ≈ 500ms，构建类型可能不同）→ Phase 3 需同构建类型（Release）双端对比。
 
 **Phase 2 完成项**（7 实现任务 + 7 逐任务审查 + 终验，全程零回退）：
 1. ✅ 数学层 `QChartMath.h`（header-only）：Clip→NDC→Screen 纯函数（w≤0→NaN 哨兵、y 翻转与 2D 一致）+ 透视/正交矩阵 + `viewDepth` + `projectBatch` 批量投影入口（Phase 3 GPU 预留）。
@@ -221,6 +231,24 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 **验收结果（7 次独立审查 + t17 终验 + captain 复核）**：`--clean-first` 干净全量 0 error/0 warning（四 target）；ctest **16 类 134 用例全绿**（旧 69 零回归 + 新 33）；**11 demo 冒烟全过**（8 旧 + 3 新，无参=全部）；旋转透视正确（orbit 像素差异实证）、**无万向锁**（pitch 恰 clamp 89.0000°、40× 混合 orbit 不越界）、参数曲面可交互旋转、双 Widget 联动互显（合成事件实证）；theme 三格式导出回归 PASS；脚本结构核查通过（`config.local.bat.example` 行内 REM 缺陷 D14 自修）。**性能基线**：3D 单帧（64×64 曲面 + 2000 散点 ≈ 1 万图元）≈ **44.5ms**（collect 47% 主成本：worldCache 每帧重填 + 闭包逐点投影；Phase 3 第一优化目标）；QChartBench 复跑与旧基线一致（终验期间环境负载致 ~2× 波动，非回归）。
 **设计文档**：`design_3d.md`（14 节 + 实现期修订记录 R1~R4：全链闭包定案、深度降序修正、渲染边界、orthographicBox）。
 **遗留**：3D 轴刻度/射线拾取/3D tooltip/光照 → Phase 3+；数值预转换缓存 + 非数值 Axis 渲染转换 → Phase 3（D19）；3D 场景导出（buildExportScene 已虚化，天然支持，未验收）。
+
+### Phase 2 补项 —— 3D 轴/网格控制流（用户反馈升级）✅ **已完成**
+
+**背景**：用户实测后判定「只做了数据计算流，没有控制流——三维轴/网格/刻度/标签完全没有」，升级为必补项。经三轮架构切磋定案（问卷作废存档于 `design_3d_axes_questionnaire.md`）。
+
+**完成项**（7 实现任务 + 7 逐任务审查 + 终验，全程零回退）：
+1. ✅ **viewCube 主状态相机（R5）**：`QChartCamera3D` 状态 = viewCube（World 空间盒，2D viewRect 的 3D 对标物，与相机无关）+ orientation(yaw/pitch) + fovY；position/lookAt/up/near/far 派生只读；Q_PROPERTY 迁移；**D-3D-2 硬验收新形态直接成立**（正交模式 viewCube 即投影盒 → 线性映射同构 ≡ cartesianToPixel）；删 orthographicBox。
+2. ✅ **交互语义（R6）**：拖拽 = 转相机角度（orientation），viewCube 不动；dolly = 缩放 viewCube（2D zoom 同构）；**平移无鼠标手势**（三方向语义未定，仅 API panViewCube）；hover 只扫 Series 层。
+3. ✅ **viewCube→dataBounds 反算**：5×5×5=125 点网格采样（通用坐标系极值不在角上，用户定案；柱坐标棱中点极值捕获测试实证 8 角会漏）+ **笛卡尔快速通道** `isIdentityMapping()`（反算 0 次 fromWorld、图元免 toWorld）。
+4. ✅ **QChartAxes3D 编排器**（非 Q_OBJECT，三层分离红线：只产 Numeric 几何）：盒 12 边 + 3 强调 spine（min 角）+ tick 点标记（屏幕像素 4px）+ billboard 标签/轴标题，复用 QChartAxis tickValues/tickLabels。
+5. ✅ **网格**：Box 模式（默认，盒底面 tick 对齐网格 ≈1k 图元）/ Lattice 晶格模式（三坐标面族，换投影即时空扭曲 ≈9.6k 图元）；gridFloor 旧 API 并入迁移。
+6. ✅ **渲染分层**：QChartPrimitive::Layer{Grid,Series,ForegroundDecor}；网格与系列统一深度排序 + kGridDepthBias=1e-3（painter polygon offset，同深度系列赢；球前网格遮挡/球后被盖像素断言实证）；spine/刻度/标签前景层恒后画。
+7. ✅ **Widget3D 控制器**：A3 域盒链（显式 setDomainBox > 数据包围盒 > defaultDataBounds）→ computeWorldBounds → setViewCubeToFit；视图变化钩子（反算+推轴盒+重绘，每帧不重算）；A9 兜底（无 fromWorld → 锚定域盒静态参照系）。
+8. ✅ **demo 同步**：surface3d（球面/莫比乌斯 A9 静态路径 + 'A' 键 + 联动不回归）、line3d（Cylindrical 视图驱动路径 + viewCube 动画）、scatter3d 统一观感。
+
+**验收结果（t22→t34 逐项独立审查 + t35 终验 + captain 复核）**：`--clean-first` 干净全量 0 error/0 warning（四 target）；ctest **17 类 158 用例全绿**（旧 69 零回归 + 补项新增 22）；11 demo 冒烟全过；验收项复核：轴/网格/标签可见（surface3d grid=224/decor=392/labels=11）、'A' 开关、晶格行数公式、深度偏置像素语义、viewCube 派生不变量、R6 无平移手势、联动双向不回归；**性能增量（归一化）**：盒模式 ≈+1~6ms、晶格 ≈+25~28ms（19200 次投影为主成本；Phase 3 输入：轴/网格图元缓存 + 裁剪前移）；QChartBench 与基线一致（环境负载非回归）。
+**设计文档**：`design_3d_axes.md`（A1~A10 + v2/v3/v4 修订记录）；`design_3d.md` 增 R5/R6 修订记录。
+**遗留**：正交模式 2D 边框轴（A4 后置）；3D 轴/网格动画（Phase 4）；tick 次刻度；轴/网格图元缓存（Phase 3）；精确拟合距离公式（注释备将来）。
 
 ### Phase 3 —— GPU 实时
 

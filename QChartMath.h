@@ -82,4 +82,22 @@ namespace QChartMath {
             (*outDepth)[i] = viewDepth(view, p);
         }
     }
+
+    // ===== 反投影（Phase 3 射线拾取预留，design_3d_axes.md §2.3；本任务实现并单测）=====
+    /// Clip(齐次) → World：逆 viewProj ÷w；w<=0 → NaN 哨兵。
+    /// 输入 clipPos.w<=0（相机背后/近平面外）或 viewProj 不可逆 → NaN。
+    inline QVector3D unproject(const QMatrix4x4& viewProj, const QVector4D& clipPos) {
+        if (clipPos.w() <= 0.0)
+            return QVector3D(qQNaN(), qQNaN(), qQNaN());
+        bool invertible = false;
+        const QMatrix4x4 inv = viewProj.inverted(&invertible);
+        if (!invertible)
+            return QVector3D(qQNaN(), qQNaN(), qQNaN());
+        const QVector4D worldH = inv * clipPos;
+        if (worldH.w() <= 0.0)
+            return QVector3D(qQNaN(), qQNaN(), qQNaN());
+        return QVector3D(worldH.x() / worldH.w(),
+                         worldH.y() / worldH.w(),
+                         worldH.z() / worldH.w());
+    }
 }

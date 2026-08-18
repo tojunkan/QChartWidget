@@ -10,7 +10,9 @@
 > - R1（闭包签名定案）：`collectPrimitives`/`draw` 输入改 Data(QDataPoint3D) 的全链闭包 `ProjectFn3D`（Layer3D 组装：toNumeric×3→toWorld→project；系列只存 Data、零耦合）；QChartPrimitive 删 `worldAnchor` 加 `dataIndex`；线段深度=端点 depth 均值；dataIndex=线段起点索引；曲面 worldCache 由 Layer3D 直算填充。
 > - R2（排序方向修正）：depth=−viewZ **越大越远**；painter's algorithm 按 depth **降序**（远→近）绘制（§3/§7.3/§7.4/§11 同根因一并修）。
 > - R3（Phase 2 渲染边界）：渲染正确性保证限于数值型 Data（闭包内 QVariant→qreal 恒等）；非数值 Axis 渲染转换记入 Phase 3，与「数值预转换缓存」性能项合并。
-> - R4（补充 API）：`QChartCamera3D::orthographicBox()/setOrthographicBox()`（正交模式投影盒，§2.3 硬验收「正交盒=viewRect」工程必需；非 Q_PROPERTY）。
+> - R4（补充 API）：`QChartCamera3D::orthographicBox()/setOrthographicBox()`（正交模式投影盒，§2.3 硬验收「正交盒=viewRect」工程必需；非 Q_PROPERTY）。**R5 起废弃**（R5 删除独立 orthographicBox 状态）。
+> - R5（viewCube 主状态相机模型，用户拍板）：QChartCamera3D 状态 = viewCube（World 空间轴对齐盒，2D viewRect 的 3D 对标物，与相机无关）+ orientation（yaw/pitch 绕盒中心）+ fovY（固定参数默认 45°）；position/lookAt/up/fovY/near/far **派生只读**（setter 移除）；Q_PROPERTY 迁移为 viewCube center/size + yaw/pitch + fovY；**删除 orthographicBox 独立状态**（正交模式 viewCube 即投影盒，D-3D-2 硬验收直接成立，§2.3）；dolly=缩放 viewCube（2D zoom 同构）、pan=平移 viewCube、orbit=绕盒中心旋转朝向（D-3D-3 的 Q_PROPERTY 条款随此修订）。§2.3/§4.2/§8.3/§10/§11.1 同步。
+> - R6（交互与采样定案，用户拍板）：①**平移不做鼠标手势**（三方向手势语义未定）——viewCube 平移只经 API（panViewCube/setViewCubeCenter，代码/动画驱动）；②viewCube→dataBounds 反算用 **5×5×5=125 点网格采样**（通用坐标系极值不在角上）；③**笛卡尔快速通道** `isIdentityMapping()`（Cartesian3D=true → 反算免采样、图元免 toWorld）；④拖拽=转相机角度（orientation），viewCube 不动（§8.3 硬约束）。
 
 ---
 
@@ -20,7 +22,7 @@
 |---|---|---|
 | D-3D-1 | 数学层用 Qt QVector3D/QMatrix4x4（弃用的是 2D QMatrix），新增轻量 QChartMath.h | §3 |
 | D-3D-2 | 3D 链路 World→Camera→Clip→NDC→Pixel；2D 五空间链路一行不动；单测锁退化一致性 | §2 |
-| D-3D-3 | 相机三件套：基类 QChartCamera + QChartCamera2D（现有实现搬入）+ QChartCamera3D；Q_PROPERTY 只加 position/lookAt/FOV；动画分家 | §4 |
+| D-3D-3 | 相机三件套：基类 QChartCamera + QChartCamera2D（现有实现搬入）+ QChartCamera3D；**R5 修订：QChartCamera3D 状态=viewCube(World 盒)+orientation(yaw/pitch)+fovY，position/lookAt/up/fovY/near/far 派生只读，Q_PROPERTY=viewCube center/size+yaw/pitch+fovY**；动画分家 | §4 |
 | D-3D-4 | 交互归 Widget 事件层 → 调 Camera 几何运算；Camera 不碰事件 | §8 |
 | D-3D-5 | Projection3D 家族（基类 + 4 子类，与 2D 家族同构）；奇点 NaN 策略延续；2D 投影家族零改动 | §5 |
 | D-3D-6 | QChartSeries3D : QChartSeries（Data=QVariant 三元组）+ 散点/线/曲面三子类；draw 注入 projectFn 延续零耦合；2D QXYSeries 不动 | §6 |
@@ -28,7 +30,7 @@
 | D-3D-8 | Widget 形态：★定案「QChartWidget3D : QChartWidget 子类」，论证见 §8 | §8 |
 | D-3D-9 | Renderer 3D 子路径：QChartScene 增 3D 段；图元列表 + 全局深度排序（远→近）；2D overlay 后画 | §7 |
 | D-3D-10 | Phase 3 预留：viewProjectionMatrix + Clip→NDC→Screen 纯函数 + 批量投影入口 + 图元列表=命令缓冲雏形；性能项：数值预转换缓存；std::variant 不采纳 | §3/§7/§12 |
-| D-3D-11 | demo 节奏 散点→线→曲面；argv 增入口；交互=左键 orbit + 滚轮 dolly + 右键 pan | §10 |
+| D-3D-11 | demo 节奏 散点→线→曲面；argv 增入口；交互=左键 orbit + 滚轮 dolly（平移暂不做鼠标手势，仅 API，用户定案） | §10 |
 | D-3D-12 | 新增 4 测试类；旧 69 例零回归；同名 ctest 全量跑 | §11 |
 | D-3D-13 | 范围边界：不做 3D 轴刻度/射线拾取/hover/光照；可选辅助网格地板 | §7/§13 |
 | D-3D-14 | QChart 前缀命名；QChartLineSeries3D（不用 Curve）；2D 相机改名 QChartCamera2D（机械改名） | §4/§6 |
@@ -59,9 +61,11 @@ Data ──[Axis::toNumeric]──► Numeric ──[Projection3D::toWorld]─�
 | 归一化 | ViewNorm [0,1]²（线性内联） | Clip→NDC（矩阵 + ÷w，QChartMath 纯函数） |
 | 像素 | Pixel（QPointF） | Pixel（QPointF + 深度） |
 
-### 2.3 退化一致性（硬验收，单测锁死）
+### 2.3 退化一致性（硬验收，单测锁死，R5 新形态）
 
-**3D 正交俯视相机 ≡ 2D cartesianToPixel**：`QChartCamera3D`（位置 (0,0,10)、lookAt 原点、up=(0,1,0)、Orthographic 模式、正交盒 = viewRect、near/far 覆盖 z=0）对任意 (x,y,0) 的投影结果必须等于 `QChartCamera2D::cartesianToPixel(viewRect, plotArea, x, y)`（含 y 轴翻转约定，见 §3.2）。这是 D-3D-2 的验收单测（test_qchartcamera3d，§11）。
+**3D 正交俯视相机 ≡ 2D cartesianToPixel（viewCube 主状态模型下直接成立）**：`QChartCamera3D` 配置——Orthographic 模式 + viewCube = {x∈viewRect 范围, y∈viewRect 范围, z 覆盖数据平面}（R5：**正交模式 viewCube 即投影盒**，无独立 orthographicBox）+ orientation=俯视（forward=(0,0,−1)）→ 对任意 (x,y,0) 的投影结果必须等于 `QChartCamera2D::cartesianToPixel(viewRect, plotArea, x, y)`（含 y 轴翻转约定，见 §3.2）。
+
+**论证（R5）**：正交模式下 `viewProjectionMatrix = ortho(viewCube) · lookAt(...)`，World→Clip→NDC→Screen 就是 **viewCube→plotArea 的线性映射**（z 仅决定深度、不影响屏幕 xy），与 2D 的 viewRect→plotArea 线性映射同构——因此 ≡ cartesianToPixel **直接成立**，无需任何特判。这是 D-3D-2 的验收单测（test_qchartcamera3d，§11.1）。
 
 ---
 
@@ -171,51 +175,86 @@ public:
 
 ⚠ **FitStrategy 随类改名**：`QChartCamera::FitStrategy` → `QChartCamera2D::FitStrategy`，引用点见 §4.4 改名映射表。
 
-### 4.2 QChartCamera3D（新）
+### 4.2 QChartCamera3D（viewCube 主状态，R5 用户拍板）
 
 ```cpp
-// QChartCamera3D.h
+// QChartCamera3D.h —— viewCube 主状态相机（R5，用户拍板；D-3D-3 的 Q_PROPERTY 条款随此修订）
+// 状态：viewCube（World 空间轴对齐盒 {min,max}，2D viewRect 的 3D 对标物，与相机无关）
+//      + orientation（yaw/pitch，绕盒中心）+ fovY（固定用户参数，默认 45°）。
+// 派生（相机 = 纯映射器）：lookAt=盒中心；d=radius/tan(fovY/2)（radius=半对角线，保守拟合）；
+//      forward/up = R(yaw,pitch)·(0,0,−1)/(0,1,0)；position = lookAt − forward·d；
+//      near = max(0.01, d − 1.5·radius)、far = d + 1.5·radius；
+//      viewProjectionMatrix = perspective(fovY,aspect,near,far) · lookAt(position,lookAt,up)。
 class QChartCamera3D : public QChartCamera {
     Q_OBJECT
-    Q_PROPERTY(QVector3D position READ position WRITE setPosition NOTIFY viewChanged)
-    Q_PROPERTY(QVector3D lookAt READ lookAt WRITE setLookAt NOTIFY viewChanged)
+    Q_PROPERTY(QVector3D viewCubeCenter READ viewCubeCenter WRITE setViewCubeCenter NOTIFY viewChanged)
+    Q_PROPERTY(QVector3D viewCubeSize READ viewCubeSize WRITE setViewCubeSize NOTIFY viewChanged)
+    Q_PROPERTY(qreal yaw READ yaw WRITE setYaw NOTIFY viewChanged)
+    Q_PROPERTY(qreal pitch READ pitch WRITE setPitch NOTIFY viewChanged)
     Q_PROPERTY(qreal fovY READ fovY WRITE setFovY NOTIFY viewChanged)
 public:
     explicit QChartCamera3D(QObject* parent = nullptr);
 
-    // ===== 状态（默认：position(0,0,10)、lookAt(0,0,0)、up(0,1,0)、fovY 45°、near 0.1、far 1000）=====
-    QVector3D position() const;   void setPosition(const QVector3D& p);
-    QVector3D lookAt() const;     void setLookAt(const QVector3D& t);
-    QVector3D up() const;         void setUp(const QVector3D& u);
-    qreal fovY() const;           void setFovY(qreal deg);        // (1, 179] 有效
-    qreal nearPlane() const;      void setNearPlane(qreal n);     // > 0
-    qreal farPlane() const;       void setFarPlane(qreal f);      // > nearPlane
+    // ===== 主状态：viewCube（World 轴对齐盒；默认 {0,0,0}-{10,10,10}）=====
+    QChartWorldBox viewCube() const;         void setViewCube(const QChartWorldBox& box);
+    QVector3D viewCubeCenter() const;        void setViewCubeCenter(const QVector3D& c);  // 平移（pan）
+    QVector3D viewCubeSize() const;          void setViewCubeSize(const QVector3D& s);    // 缩放（dolly）
+
+    // ===== 主状态：orientation（绕盒中心；默认 yaw 45°/pitch 30° 3/4 视角）=====
+    qreal yaw() const;   void setYaw(qreal deg);    // 绕世界 up 轴
+    qreal pitch() const; void setPitch(qreal deg);  // 绕右轴；clamp ±89°（防万向锁）
+
+    // ===== 主状态：镜头参数 =====
+    qreal fovY() const;  void setFovY(qreal deg);   // (1, 179]，默认 45°
+
+    // ===== 派生（只读；setter 移除，R5）=====
+    QVector3D position() const;   // = lookAt − forward·d
+    QVector3D lookAt() const;     // = viewCube 中心 (min+max)/2
+    QVector3D up() const;         // = R(yaw,pitch)·(0,1,0)
+    qreal nearPlane() const;      // = max(0.01, d − 1.5·radius)
+    qreal farPlane() const;       // = d + 1.5·radius
 
     // ===== 投影模式 =====
     enum class ProjectionMode { Perspective, Orthographic };
     ProjectionMode projectionMode() const;  void setProjectionMode(ProjectionMode m);
+    // ⚠ R5：删除 orthographicBox 独立状态——正交模式 viewCube 即投影盒（D-3D-2 直接成立，§2.3）
 
-    // ===== 矩阵（Phase 3 预留：直接产出合并矩阵，D-3D-10）=====
-    QMatrix4x4 viewMatrix() const;                    // World→Camera（QMatrix4x4::lookAt）
-    QMatrix4x4 projectionMatrix(qreal aspect) const;  // Camera→Clip（透视/正交按模式）
+    // ===== 矩阵（纯映射；Phase 3 预留：直接产出合并矩阵，D-3D-10）=====
+    QMatrix4x4 viewMatrix() const;                    // QMatrix4x4::lookAt(position, lookAt, up)
+    QMatrix4x4 projectionMatrix(qreal aspect) const;  // 透视 perspective(fovY,aspect,near,far) / 正交 ortho(viewCube)
     QMatrix4x4 viewProjectionMatrix(qreal aspect) const;  // World→Clip 合并
 
-    // ===== 交互几何运算（Widget 事件层调用；Camera 不碰事件，D-3D-4）=====
-    /// 绕 lookAt 目标旋转：yaw 绕 up 轴、pitch 绕右轴；pitch clamp 到 ±89°（防万向锁，验收项）
+    // ===== 交互几何运算（Widget 事件层调用；操作 viewCube 状态；Camera 不碰事件，D-3D-4）=====
+    /// orbit：绕盒中心旋转 orientation（yaw 绕世界 up、pitch 绕右轴；pitch clamp ±89°；盒不动）
     void orbit(qreal deltaYawDeg, qreal deltaPitchDeg);
-    /// 沿视线方向缩放距离：factor<1 靠近；lookAt 不变
+    /// dolly：缩放 viewCube（factor<1 = 盒缩小 = 内容放大；距离随盒尺寸重派生 → 内容 zoom，2D zoom 同构）
     void dolly(qreal factor);
-    /// 平移目标（相机平面内 dx/dy，World 单位）：lookAt 与 position 同步平移
-    void panTarget(qreal dxWorld, qreal dyWorld);
+    /// pan：平移 viewCube（dx/dy World 单位；lookAt/position 跟随）
+    void panViewCube(qreal dxWorld, qreal dyWorld);
 
-    // ===== fit：初始定位 =====
-    /// 以包围盒中心为 lookAt，按 fov 与 aspect 定距离（正交模式距离覆盖半径×2）
-    void fitToBounds(const QChartWorldBox& box, qreal aspect);
+    // ===== fit：初始取景框（A3 链终点）=====
+    /// 设置 viewCube = 目标盒（中心=盒中心），orientation/fovY 保持
+    void setViewCubeToFit(const QChartWorldBox& box);
 
     // ===== 投影（供 Layer3D 组装闭包 / Renderer）=====
     QChartProjectedPoint project(const QVector3D& world, const QRectF& plotArea) const;
     //    = viewProjectionMatrix(aspect)*world → clipToScreen + viewDepth
+
+private:
+    QChartWorldBox m_viewCube{ QVector3D(0,0,0), QVector3D(10,10,10) };
+    qreal m_yaw = 45.0, m_pitch = 30.0;
+    qreal m_fovY = 45.0;
+    ProjectionMode m_projectionMode = ProjectionMode::Perspective;
 };
+```
+
+⚠ **距离派生注释（保守拟合定案 + 精确拟合备将来）**：
+```cpp
+// d = radius / tan(fovY/2)，radius = 半对角线 = |viewCubeSize| / 2   —— 保守拟合（定案）
+// 精确拟合（备将来实现，当前不做）：
+//   d = max(hx / tan(fovX/2), hy / tan(fovY/2)) − hz
+//   其中 hx/hy/hz = 盒半尺寸（x/y/z），fovX = fovY·aspect；考虑盒最近点（−hz 面）到相机距离，
+//   使盒恰好填满视口且最近角点贴近近平面；保守拟合已保证盒整体在视锥内，工程够用。
 ```
 
 配套小结构（定义在 QChartCamera3D.h）：
@@ -228,7 +267,7 @@ struct QChartWorldBox { QVector3D min; QVector3D max; };
 struct QChartProjectedPoint { QPointF screen; qreal depth; };
 ```
 
-⚠ **orbit 几何**：yaw 绕世界 up 轴、pitch 绕「右向量 = normalize(cross(forward, up))」旋转 position（保持 lookAt 不动）；`pitch ∈ [-89°, +89°]`；`position == lookAt` 时 orbit/dolly 为 no-op（防除零）。**无万向锁** = pitch clamp + 正交化（每步重算 forward/right/up）。
+⚠ **orbit 几何（R5：操作 orientation，viewCube 不动——用户定案硬约束）**：yaw 绕世界 up 轴、pitch 绕「右向量 = normalize(cross(forward, up))」旋转 **orientation**（forward/up = R(yaw,pitch)·(0,0,−1)/(0,1,0)）；**viewCube 的 World 位置/大小保持不动**（用户拖拽反映在相机角度，不是挪动盒）；`pitch ∈ [-89°, +89°]`；viewCube 零尺寸时 orbit/dolly 为 no-op（防除零）。**无万向锁** = pitch clamp + 正交化（每步重算 forward/right/up）。
 
 ⚠ **动画（D-3D-3）**：position/lookAt 是 QVector3D 属性、fovY 是 qreal 属性，均可被 QPropertyAnimation 驱动（NOTIFY→viewChanged→Widget 重绘）。QVector3D 若 Qt 未内建 QVariantAnimation 插值器，在库初始化处 `qRegisterAnimationInterpolator<QVector3D>(...)` 一行补齐（线性插值即可）。**QViewRectAnimation 留在 2D 不动**；3D 相机动画一律 QPropertyAnimation（D3 精神）。
 
@@ -638,13 +677,16 @@ public:
 
     // ===== 坐标 =====
     QPointF worldToPixel(const QVector3D& w) const;   // camera3D->project(...).screen
-    // ===== fit =====
-    void fitWorld();   // projection3D->computeWorldBounds(defaultDataBounds) → camera3D->fitToBounds
+    // ===== fit（R5：A3 链终点 = setViewCubeToFit）=====
+    void fitWorld();   // resolveDataBox（A3 链）→ projection3D->computeWorldBounds → camera3D->setViewCubeToFit
 
-    // ===== 交互（重写；D-3D-4：手势 → Camera 几何）=====
-    // 左键拖拽 = orbit（水平=deltaYaw，垂直=deltaPitch，灵敏度可调）
-    // 滚轮     = dolly（factor=exp(-delta*k)，同 2D 灵敏度约定）
-    // 右键拖拽 = panTarget（像素位移 → World 位移，经当前视距换算）
+    // ===== 交互（重写；D-3D-4：手势 → viewCube 几何；R5）=====
+    // ⚠ 交互语义硬约束（用户定案）：**用户拖拽改变的是相机角度（orientation），不是挪动 viewCube**
+    //    —— orbit 只旋转朝向（yaw/pitch），viewCube 的 World 位置/大小保持不动。
+    // ⚠ 平移暂不提供鼠标手势（用户定案：三方向的手势语义未定）——viewCube 平移只经 API
+    //   （panViewCube / setViewCubeCenter，代码或动画驱动）；右键拖拽/pan 状态不实现。
+    // 左键拖拽 = orbit（水平=deltaYaw，垂直=deltaPitch，灵敏度可调）→ camera3D->orbit（只转朝向）
+    // 滚轮     = dolly（factor=exp(-delta*k)，同 2D 灵敏度约定）→ camera3D->dolly（缩放 viewCube）
 protected:
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
@@ -663,7 +705,7 @@ private:
     std::unique_ptr<QChartCamera3D> m_camera3D;
     std::unique_ptr<QChartProjection3D> m_projection3D;
     QList<QChartLayer3D*> m_layers3D;
-    // 交互状态：m_orbitDrag/m_panDrag（右键）/m_lastPos
+    // 交互状态：m_orbitDrag/m_lastPos（平移无鼠标手势，R6）
 };
 ```
 
@@ -707,13 +749,13 @@ private:
 | 文件 | 内容 | argv |
 |---|---|---|
 | `demo_scatter3d.cpp` | 3D 散点（球面随机采样点 + 柱面/球面投影切换演示；静态） | `scatter3d` |
-| `demo_line3d.cpp` | 3D 参数曲线（螺旋线 u∈[0,720°]，经 CylindricalProjection3D；可加 QPropertyAnimation 沿路径移动相机 → 动态） | `line3d` |
+| `demo_line3d.cpp` | 3D 参数曲线（螺旋线 u∈[0,720°]，经 CylindricalProjection3D；可加 QPropertyAnimation 驱动 viewCube 属性 center/size/yaw/pitch 做相机路径动画 → 动态，R5） | `line3d` |
 | `demo_surface3d.cpp` | 参数曲面（球面/莫比乌斯环按键 'S'/'M' 切换）+ **双 Widget 联动**（左 3D 球面 ↔ 右 (u,v) 平面，悬停/点选互显，§9）+ 辅助网格地板 | `surface3d` |
 
 **Test 侧改动**（不涉库）：
 - `test.cpp` demos[] 表签名 `QChartWidget* (*build)()` 放宽为 `QWidget* (*build)()`（QChartWidget* 兼容，现有 build 函数返回值隐式升级，零改动）；argv 提示文案补 `scatter3d line3d surface3d`；无参 = 全部（自动含新 demo）。
 - `demo_surface3d` 的 build 返回含 `QHBoxLayout` 双图容器 `QWidget*`（单窗口双图，联动可视）。
-- **交互**：3D 侧左键 orbit + 滚轮 dolly + 右键 panTarget（§8.3）；2D 侧沿用既有 pan/zoom。
+- **交互**：3D 侧左键 orbit + 滚轮 dolly（平移无鼠标手势，仅 API——用户定案 R6）；2D 侧沿用既有 pan/zoom。
 
 ---
 
@@ -731,15 +773,15 @@ private:
 7. `projectBatch_alignment`：批量结果与逐点一致，两数组对齐
 8. Projection3D 家族（并入本类，数学映射归属）：`cylindrical_roundtrip`（r=0 → θ NaN）、`spherical_roundtrip`、`cartesian3d_identity`、`functional3d_mobiusSamples`（采样点 |dist−R| ≤ 带宽容差）、`computeWorldBounds_sampling`（全 NaN 兜底）
 
-**TestQChartCamera3D（test_qchartcamera3d）**：
-1. `lookAt_orthonormal`：viewMatrix 行列正交、平移项 = -R·eye
-2. `orthographicTopDown_equals2D`（**D-3D-2 硬验收**）：§2.3 配置下 ≡ `QChartCamera2D::cartesianToPixel`
-3. `orbit_yawPitch_geometry`：旋转后 |position−lookAt| 不变、lookAt 不变、pitch clamp ±89°
-4. `dolly_factor`：距离缩放、lookAt 不变、factor>0 防除零
-5. `panTarget_translatesBoth`：position/lookAt 同移、viewMatrix 平移项正确
+**TestQChartCamera3D（test_qchartcamera3d）**（R5：重写为派生不变量断言——驱动 viewCube 主状态，验证派生映射）：
+1. `derivedPosition_lookAt`：position = lookAt − forward·d、|position−lookAt| == d == radius/tan(fov/2)、lookAt == 盒中心
+2. `orthographicTopDown_equals2D`（**D-3D-2 硬验收**）：正交模式 + viewCube=2D viewRect 范围 + 俯视 → ≡ `QChartCamera2D::cartesianToPixel`（§2.3 论证）
+3. `orbit_geometry`：orbit 后 |position−lookAt| == d（绕盒距离不变）、lookAt == 盒中心（不变）、pitch clamp ±89°
+4. `dolly_scale`：viewCube 缩放 f 倍 → 距离 d' == f·d（∝ 盒尺寸）、lookAt 不变、同 world 点屏幕坐标外扩（内容放大）
+5. `pan_translates`：平移 viewCube → 盒中心/position 同位移、viewMatrix 平移项正确
 6. `perspectiveVsOrthographic`：同 world 点两模式屏幕坐标差异符合预期
-7. `degenerate_positionEqualsLookAt`：orbit/dolly no-op、无 NaN
-8. `properties_animatable`：position/lookAt/fovY 三 Q_PROPERTY 存在、setter 发 viewChanged；QVector3D 插值器可用（QVariantAnimation 往返）
+7. `degenerate_zeroSize`：viewCube 退化为零尺寸 → orbit/dolly no-op、无 NaN
+8. `properties_animatable`：viewCubeCenter/viewCubeSize/yaw/pitch/fovY 五 Q_PROPERTY 存在、setter 发 viewChanged；QVector3D 插值器可用（QVariantAnimation 往返）
 
 **TestQChartRenderer3D（test_qchartrenderer3d）**：
 1. `line_collectPrimitives_count`：n 点 → n−1 线段；NaN 断段正确

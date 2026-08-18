@@ -1,6 +1,6 @@
 // QChartWidget3D.cpp —— 3D 图表控件实现
-// 交互（orbit/dolly/panTarget）+ 3D 悬停命中（屏幕近邻→dataIndex→(u,v)）+ 联动信号 +
-// buildScreenScene/buildExportScene 重写（填 3D 段）。
+// 交互（R6：orbit 拖拽 + dolly 滚轮；平移无鼠标手势）+ 3D 悬停命中（屏幕近邻→dataIndex→(u,v)）
+// + 联动信号 + buildScreenScene/buildExportScene 重写（填 3D 段）。
 #include "QChartWidget3D.h"
 #include "QCartesianProjection.h"   // 构造占位 2D 投影（§8.3 ⚠）
 #include <QMouseEvent>
@@ -14,6 +14,13 @@ QChartWidget3D::QChartWidget3D(QWidget* parent) : QChartWidget(parent) {
     setProjection(std::make_unique<QCartesianProjection>());
     m_camera3D = std::make_unique<QChartCamera3D>(this);
     setMouseTracking(true);
+
+    // §9：视图变化 → 反算 dataBounds + 推轴盒 + 重绘（每帧不重算，design_3d_axes.md §2.2/§9）
+    connect(m_camera3D.get(), &QChartCamera::viewChanged, this, [this]() {
+        recomputeDataBounds3D();
+        pushAxesDataBoxToLayers();
+        invalidateForeground();
+    });
 }
 
 // ===== 相机 / 投影 / 图层 =====
@@ -21,6 +28,14 @@ void QChartWidget3D::setCamera3D(std::unique_ptr<QChartCamera3D> cam) {
     if (!cam) return;
     m_camera3D = std::move(cam);
     m_camera3D->setParent(this);
+    // 重连视图变化钩子（旧相机随 unique_ptr 销毁自动断开）
+    connect(m_camera3D.get(), &QChartCamera::viewChanged, this, [this]() {
+        recomputeDataBounds3D();
+        pushAxesDataBoxToLayers();
+        invalidateForeground();
+    });
+    recomputeDataBounds3D();
+    pushAxesDataBoxToLayers();
     invalidateForeground();
 }
 
@@ -29,7 +44,7 @@ void QChartWidget3D::setProjection3D(std::unique_ptr<QChartProjection3D> proj) {
     m_projection3D = std::move(proj);
     for (QChartLayer3D* g : m_layers3D)
         if (g) g->setProjection3D(m_projection3D.get());
-    fitWorld();   // 自动按 defaultDataBounds fit 相机（§8.3）
+    fitWorld();   // A3 全链：按 defaultDataBounds/域盒 fit 相机（§8.3）
 }
 
 void QChartWidget3D::addLayer3D(QChartLayer3D* g) {
@@ -37,6 +52,7 @@ void QChartWidget3D::addLayer3D(QChartLayer3D* g) {
     m_layers3D.append(g);
     addLayer(g);   // 基类接线：主题/图例/调色板/所有权（复用）
     g->setProjection3D(m_projection3D.get());
+    pushAxesDataBoxToLayers();   // 新图层继承当前轴盒（反算或 A9 锚定域盒）
     invalidateForeground();
 }
 
@@ -46,17 +62,125 @@ QPointF QChartWidget3D::worldToPixel(const QVector3D& w) const {
     return m_camera3D->project(w, m_plotArea).screen;
 }
 
+// ===== A3 域盒链 =====
+void QChartWidget3D::setDomainBox(const QVector3D& dataMin, const QVector3D& dataMax) {
+    m_domainMin = dataMin;
+    m_domainMax = dataMax;
+    fitWorld();   // 立即 fit + 反算 + 推轴盒
+}
+
+void QChartWidget3D::clearDomainBox() {
+    if (!m_domainMin) return;
+    m_domainMin.reset();
+    m_domainMax.reset();
+    fitWorld();
+}
+
+bool QChartWidget3D::hasDomainBox() const {
+    return m_domainMin.has_value() && m_domainMax.has_value();
+}
+
+std::pair<QVector3D, QVector3D> QChartWidget3D::computeSeriesDataBounds() const {
+    qreal minX = qInf(), maxX = -qInf(), minY = qInf(), maxY = -qInf();
+    qreal minZ = qInf(), maxZ = -qInf();
+    for (const QChartLayer3D* g : m_layers3D) {
+        if (!g) continue;
+        for (const QChartSeries3D* s : g->series3DList()) {
+            if (!s) continue;
+            const QVector<QDataPoint3D>& pts = s->points();
+            for (const QDataPoint3D& d : pts) {
+                const qreal n0 = g->axisX() ? g->axisX()->toNumeric(d.x()) : d.x().toDouble();
+                const qreal n1 = g->axisY() ? g->axisY()->toNumeric(d.y()) : d.y().toDouble();
+                const qreal n2 = g->axisZ() ? g->axisZ()->toNumeric(d.z()) : d.z().toDouble();
+                if (!std::isfinite(n0) || !std::isfinite(n1) || !std::isfinite(n2)) continue;
+                minX = qMin(minX, n0); maxX = qMax(maxX, n0);
+                minY = qMin(minY, n1); maxY = qMax(maxY, n1);
+                minZ = qMin(minZ, n2); maxZ = qMax(maxZ, n2);
+            }
+        }
+    }
+    if (qIsInf(minX)) return { QVector3D(0, 0, 0), QVector3D(0, 0, 0) };   // 无有效点 → 空盒（链回退）
+    return { QVector3D(minX, minY, minZ), QVector3D(maxX, maxY, maxZ) };
+}
+
+std::pair<QVector3D, QVector3D> QChartWidget3D::resolveDataBox() const {
+    // A3 链：显式域盒 > 数据包围盒 > defaultDataBounds
+    if (m_domainMin && m_domainMax)
+        return { *m_domainMin, *m_domainMax };
+    const auto seriesBox = computeSeriesDataBounds();
+    if (seriesBox.first.x() <= seriesBox.second.x() &&
+        seriesBox.first.y() <= seriesBox.second.y() &&
+        seriesBox.first.z() <= seriesBox.second.z() &&
+        !(seriesBox.first == seriesBox.second && seriesBox.first == QVector3D(0, 0, 0)))
+        return seriesBox;
+    if (m_projection3D)
+        return m_projection3D->defaultDataBounds();
+    return { QVector3D(0, 0, 0), QVector3D(10, 10, 10) };
+}
+
 void QChartWidget3D::fitWorld() {
     if (!m_projection3D || !m_camera3D) return;
-    const auto def = m_projection3D->defaultDataBounds();
-    m_worldBounds = m_projection3D->computeWorldBounds(def.first, def.second);
-    qreal aspect = 1.0;
-    if (m_plotArea.height() > 0.0) aspect = m_plotArea.width() / m_plotArea.height();
-    m_camera3D->fitToBounds(m_worldBounds, aspect);
+    // A3 全链（§3）：resolveDataBox → computeWorldBounds → setViewCubeToFit → 反算 → 推轴盒 → 重绘
+    const auto dataBox = resolveDataBox();
+    m_anchorBox = dataBox;   // A9 兜底缓存（dataBounds3D 无效时轴/网格锚定此盒，静态）
+    m_worldBounds = m_projection3D->computeWorldBounds(dataBox.first, dataBox.second);
+    m_camera3D->setViewCubeToFit(m_worldBounds);   // R5：viewCube = 目标盒（orientation/fovY 保持）
+    recomputeDataBounds3D();
+    pushAxesDataBoxToLayers();
     invalidateForeground();
 }
 
-// ===== 交互（D-3D-4：手势 → Camera 几何）=====
+// ===== 视图→dataBounds 反算（§2.2；R5 无逆矩阵/unproject）=====
+void QChartWidget3D::recomputeDataBounds3D() {
+    m_dataBounds3DValid = false;
+    m_dataBounds3DMin = QVector3D(0, 0, 0);
+    m_dataBounds3DMax = QVector3D(0, 0, 0);
+    if (!m_projection3D || !m_camera3D) return;
+    const QChartWorldBox vc = m_camera3D->viewCube();
+
+    // 笛卡尔快速通道（§5.4 用户定案）：恒等映射免采样，dataBounds = viewCube 直接反算（0 次 fromWorld）
+    if (m_projection3D->isIdentityMapping()) {
+        m_dataBounds3DMin = vc.min;
+        m_dataBounds3DMax = vc.max;
+        m_dataBounds3DValid = true;
+        return;
+    }
+
+    // 通用路径：5×5×5=125 点网格采样（每轴 5 档：min/25%/50%/75%/max）→ fromWorld 聚合
+    const qreal levels[5] = { 0.0, 0.25, 0.5, 0.75, 1.0 };
+    qreal minX = qInf(), maxX = -qInf(), minY = qInf(), maxY = -qInf();
+    qreal minZ = qInf(), maxZ = -qInf();
+    for (int i = 0; i < 5; ++i) {
+        const qreal x = vc.min.x() + levels[i] * (vc.max.x() - vc.min.x());
+        for (int j = 0; j < 5; ++j) {
+            const qreal y = vc.min.y() + levels[j] * (vc.max.y() - vc.min.y());
+            for (int k = 0; k < 5; ++k) {
+                const qreal z = vc.min.z() + levels[k] * (vc.max.z() - vc.min.z());
+                const QVector3D num = m_projection3D->fromWorld(QVector3D(x, y, z));
+                if (!std::isfinite(num.x()) || !std::isfinite(num.y()) || !std::isfinite(num.z()))
+                    continue;   // 非有限（奇点 NaN 等）跳过
+                minX = qMin(minX, num.x()); maxX = qMax(maxX, num.x());
+                minY = qMin(minY, num.y()); maxY = qMax(maxY, num.y());
+                minZ = qMin(minZ, num.z()); maxZ = qMax(maxZ, num.z());
+            }
+        }
+    }
+    if (qIsInf(minX)) return;   // 全 NaN → Valid=false（A9 兜底：轴/网格用锚定域盒）
+
+    m_dataBounds3DMin = QVector3D(minX, minY, minZ);
+    m_dataBounds3DMax = QVector3D(maxX, maxY, maxZ);
+    m_dataBounds3DValid = true;
+}
+
+void QChartWidget3D::pushAxesDataBoxToLayers() {
+    // dataBounds3D 有效 → 用它（视图驱动）；否则 A9 锚定域盒（静态参照系，§2.4）
+    const QVector3D mn = m_dataBounds3DValid ? m_dataBounds3DMin : m_anchorBox.first;
+    const QVector3D mx = m_dataBounds3DValid ? m_dataBounds3DMax : m_anchorBox.second;
+    for (QChartLayer3D* g : m_layers3D)
+        if (g) g->setAxesDataBox(mn, mx);
+}
+
+// ===== 交互（D-3D-4：手势 → viewCube/orientation；R6：平移无鼠标手势）=====
 void QChartWidget3D::mousePressEvent(QMouseEvent* e) {
     if (e->button() == Qt::LeftButton) {
         m_orbitDrag = true;
@@ -65,9 +189,8 @@ void QChartWidget3D::mousePressEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
+    // R6：平移不做鼠标手势（panViewCube 仅 API/动画驱动）
     if (e->button() == Qt::RightButton) {
-        m_panDrag = true;
-        m_lastPos = e->position();
         e->accept();
         return;
     }
@@ -79,26 +202,7 @@ void QChartWidget3D::mouseMoveEvent(QMouseEvent* e) {
     if (m_orbitDrag && m_camera3D) {
         const QPointF delta = pos - m_lastPos;
         m_camera3D->orbit(delta.x() * m_orbitSensitivity,   // 水平 = deltaYaw
-                          delta.y() * m_orbitSensitivity);   // 垂直 = deltaPitch
-        m_lastPos = pos;
-        invalidateForeground();
-        e->accept();
-        return;
-    }
-    if (m_panDrag && m_camera3D) {
-        const QPointF delta = pos - m_lastPos;
-        // 像素 → World：经当前视距换算（目标平面上的世界单位/像素）
-        qreal worldPerPixel = 1.0;
-        if (m_plotArea.height() > 0.0) {
-            if (m_camera3D->projectionMode() == QChartCamera3D::ProjectionMode::Perspective) {
-                const qreal dist = (m_camera3D->position() - m_camera3D->lookAt()).length();
-                const qreal viewH = 2.0 * dist * qTan(qDegreesToRadians(m_camera3D->fovY()) * 0.5);
-                worldPerPixel = viewH / m_plotArea.height();
-            } else {
-                worldPerPixel = m_camera3D->orthographicBox().height() / m_plotArea.height();
-            }
-        }
-        m_camera3D->panTarget(-delta.x() * worldPerPixel, delta.y() * worldPerPixel);
+                          delta.y() * m_orbitSensitivity);   // 垂直 = deltaPitch（viewCube 不动，R6）
         m_lastPos = pos;
         invalidateForeground();
         e->accept();
@@ -116,11 +220,6 @@ void QChartWidget3D::mouseReleaseEvent(QMouseEvent* e) {
         const QPointF moved = e->position() - m_pressPos;
         if (QPointF::dotProduct(moved, moved) < 9.0 && m_hoverActive)
             emit uvSelected(m_lastHoverUV.x(), m_lastHoverUV.y());
-        e->accept();
-        return;
-    }
-    if (e->button() == Qt::RightButton && m_panDrag) {
-        m_panDrag = false;
         e->accept();
         return;
     }
@@ -179,7 +278,8 @@ void QChartWidget3D::updateHover(const QPointF& pos) {
             QVector<QChartPrimitive> items;
             s->collectPrimitives(fn, items);
             for (const QChartPrimitive& prim : items) {
-                if (prim.dataIndex < 0) continue;
+                if (prim.dataIndex < 0 || prim.layer != QChartPrimitive::Layer::Series)
+                    continue;   // §7.4：hover 只扫 Series 层图元（Grid/ForegroundDecor 排除）
                 const qreal d = distToPrimitive(pos, prim);
                 if (d < bestDist) {
                     bestDist = d;
