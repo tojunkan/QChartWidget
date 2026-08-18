@@ -4,7 +4,8 @@
 //   - 持有 QChartAxes3D 编排器（拥有；默认绑定 axisX/Y/Z → dim0/1/2，setAxisX/Y/Z 时自动重绑）
 //   - makeProjectFn 组装 ProjectFn3D 全链闭包（axis toNumeric×3 → projection3D.toWorld → camera.project）
 //   - collectPrimitives：轴/网格图元（axesDataBox 有效时，Grid/ForegroundDecor 分层）+ 系列图元
-//     + 曲面 worldCache 直算填充；labels 可选出参（QChartTextLabel billboard）
+//     + worldCache 直算填充（数值型系列：= toWorld(numericCache)；曲面：= toWorld(toNumeric(grid))；
+//       混合系列不填充——Phase 2 边界）+ labels 可选出参（QChartTextLabel billboard）
 //   - 快速通道（§5.4）：isIdentityMapping()==true → emitLine 免 toWorld（Numeric≡World 直通）、
 //     段数 = samplingSegmentsHint()（Cartesian3D=2）
 //   - ⚠ 三层分离：本类做 toWorld/投影（Layer3D 是 3D 侧唯一投影点）；QChartAxes3D 只产 Numeric 几何
@@ -42,8 +43,12 @@ public:
     void removeSeries3D(QChartSeries3D* s);
     QList<QChartSeries3D*> series3DList() const { return m_series3D; }
 
-    // ===== 3D 投影（Widget3D 注入，非持有）=====
-    void setProjection3D(const QChartProjection3D* proj) { m_projection3D = proj; }
+    // ===== 3D 投影（Widget3D 注入，非持有；变化 → worldCache 置脏重建）=====
+    void setProjection3D(const QChartProjection3D* proj) {
+        if (m_projection3D == proj) return;
+        m_projection3D = proj;
+        m_worldCacheDirty = true;   // 投影变化 → worldCache 重建（§9 失效策略）
+    }
     const QChartProjection3D* projection3D() const { return m_projection3D; }
 
     // ===== 轴参照系编排器（拥有；§8.3）=====
@@ -83,6 +88,9 @@ protected:
                   const QRectF& plotArea, QVector<QChartPrimitive>& out) const;
     /// 该维刻度值（axes3D 委托；axis 为 null 返回空）
     QVector<qreal> dimTicks(int dim) const;
+    /// series dataChanged → worldCache 置脏（连接/断开；series 零耦合红线不变——本层持有引用）
+    void hookSeriesDirty(QChartSeries3D* s);
+    void unhookSeriesDirty(QChartSeries3D* s);
 
     QChartAxis* m_axisZ = nullptr;
     QList<QChartSeries3D*> m_series3D;
@@ -90,6 +98,7 @@ protected:
     std::unique_ptr<QChartAxes3D> m_axes3D;
     GridMode m_gridMode = GridMode::Box;
     QVector3D m_axesDataMin{0, 0, 0}, m_axesDataMax{0, 0, 0};
+    mutable bool m_worldCacheDirty = true;   // 投影/轴/数据变化 → true；collectPrimitives 重建后 false
 };
 
 #endif // QCHARTLAYER3D_H

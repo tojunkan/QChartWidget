@@ -14,11 +14,19 @@
 #include <optional>
 
 class QChartProjection3D;
+class QOpenGLChartRenderer;
 
 class QChartWidget3D : public QChartWidget {
     Q_OBJECT
 public:
+    /// 渲染后端（design_phase3.md §2.2，A9：GL 默认、QPainter 保底；t46 拾取分支用，开关/环境变量属 t48）
+    enum class RenderBackend { OpenGL, QPainter };
     explicit QChartWidget3D(QWidget* parent = nullptr);
+    ~QChartWidget3D() override;   // GlHost（内嵌 QOpenGLWidget）析构需完整类型 → cpp 定义
+
+    // ===== 渲染后端（§2.2 ⚠ 统一后端原则：本开关同时决定渲染与拾取，禁止混搭；t48 接环境变量）=====
+    void setRenderBackend(RenderBackend b);
+    RenderBackend renderBackend() const { return m_renderBackend; }
 
     // ===== 3D 相机（构造时内置默认 QChartCamera3D，可替换）=====
     QChartCamera3D* camera3D() const { return m_camera3D.get(); }   // 非持有
@@ -61,6 +69,9 @@ protected:
     void wheelEvent(QWheelEvent*) override;
     void leaveEvent(QEvent*) override;
 
+    // ===== 布局（Phase 3 GL 宿主跟随 plotArea；基类逻辑保留）=====
+    void resizeEvent(QResizeEvent*) override;
+
     // ===== 场景钩子（§8.2 重写填 3D 段；2D 字段留默认）=====
     QChartScene buildScreenScene() const override;
     QChartScene buildExportScene(QChartExportScope scope, const QSize& size,
@@ -70,6 +81,10 @@ private:
     /// 3D 悬停简化版（§8.3 修订）：屏幕近邻（QChartHitTester，Phase 3 任务 0）→ dataIndex → Data (u,v)
     /// → 发 uvHovered/uvHoveredEnd；不弹 tooltip（D-3D-13）
     void updateHover(const QPointF& pos);
+
+    // ===== Phase 3 GL 宿主（t42，design_phase3.md §2.2/§7.3）=====
+    /// GlHost 几何跟随 plotArea（resizeEvent 调用；plotArea 未就绪 → 全 widget）
+    void layoutGlHost();
 
     // ===== 控制器（§2.2/§3）=====
     /// viewCube 5×5×5 网格采样 → fromWorld → min/max 聚合（非有限跳过，全 NaN → Valid=false）；
@@ -86,6 +101,12 @@ private:
     std::unique_ptr<QChartProjection3D> m_projection3D;
     QList<QChartLayer3D*> m_layers3D;
     QChartWorldBox m_worldBounds;
+
+    // ===== Phase 3 GL 宿主（t42，§2.2 组合；渲染器挂接——后端开关属实现⑤ t48）=====
+    class GlHost;                                  // 内嵌 QOpenGLWidget（cpp 定义）
+    std::unique_ptr<GlHost> m_glHost;
+    QOpenGLChartRenderer* m_glRenderer = nullptr;  // GL 渲染器（GlHost 生命周期内）
+    RenderBackend m_renderBackend = RenderBackend::OpenGL;   // A9：GL 默认（QPainter 保底）
 
     // 视图→dataBounds 反算缓存（§2.2）
     QVector3D m_dataBounds3DMin{0, 0, 0}, m_dataBounds3DMax{0, 0, 0};

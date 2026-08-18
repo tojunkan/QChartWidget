@@ -54,6 +54,7 @@ QWidget* buildDemoScatter3D() {
     qDebug() << "\n========== 3D 散点（球面采样 / 投影切换）==========";
 
     auto* w = new QChartWidget3D();
+    w->setRenderBackend(QChartWidget3D::RenderBackend::OpenGL);   // §12：默认 GL（QCHART_GL=0 由 Widget 兜底回退 QPainter）
     w->setWindowTitle("3D 散点 - 按键 S/C 切换球面/柱面投影，A 轴开关");
     w->setFocusPolicy(Qt::StrongFocus);
     w->resize(560, 520);

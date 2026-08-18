@@ -14,8 +14,10 @@ void QChartScatterSeries3D::setMarkerSize(qreal s) {
 void QChartScatterSeries3D::collectPrimitives(const ProjectFn3D& projectFn,
                                               QVector<QChartPrimitive>& out) const {
     if (!projectFn) return;
-    for (int i = 0; i < m_points.size(); ++i) {
-        const QChartProjectedPoint p = projectFn(m_points.at(i));   // 全链闭包：Data→{screen,depth}
+    // count()/at()：双存储统一访问（numeric-only → float3 单点物化；混合 → QDataPoint3D 权威）
+    const int n = count();
+    for (int i = 0; i < n; ++i) {
+        const QChartProjectedPoint p = projectFn(at(i));           // 全链闭包：Data→{screen,depth}
         if (!std::isfinite(p.screen.x()) || !std::isfinite(p.screen.y()))
             continue;   // 投影 NaN（w<=0 等）→ 跳过
 
@@ -26,6 +28,7 @@ void QChartScatterSeries3D::collectPrimitives(const ProjectFn3D& projectFn,
         prim.dataIndex = i;
         prim.markerSize = m_markerSize;
         prim.color = color();
+        prim.worldA = p.world;   // GL 顶点源（t42，§3.2）
         out.append(prim);
     }
 }

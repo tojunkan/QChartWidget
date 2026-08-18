@@ -19,14 +19,16 @@ void QChartLineSeries3D::setCullingEnabled(bool v) {
 
 void QChartLineSeries3D::collectPrimitives(const ProjectFn3D& projectFn,
                                            QVector<QChartPrimitive>& out) const {
-    if (!projectFn || m_points.size() < 2) return;
+    // count()/at()：双存储统一访问（numeric-only → float3 单点物化；混合 → QDataPoint3D 权威）
+    const int n = count();
+    if (!projectFn || n < 2) return;
 
     // 全链闭包预投影所有点（{screen,depth}），screen 非有限 → 断段
     struct Proj { QChartProjectedPoint p; bool valid; };
     QVector<Proj> proj;
-    proj.reserve(m_points.size());
-    for (const QDataPoint3D& d : m_points) {
-        const QChartProjectedPoint p = projectFn(d);
+    proj.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        const QChartProjectedPoint p = projectFn(at(i));
         proj.append({ p, std::isfinite(p.screen.x()) && std::isfinite(p.screen.y()) });
     }
 
@@ -43,6 +45,8 @@ void QChartLineSeries3D::collectPrimitives(const ProjectFn3D& projectFn,
         prim.dataIndex = i;                              // 裁决 c：线段起点数据索引
         prim.penWidth = m_lineWidth;
         prim.color = color();
+        prim.worldA = p0.p.world;                        // GL 顶点源（t42，§3.2）
+        prim.worldB = p1.p.world;
         out.append(prim);
     }
 }

@@ -14,20 +14,23 @@ QChartLayer3D::QChartLayer3D(QObject* parent) : QChartLayer(parent) {
     m_axes3D->axis(2).axis = m_axisZ;
 }
 
-// ===== 轴（重绑时同步 axes3D 配置槽）=====
+// ===== 轴（重绑时同步 axes3D 配置槽；轴变化 → worldCache 置脏重建）=====
 void QChartLayer3D::setAxisX(QChartAxis* a) {
     QChartLayer::setAxisX(a);
     if (m_axes3D) m_axes3D->axis(0).axis = a;
+    m_worldCacheDirty = true;
 }
 
 void QChartLayer3D::setAxisY(QChartAxis* a) {
     QChartLayer::setAxisY(a);
     if (m_axes3D) m_axes3D->axis(1).axis = a;
+    m_worldCacheDirty = true;
 }
 
 void QChartLayer3D::setAxisZ(QChartAxis* a) {
     m_axisZ = a;
     if (m_axes3D) m_axes3D->axis(2).axis = a;
+    m_worldCacheDirty = true;
 }
 
 // ===== 3D 系列管理 =====
@@ -35,12 +38,24 @@ void QChartLayer3D::addSeries3D(QChartSeries3D* s) {
     if (!s || m_series3D.contains(s)) return;
     m_series3D.append(s);
     addSeries(s);   // 存入基类 m_series（复用图例/主题/所有权/析构）
+    hookSeriesDirty(s);   // 数据变化 → worldCache 置脏（§9 失效策略）
+    m_worldCacheDirty = true;
 }
 
 void QChartLayer3D::removeSeries3D(QChartSeries3D* s) {
     if (!s) return;
     m_series3D.removeOne(s);
     removeSeries(s);
+    unhookSeriesDirty(s);
+    m_worldCacheDirty = true;
+}
+
+void QChartLayer3D::hookSeriesDirty(QChartSeries3D* s) {
+    QObject::connect(s, &QChartSeries3D::dataChanged, this, [this]() { m_worldCacheDirty = true; });
+}
+
+void QChartLayer3D::unhookSeriesDirty(QChartSeries3D* s) {
+    QObject::disconnect(s, &QChartSeries3D::dataChanged, this, nullptr);
 }
 
 // ===== 轴/网格数据盒 =====
@@ -107,6 +122,8 @@ void QChartLayer3D::emitLine(QVector3D numA, QVector3D numB, QChartPrimitive::La
         prim.dataIndex = -1;                        // 轴/网格装饰无数据点索引
         prim.penWidth = penWidth;
         prim.color = color;
+        prim.worldA = p0.world;                     // GL 顶点源（t42，§3.2）
+        prim.worldB = p1.world;
         prim.layer = layer;
         out.append(prim);
     }
@@ -135,21 +152,39 @@ void QChartLayer3D::collectPrimitives(const QChartCamera3D* cam, const QRectF& p
         m_axes3D->axis(2).axis = m_axisZ;
     }
 
-    // 1. 曲面 worldCache 直算填充（自身 axis toNumeric + projection3D toWorld，不走系列闭包，裁决 b）
-    for (QChartSeries3D* s : m_series3D) {
-        auto* surf = qobject_cast<QChartSurfaceSeries*>(s);
-        if (!surf) continue;
-        QVector<QVector3D>& cache = surf->worldCache();
-        cache.resize(surf->count());
-        for (int i = 0; i < surf->count(); ++i) {
-            const QDataPoint3D d = surf->points().at(i);
-            qreal n0 = m_axisX ? m_axisX->toNumeric(d.x()) : d.x().toDouble();
-            qreal n1 = m_axisY ? m_axisY->toNumeric(d.y()) : d.y().toDouble();
-            qreal n2 = m_axisZ ? m_axisZ->toNumeric(d.z()) : d.z().toDouble();
-            cache[i] = m_projection3D
-                ? m_projection3D->toWorld(n0, n1, n2)
-                : QVector3D(n0, n1, n2);
+    // 1. worldCache 重建（design_phase3.md §9：投影/数据变化才重建——置脏才重算，免每帧 O(N)）：
+    //    曲面（QVariant 路径）：自身 axis toNumeric + projection3D toWorld 直算（不走系列闭包，裁决 b）；
+    //    数值型系列：worldCache = toWorld(numericCache)（数值已预转换，免 QVariant；VBO 源）；
+    //    混合（QVariant）非曲面系列：无 worldCache（Phase 2 边界，走全链闭包）。
+    if (m_worldCacheDirty) {
+        for (QChartSeries3D* s : m_series3D) {
+            if (!s) continue;
+            auto* surf = qobject_cast<QChartSurfaceSeries*>(s);
+            if (surf) {
+                QVector<QVector3D>& cache = surf->worldCache();
+                cache.resize(surf->count());
+                for (int i = 0; i < surf->count(); ++i) {
+                    const QDataPoint3D d = surf->points().at(i);
+                    qreal n0 = m_axisX ? m_axisX->toNumeric(d.x()) : d.x().toDouble();
+                    qreal n1 = m_axisY ? m_axisY->toNumeric(d.y()) : d.y().toDouble();
+                    qreal n2 = m_axisZ ? m_axisZ->toNumeric(d.z()) : d.z().toDouble();
+                    cache[i] = m_projection3D
+                        ? m_projection3D->toWorld(n0, n1, n2)
+                        : QVector3D(n0, n1, n2);
+                }
+            } else if (s->numericCacheActive()) {
+                QVector<QVector3D>& cache = s->worldCache();
+                const QVector<QVector3D>& num = s->numericCache();
+                cache.resize(num.size());
+                for (int i = 0; i < num.size(); ++i) {
+                    const QVector3D& n = num.at(i);
+                    cache[i] = m_projection3D
+                        ? m_projection3D->toWorld(n.x(), n.y(), n.z())
+                        : n;
+                }
+            }
         }
+        m_worldCacheDirty = false;
     }
 
     // 2. 轴/网格图元（axesDataBox 有效 + axes3D 可见时才生成；默认无效 → 零轴零网格，零回归）
@@ -217,6 +252,7 @@ void QChartLayer3D::collectPrimitives(const QChartCamera3D* cam, const QRectF& p
                 prim.color = spineCol[d];
                 prim.layer = QChartPrimitive::Layer::ForegroundDecor;
                 prim.dataIndex = -1;
+                prim.worldA = p.world;              // GL 顶点源（t42，§3.2）
                 out.append(prim);
             }
         }

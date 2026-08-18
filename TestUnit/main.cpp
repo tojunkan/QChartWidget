@@ -24,6 +24,8 @@
 #include "tests/test_qchartlegend.h"
 #include "tests/test_legend_interact.h"
 #include "tests/test_export.h"
+#include "tests/test_qchartgl.h"
+#include "tests/test_qopenglrenderer.h"
 
 int main(int argc, char* argv[])
 {
@@ -49,6 +51,8 @@ int main(int argc, char* argv[])
     rc += QTest::qExec(new TestQChartLegend, argc, argv);
     rc += QTest::qExec(new TestLegendInteract, argc, argv);
     rc += QTest::qExec(new TestExport, argc, argv);
+    rc += QTest::qExec(new TestQChartGL, argc, argv);
+    rc += QTest::qExec(new TestQOpenGLRenderer, argc, argv);
 
     qDebug() << "\n========== TestUnit 全部完成 ==========";
     return rc;

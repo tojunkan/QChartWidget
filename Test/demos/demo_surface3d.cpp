@@ -123,6 +123,7 @@ QWidget* buildDemoSurface3D() {
 
     // ── 左：3D 曲面 ──
     auto* w3 = new QChartWidget3D();
+    w3->setRenderBackend(QChartWidget3D::RenderBackend::OpenGL);   // §12：默认 GL（QCHART_GL=0 由 Widget 兜底回退 QPainter）
     w3->setWindowTitle("3D 曲面 - 按键 S/M 切换球面/莫比乌斯；联动悬停");
     w3->setFocusPolicy(Qt::StrongFocus);
     w3->setObjectName("widget3d");

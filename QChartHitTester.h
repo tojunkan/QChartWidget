@@ -8,6 +8,7 @@
 #ifndef QCHARTHITTESTER_H
 #define QCHARTHITTESTER_H
 
+#include "QChartRenderer.h"   // QChartPrimitive（PickRecord::layer 需完整类型；§8.1）
 #include <QPointF>
 #include <QList>
 #include <QVector>
@@ -16,7 +17,6 @@
 
 class QChartSeries;
 struct DrawContext;
-struct QChartPrimitive;
 
 class QChartHitTester {
 public:
@@ -47,6 +47,20 @@ public:
     /// 像素到图元距离（Point=|pos−a|；LineSegment=点到线段距离）——供调用方在命中后
     /// 收紧全局阈值（保持跨系列全局最近语义）等场景复用
     static qreal distanceToPrimitive(const QPointF& pos, const QChartPrimitive& prim);
+
+    // ===== GPU 拾取记录（design_phase3.md §8.1，t42 落地）=====
+    /// 图元 ID → 命中结果（与 GL 批次同步构建；轴/网格不编码 → dataIndex=-1）
+    struct PickRecord {
+        QChartSeries* series = nullptr;   // 系列（series 层）；轴/网格装饰 = nullptr
+        int dataIndex = -1;               // 数据索引（同 2D HitResult.dataIndex 语义）
+        QChartPrimitive::Layer layer;     // 备用（调试/断言）
+    };
+
+    // ===== GPU 拾取解码（design_phase3.md §8.1，t46 落地）=====
+    /// 纯函数（无 GL 依赖，可单测）：光标 1×1 读回 RGB24 → ID → 查表 → HitResult。
+    /// id = r | g<<8 | b<<16；id==0xFFFFFF（哨兵：背景/轴网格 Decor 片段，§5.3 定案）或越界 → 空 HitResult
+    static HitResult hitTestGPU(uint8_t r, uint8_t g, uint8_t b,
+                                const QVector<PickRecord>& pickTable);
 };
 
 #endif // QCHARTHITTESTER_H

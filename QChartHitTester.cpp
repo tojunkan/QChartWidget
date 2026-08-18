@@ -58,3 +58,17 @@ qreal QChartHitTester::distanceToPrimitive(const QPointF& pos, const QChartPrimi
     const QPointF d = pos - proj;
     return std::sqrt(QPointF::dotProduct(d, d));
 }
+
+// ===== GPU 拾取解码（§8.1 纯函数；t46）=====
+QChartHitTester::HitResult QChartHitTester::hitTestGPU(uint8_t r, uint8_t g, uint8_t b,
+                                                       const QVector<PickRecord>& pickTable) {
+    HitResult result;
+    const int id = int(r) | (int(g) << 8) | (int(b) << 16);
+    if (id == 0xFFFFFF) return result;                     // 哨兵（背景 / 轴网格 Decor 片段，§5.3 定案）
+    if (id < 0 || id >= pickTable.size()) return result;   // 越界（表未同步/损坏）→ 空
+    const PickRecord& rec = pickTable.at(id);
+    result.series = rec.series;
+    result.dataIndex = rec.dataIndex;
+    // index 留 -1：与 3D CPU 近邻路径结果形态一致（3D 下仅 dataIndex 语义有效）
+    return result;
+}

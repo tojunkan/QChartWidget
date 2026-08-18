@@ -179,14 +179,20 @@ void main() {
 
 ### 5.1 主 pass（paintGL）
 
+⚠ **QOpenGLWidget 原生子窗口透明语义（t42 实测教训，用户可见问题）**：GL 像素透明（如骨架期 glClearColor(0,0,0,0)）透出的是**窗口堆叠下层（桌面/其他程序）**，不是父控件 QPainter 内容——镂空穿帮。因此：
+- **主 pass 必须按场景背景色不透明清屏**（`glClearColor(scene 背景色, 1.0)` + GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT）；任何「想让 QPainter 从 GL 底下透出」的透明设计都不可行；
+- GL 后端未就绪（骨架期/初始化失败）时 **GlHost 必须隐藏**（回退纯 QPainter），不得以透明 GL 子窗口示人；
+- t46 overlay（QPainter 标签/图例）绘制在 GL 不透明底色之上，天然安全。
+
 ```
 paintGL(scene)：
 1. buildBatches（仅 dirty 时，§3.1）——数据/样式变化才重建（A5）
 2. glViewport(plotArea)（视口=plotArea，A3 深度缓冲按 widget 尺寸）
 3. 主 pass → 默认帧缓冲（QOpenGLWidget 自带 color+depth）：
-   a. Grid 批次：depth test ON（u_depthBias>0）→ Series 批次：depth test ON（u_depthBias=0）
+   a. 不透明清屏（场景背景色）
+   b. Grid 批次：depth test ON（u_depthBias>0）→ Series 批次：depth test ON（u_depthBias=0）
       ——z-buffer 保证正确遮挡（painter's algorithm 退休，A4）；批次间顺序只影响同深度 tie
-   b. ForegroundDecor 批次：depth test OFF，最后画（盒边/spine/刻度点恒可见，A4/A7 语义保持）
+   c. ForegroundDecor 批次：depth test OFF，最后画（盒边/spine/刻度点恒可见，A4/A7 语义保持）
 4. Overlay：QPainter 画 billboard 标签 + 图例（§6）
 5. 交换（QOpenGLWidget 自动）
 ```
@@ -238,9 +244,11 @@ pickIdAt(pos)（仅鼠标移动、位移 ≥1px、距上次拾取 ≥16ms（一�
 | 简单 3D 图 VBO（1 万散点+线+曲面 64×64+轴网格） | ≤1MB | ~1.2 万顶点 × 16B |
 | 1M 点 VBO | ≤16MB | 1M × 16B；静态上传一次，增量 SubData（A3） |
 | 1M 点 CPU 数值预转换缓存（World float3） | ≤12MB | 12B/点；**替代 QVariant 三元组存储**（§9，达成预算的必要条件） |
-| 拾取 | ≈0 | ID 帧复用默认 FBO 与深度（§5.3），无独立 FBO |
+| 拾取 | ≈0（ID 帧无独立 FBO）；pickTable（图元 ID 表）≤16MB@1M 点 | ID 帧复用默认 FBO 与深度（§5.3）；pickTable 为拾取所需常驻（t48 实测 16B/记录；t50 观察项：按需/分片降载） |
 | billboard 标签/图例 | ≈0 | QPainter 字体管线，无 glyph atlas |
 | **合计（RSS 增量）** | 简单图 ≈26.5MB；1M 点 ≈66.5MB | 名义预算 ≤25/≤60MB，**验收口径 = 预算 +20% 容差 = ≤30/≤70MB（A3）** |
+
+⚠ 修正（t48 实测）：GL 路径的 collectPrimitives 输出（QChartPrimitive ≈120B/条）为**瞬态缓存**——uploadBatches 完成即清空（VBO 已持有顶点数据，下次 invalidate 重建），**不计入常驻预算**；t48 曾实测 1M 点因未清空导致 +180MB 超标，修复后 ≈60MB 达标（详见 t48 output）。
 
 ⚠ 名义 25MB 与 1080p 默认 FBO 固有成本（14.5MB）的差距由容差覆盖；若用户需严格 ≤25MB，可降 widget 分辨率或缩小视口（预算表按 7B/px 线性缩放）。
 
@@ -334,8 +342,15 @@ public:
 
 | 平台 | CPU | GPU | 驱动 | 分辨率 | 构建 | Qt | 后端 |
 |---|---|---|---|---|---|---|---|
-| Linux/WSLg | （记录型号） | （记录：直通 GPU 或 llvmpipe） | mesa | 1920×1080 | Release | 6.4.2 | WSLg |
+| Linux/WSLg | Intel Core i7-8565U @1.80GHz（8 核） | **llvmpipe（LLVM 20.1.2, 256 bits）软件渲染**（GL 4.5 Core Profile，Mesa 25.2.8；t42 探测：QOpenGLWidget 上下文可建，GL_RENDERER=llvmpipe） | mesa 25.2.8 | 1920×1080 | Debug（当前）/ Release（验收） | 6.4.2 | WSLg（xcb, DISPLAY=:0） |
 | Windows | （记录型号） | （记录型号） | 厂商驱动 | 1920×1080 | Release | 6.11.x | 桌面 |
+
+> t42 注：本机（WSLg/xcb）GL 为 **llvmpipe 软渲染**（无直通 GPU）——按 A8 仅作 CI 冒烟/开发机，不作性能基准；性能验收须在直通 GPU 或 Windows 桌面完成。探测方式：`TestQChartGL::gl_probe_context`（xcb 实跑）+ demo `initializeGL` 日志。
+>
+> **t50 终验实测值（Linux/WSLg，llvmpipe 4.5 Core Mesa 25.2.8，Qt 6.4.2 Debug）**：
+> - QChartBench GL（wayland 实跑，CSV backend=gl）：gl_vbo_upload_1M median **1.15~1.49ms**（16MB 上传）；gl_rotate_100k median **15.7~15.9ms/帧 ≈ 63fps**（软渲染下已接近 60fps 目标，真实 GPU 更快）；gl_rotate_1M median **157~201ms/帧**（软渲染，非性能基准）；gl_rss_simple **+0.03~0.4MB**；**gl_rss_1M = +65.9MB（A3 验收 ≤70MB ✓，修复前 180.4MB）**。
+> - 传统 QChartBench 复跑与 Phase 2 基线一致（line_full ≈ 8.5~9.0ms，环境负载波动非回归）。
+> - **A8 正式验收转移**：GL 性能/内存正式验收（10 万点 60fps / 1M 点可交互 / 1M 点 RSS ≤70MB）在用户 **Windows 侧（MSVC，Release，Qt 6.11.x，真实 GPU）** 执行；Linux 侧已完成构建 + 全量回归 + llvmpipe 软渲染冒烟（本表数字仅作参考基线）。
 
 ### 10.2 验收流程（性能 + 内存 + 双工具链）
 

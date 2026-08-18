@@ -11,6 +11,11 @@
 #include "../../QChartSphericalProjection3D.h"
 #include "../../QChartFunctionalProjection3D.h"
 #include "../../QChartCamera.h"   // 仅用 QChartCamera2D::cartesianToPixel 做 y 翻转一致性对照
+#include "../../QChartSeries3D.h"
+#include "../../QChartScatterSeries3D.h"
+#include "../../QChartLineSeries3D.h"
+#include "../../QChartLayer3D.h"
+#include "../../QChartCamera3D.h"
 #include "test_qchartmath.h"
 
 namespace {
@@ -462,4 +467,221 @@ void TestQChartMath::unproject_roundtrip() {
         QVector3D nan = QChartMath::unproject(singular, QVector4D(1, 1, 1, 1));
         QVERIFY(qIsNaN(nan.x()) && qIsNaN(nan.y()) && qIsNaN(nan.z()));
     }
+}
+
+// ============================================================
+// Phase 3：数值预转换缓存 + worldCache（design_phase3.md §9 / §13.2，t51）
+// ============================================================
+// ===== 1. 数值型 append → float3 权威存储（12B/点）激活 =====
+void TestQChartMath::numericCache_numericAppends() {
+    // A3 结构性前提：float3 = 12B/点，远小于 QVariant 三元组（QDataPoint3D 3×QVariant）
+    QCOMPARE(int(sizeof(QVector3D)), 12);
+    QVERIFY2(sizeof(QVector3D) < sizeof(QDataPoint3D),
+             "float3 权威存储必须小于 QVariant 三元组（A3 内存预算前提）");
+
+    QChartScatterSeries3D s;
+    s.append(1.0, 2.0, 3.0);
+    s.append(-4.5, 0.0, 7.25);
+    s.append(100.0, -200.0, 0.5);
+
+    QVERIFY(s.numericCacheActive());                        // 全部数值型 append → true
+    QCOMPARE(s.numericCache().size(), 3);                   // float3 权威存储
+    QCOMPARE(s.numericCache().size() * int(sizeof(QVector3D)), 36);   // 12B/点 内存核算
+    QCOMPARE(s.count(), 3);
+
+    // 值 = append 的 (x,y,z)
+    QVERIFY(nearVec3(s.numericCache().at(0), 1.0, 2.0, 3.0));
+    QVERIFY(nearVec3(s.numericCache().at(1), -4.5, 0.0, 7.25));
+    QVERIFY(nearVec3(s.numericCache().at(2), 100.0, -200.0, 0.5));
+}
+
+// ===== 2. QVariant 路径不激活；混合回退保持顺序 =====
+void TestQChartMath::numericCache_qvariantPath() {
+    QChartScatterSeries3D s;
+    s.append(QVariant(1.0), QVariant(2.0), QVariant(3.0));   // QVariant 路径（Phase 2 边界）
+    QVERIFY(!s.numericCacheActive());                        // 不激活
+    QCOMPARE(s.numericCache().size(), 0);
+    QCOMPARE(s.count(), 1);
+
+    // 混合：数值型 append 在 QVariant 之后 → 仍不激活（回退 QDataPoint3D 列表，顺序语义保持）
+    s.append(4.0, 5.0, 6.0);
+    QVERIFY(!s.numericCacheActive());
+    QCOMPARE(s.count(), 2);
+    QCOMPARE(s.at(0).x(), QVariant(1.0));
+    QCOMPARE(s.at(1).x(), QVariant(4.0));
+    QCOMPARE(s.points().size(), 2);
+
+    // setPoints 批量：QVariant 路径 → 不激活
+    QVector<QDataPoint3D> pts;
+    pts.append(QDataPoint3D(7.0, 8.0, 9.0));
+    s.setPoints(pts);
+    QVERIFY(!s.numericCacheActive());
+    QCOMPARE(s.count(), 1);
+    QCOMPARE(s.at(0).z(), QVariant(9.0));
+
+    // append(QDataPoint3D) 同属 QVariant 路径 → 不激活
+    QChartLineSeries3D s2;
+    s2.append(1, 2, 3);                                     // 数值型先行
+    QVERIFY(s2.numericCacheActive());
+    s2.append(QDataPoint3D(QVariant(4.0), QVariant(5.0), QVariant(6.0)));
+    QVERIFY(!s2.numericCacheActive());                      // QDataPoint3D 注入 → 回退
+    QCOMPARE(s2.count(), 2);
+    QCOMPARE(s2.at(1).x(), QVariant(4.0));
+}
+
+// ===== 3. clear 复位 / replace·insert 失效 / remove 增量维护 =====
+void TestQChartMath::numericCache_clearReplaceInvalidate() {
+    // 数值型 → replace 失效回退（任务定：clear/replace 失效）：active=false，数据完整
+    QChartLineSeries3D s;
+    s.append(1, 2, 3);
+    s.append(4, 5, 6);
+    QVERIFY(s.numericCacheActive());
+    s.replace(1, QDataPoint3D(QVariant(40.0), QVariant(50.0), QVariant(60.0)));
+    QVERIFY(!s.numericCacheActive());                       // replace 失效
+    QCOMPARE(s.count(), 2);
+    QCOMPARE(s.at(1).x(), QVariant(40.0));
+    QCOMPARE(s.points().size(), 2);                         // 物化完整（含被替换点）
+
+    // 数值型 → insert 注入 QVariant 点 → 回退（顺序语义保持）
+    QChartScatterSeries3D s2;
+    s2.append(1, 2, 3);
+    s2.insert(0, QDataPoint3D(QVariant(0.0), QVariant(0.0), QVariant(0.0)));
+    QVERIFY(!s2.numericCacheActive());
+    QCOMPARE(s2.count(), 2);
+    QCOMPARE(s2.at(0).x(), QVariant(0.0));
+    QCOMPARE(s2.at(1).x(), QVariant(1.0));
+
+    // 数值型 → remove 增量维护（免回退）
+    QChartScatterSeries3D s3;
+    s3.append(1, 2, 3);
+    s3.append(4, 5, 6);
+    s3.append(7, 8, 9);
+    s3.remove(1);
+    QVERIFY(s3.numericCacheActive());                       // remove 保持数值型
+    QCOMPARE(s3.count(), 2);
+    QVERIFY(nearVec3(s3.numericCache().at(1), 7.0, 8.0, 9.0));
+    QCOMPARE(s3.at(1).x(), QVariant(7.0));
+
+    // clear → 失效复位：空白、恢复数值型容量（下次 append 决定模式）
+    s3.clear();
+    QCOMPARE(s3.count(), 0);
+    QVERIFY(s3.numericCacheActive());
+    QCOMPARE(s3.numericCache().size(), 0);
+    s3.append(1.5, 2.5, 3.5);
+    QVERIFY(s3.numericCacheActive());
+    QVERIFY(nearVec3(s3.numericCache().at(0), 1.5, 2.5, 3.5));
+}
+
+// ===== 4. points()/at()/count() API 语义与 Phase 2 一致（QVariant 按需物化）=====
+void TestQChartMath::numericCache_apiSemantics() {
+    QChartScatterSeries3D s;
+    s.append(1.0, 2.0, 3.0);
+    s.append(4.0, 5.0, 6.0);
+
+    const QVector<QDataPoint3D>& pts = s.points();          // 按需物化视图
+    QCOMPARE(pts.size(), 2);
+    QCOMPARE(pts.at(0).x(), QVariant(1.0));
+    QCOMPARE(pts.at(1).y(), QVariant(5.0));
+    QCOMPARE(s.count(), 2);
+    QCOMPARE(s.at(1).z(), QVariant(6.0));
+
+    // 物化后 append → 视图失效；下次 points() 重新物化反映新数据
+    s.append(7.0, 8.0, 9.0);
+    QCOMPARE(s.count(), 3);
+    QCOMPARE(s.points().size(), 3);
+    QCOMPARE(s.points().at(2).x(), QVariant(7.0));
+    QVERIFY(s.numericCacheActive());                         // 仍数值型
+    QCOMPARE(s.numericCache().size(), 3);
+
+    // OOB at() → 空点（Phase 2 语义）
+    QDataPoint3D oob = s.at(99);
+    QVERIFY(!oob.x().isValid());
+
+    // collectPrimitives 在数值型模式下产生与 Phase 2 一致的图元（dataIndex/depth/screen）
+    ProjectFn3D fn = [](const QDataPoint3D& d) {
+        return QChartProjectedPoint{ QPointF(d.x().toDouble(), d.y().toDouble()), d.z().toDouble() };
+    };
+    QVector<QChartPrimitive> out;
+    s.collectPrimitives(fn, out);
+    QCOMPARE(out.size(), 3);
+    QCOMPARE(out[2].dataIndex, 2);
+    QCOMPARE(out[2].depth, 9.0);
+    QVERIFY(qAbs(out[2].a.x() - 7.0) < 1e-6);
+}
+
+// ===== 5. worldCache：Layer3D 渲染时填充，= toWorld(numericCache)（VBO 源）=====
+void TestQChartMath::worldCache_filledToWorld() {
+    QChartCamera3D cam;
+    QChartLayer3D layer;
+    QChartCylindricalProjection3D cyl;
+    layer.setProjection3D(&cyl);
+
+    auto* s = new QChartScatterSeries3D("pts");   // 堆分配：所有权归 layer（dtor qDeleteAll）
+    s->append(2.0, 0.0, 5.0);        // 柱坐标 (2,0°,5) → (2, 0, 5)
+    s->append(1.0, 90.0, -1.0);      // (1,90°,-1) → (0, 1, -1)
+    s->append(3.0, 180.0, 0.0);      // (3,180°,0) → (-3, 0, 0)
+    layer.addSeries3D(s);
+
+    QVector<QChartPrimitive> out;
+    const QRectF plot(0, 0, 400, 300);
+    layer.collectPrimitives(&cam, plot, out);   // 渲染时填充
+
+    QVERIFY(s->numericCacheActive());
+    QCOMPARE(s->worldCache().size(), 3);
+    for (int i = 0; i < 3; ++i) {
+        const QVector3D& n = s->numericCache().at(i);
+        const QVector3D expected = cyl.toWorld(n.x(), n.y(), n.z());
+        QVERIFY2(qAbs(s->worldCache().at(i).x() - expected.x()) < 1e-5 &&
+                 qAbs(s->worldCache().at(i).y() - expected.y()) < 1e-5 &&
+                 qAbs(s->worldCache().at(i).z() - expected.z()) < 1e-5,
+                 "worldCache 应等于 toWorld(numericCache)（逐点对照）");
+    }
+    // 具体值抽查：柱坐标 (r,θ,z) → (r·cosθ, r·sinθ, z)
+    QVERIFY(qAbs(s->worldCache().at(0).x() - 2.0) < 1e-5);
+    QVERIFY(qAbs(s->worldCache().at(1).y() - 1.0) < 1e-5);
+    QVERIFY(qAbs(s->worldCache().at(2).x() + 3.0) < 1e-5);
+
+    // QVariant 路径（混合）系列 → 无 worldCache（Phase 2 边界）
+    auto* m = new QChartLineSeries3D("mixed");
+    m->append(QVariant(1.0), QVariant(2.0), QVariant(3.0));
+    m->append(4.0, 5.0, 6.0);
+    layer.addSeries3D(m);
+    layer.collectPrimitives(&cam, plot, out);   // addSeries3D 置脏 → 重建
+    QVERIFY(!m->numericCacheActive());
+    QCOMPARE(m->worldCache().size(), 0);        // 混合路径不填充
+    QCOMPARE(s->worldCache().size(), 3);        // 数值型系列重建保持
+}
+
+// ===== 6. worldCache：数据/投影变化 → 失效并重建（§9 失效策略）=====
+void TestQChartMath::worldCache_invalidatedOnChange() {
+    QChartCamera3D cam;
+    QChartLayer3D layer;
+    QChartCartesianProjection3D cart;
+    layer.setProjection3D(&cart);
+
+    auto* s = new QChartScatterSeries3D("pts");
+    s->append(1, 2, 3);
+    layer.addSeries3D(s);
+
+    QVector<QChartPrimitive> out;
+    const QRectF plot(0, 0, 400, 300);
+    layer.collectPrimitives(&cam, plot, out);
+    QCOMPARE(s->worldCache().size(), 1);
+
+    // 数据变化 → 本类自清 + Layer3D 置脏；下次渲染重建（投影/数据变化才重建）
+    s->append(4, 5, 6);
+    QCOMPARE(s->worldCache().size(), 0);        // 数据变化 → 立即失效
+    layer.collectPrimitives(&cam, plot, out);
+    QCOMPARE(s->worldCache().size(), 2);        // 重建（尺寸跟随）
+    QVERIFY(nearVec3(s->worldCache().at(1), 4, 5, 6));
+
+    // 投影变化 → 置脏重建（换柱坐标）
+    QChartCylindricalProjection3D cyl;
+    layer.setProjection3D(&cyl);
+    layer.collectPrimitives(&cam, plot, out);
+    QCOMPARE(s->worldCache().size(), 2);
+    const QVector3D expected = cyl.toWorld(4.0f, 5.0f, 6.0f);
+    QVERIFY(qAbs(s->worldCache().at(1).x() - expected.x()) < 1e-5 &&
+            qAbs(s->worldCache().at(1).y() - expected.y()) < 1e-5 &&
+            qAbs(s->worldCache().at(1).z() - expected.z()) < 1e-5);
 }

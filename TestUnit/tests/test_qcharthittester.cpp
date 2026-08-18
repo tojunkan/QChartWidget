@@ -8,6 +8,7 @@
 #include "../../QCartesianProjection.h"
 #include "../../QScatterSeries.h"
 #include "../../QChartRenderer.h"   // QChartPrimitive
+#include "../../QChartLineSeries3D.h"   // PickRecord.series 具体类型
 #include "test_qcharthittester.h"
 
 namespace {
@@ -184,4 +185,72 @@ void TestQChartHitTester::hit3d_multiPrimitive() {
     mixed.append(pointPrim(QPointF(5, 2), 8, QChartPrimitive::Layer::Series));
     const QChartHitTester::HitResult r = QChartHitTester::hitTest(QPointF(5, 1), mixed);
     QVERIFY2(r.dataIndex == 4 || r.dataIndex == 8, "距离并列时两者之一（确定性取先扫到的段）");
+}
+
+// ============================================================
+// GPU 拾取解码（design_phase3.md §8.1，t46；纯函数，无 GL 依赖）
+// ============================================================
+// ===== 1. 正常：RGB24 → ID → 查表 → HitResult（series/dataIndex/index）=====
+void TestQChartHitTester::hitTestGPU_normal() {
+    QChartLineSeries3D s("l");
+    QVector<QChartHitTester::PickRecord> table;
+    table.append({ &s, 0, QChartPrimitive::Layer::Series });   // id 0
+    table.append({ &s, 5, QChartPrimitive::Layer::Series });   // id 1
+
+    const QChartHitTester::HitResult r0 = QChartHitTester::hitTestGPU(0, 0, 0, table);   // id = 0
+    QVERIFY(r0.series == &s);
+    QCOMPARE(r0.dataIndex, 0);
+    QCOMPARE(r0.index, -1);   // 3D 形态：index 恒 -1（与 CPU 近邻一致，仅 dataIndex 语义有效）
+
+    const QChartHitTester::HitResult r1 = QChartHitTester::hitTestGPU(1, 0, 0, table);   // id = 1
+    QVERIFY(r1.series == &s);
+    QCOMPARE(r1.dataIndex, 5);
+
+    // 高位编码：id = r | g<<8 | b<<16（b=1 → 65536 越界空表外；改用合法 id 验证通道解码）
+    const QChartHitTester::HitResult rB = QChartHitTester::hitTestGPU(0, 1, 0, table);   // id = 256（越界）
+    QCOMPARE(rB.dataIndex, -1);
+}
+
+// ===== 2. 哨兵：0xFFFFFF（背景 / 轴网格 Decor 片段，§5.3 定案）→ 空 =====
+void TestQChartHitTester::hitTestGPU_sentinel() {
+    QVector<QChartHitTester::PickRecord> table;
+    table.append({ nullptr, -1, QChartPrimitive::Layer::Grid });
+    const QChartHitTester::HitResult r = QChartHitTester::hitTestGPU(255, 255, 255, table);
+    QVERIFY(r.series == nullptr);
+    QCOMPARE(r.dataIndex, -1);
+}
+
+// ===== 3. 越界 / 空表 → 空 =====
+void TestQChartHitTester::hitTestGPU_outOfRange() {
+    QChartLineSeries3D s;
+    QVector<QChartHitTester::PickRecord> empty;
+    QCOMPARE(QChartHitTester::hitTestGPU(0, 0, 0, empty).dataIndex, -1);   // 空表 → id0 越界 → 空
+
+    QVector<QChartHitTester::PickRecord> table;
+    table.append({ &s, 3, QChartPrimitive::Layer::Series });
+    const QChartHitTester::HitResult r = QChartHitTester::hitTestGPU(5, 0, 0, table);   // id 5 > size-1
+    QVERIFY(r.series == nullptr);
+    QCOMPARE(r.dataIndex, -1);
+}
+
+// ===== 4. 两后端交叉验证：GPU 表解码 vs CPU 近邻（简单场景，§8.2）=====
+void TestQChartHitTester::hitTestGPU_crossCPU() {
+    // 无轴/网格（axesDataBox 无效）→ 图元全为系列；pickTable 模拟 collectScene 输出（id == 图元索引）
+    QChartLineSeries3D s;
+    QVector<QChartPrimitive> prims;
+    prims.append(segPrim(QPointF(0, 0), QPointF(10, 0), 0));    // 段 0（dataIndex 0）
+    prims.append(segPrim(QPointF(10, 0), QPointF(20, 0), 1));   // 段 1（dataIndex 1）
+    QVector<QChartHitTester::PickRecord> table;
+    table.append({ &s, 0, QChartPrimitive::Layer::Series });
+    table.append({ &s, 1, QChartPrimitive::Layer::Series });
+
+    const QPointF hit(5, 0);   // 段 0 中点
+    const QChartHitTester::HitResult cpu = QChartHitTester::hitTest(hit, prims, 8.0);
+    QCOMPARE(cpu.dataIndex, 0);   // CPU 近邻
+
+    // GPU 侧：该图元 id = 0 → 解码与 CPU 一致（series + dataIndex + index）
+    const QChartHitTester::HitResult gpu = QChartHitTester::hitTestGPU(0, 0, 0, table);
+    QVERIFY(gpu.series == &s);
+    QCOMPARE(gpu.dataIndex, cpu.dataIndex);
+    QCOMPARE(gpu.index, cpu.index);   // 两后端形态一致：index 恒 -1（3D）
 }

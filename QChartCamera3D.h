@@ -19,10 +19,12 @@
 #include <QPointF>
 #include <QQuaternion>
 
-/// 投影结果：屏幕点 + 深度（排序键）；w<=0 时 screen 为 NaN
+/// 投影结果：屏幕点 + 深度（排序键）；w<=0 时 screen 为 NaN。
+/// ★ Phase 3 GL（t42）：world 携带 World 点（A5：VBO 顶点源；GL 路径图元由此打包 16B 顶点）。
 struct QChartProjectedPoint {
     QPointF screen;
     qreal depth;
+    QVector3D world{0, 0, 0};   // 输入 World 点原样回传（默认零值 → 既有 2 元初始化零改动）
 };
 
 class QChartCamera3D : public QChartCamera {

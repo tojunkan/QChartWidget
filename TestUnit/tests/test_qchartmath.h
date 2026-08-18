@@ -1,8 +1,11 @@
 // test_qchartmath.h —— QChartMath + Projection3D 家族单元测试声明
-// 覆盖（design_3d.md §11.1 TestQChartMath）：
+// 覆盖（design_3d.md §11.1 TestQChartMath + design_phase3.md §13.2 t51 扩展）：
 //   QChartMath：clipToNdc/ndcToScreen/clipToScreen、透视/正交矩阵性质、
 //               viewDepth、projectBatch 对齐
 //   Projection3D 家族：圆柱/球/笛卡尔/函数式映射、莫比乌斯采样、computeWorldBounds 兜底
+//   Phase 3（§9）：数值预转换缓存（float3 权威存储/12B 每点、QVariant 路径不激活、混合回退、
+//               clear/replace/insert 失效、remove 增量、API 语义按需物化）+ worldCache（Layer3D
+//               填充 toWorld(numericCache)、数据/投影变化失效重建）
 #pragma once
 #include <QObject>
 
@@ -29,4 +32,12 @@ private slots:
     void samplingHint();                // Cartesian3D→2 段；球/柱/函数式→32 段
     void identityFastPath();            // Cartesian3D→true；球/柱/函数式→false
     void unproject_roundtrip();         // 正交/透视下 project→unproject 还原；w<=0→NaN
+
+    // ===== Phase 3：数值预转换缓存 + worldCache（design_phase3.md §9 / §13.2，t51）=====
+    void numericCache_numericAppends();     // 数值型 append → float3 权威（12B/点）激活
+    void numericCache_qvariantPath();       // QVariant 路径不激活；混合回退保持顺序
+    void numericCache_clearReplaceInvalidate(); // clear 复位 / replace·insert 失效 / remove 增量
+    void numericCache_apiSemantics();       // points()/at()/count() 与 Phase 2 一致（按需物化）
+    void worldCache_filledToWorld();        // Layer3D 渲染填充：worldCache == toWorld(numericCache)
+    void worldCache_invalidatedOnChange();  // 数据/投影变化 → 失效并重建
 };

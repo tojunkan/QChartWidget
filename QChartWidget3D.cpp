@@ -1,12 +1,88 @@
 // QChartWidget3D.cpp —— 3D 图表控件实现
 // 交互（R6：orbit 拖拽 + dolly 滚轮；平移无鼠标手势）+ 3D 悬停命中（屏幕近邻→dataIndex→(u,v)）
-// + 联动信号 + buildScreenScene/buildExportScene 重写（填 3D 段）。
+// + 联动信号 + buildScreenScene/buildExportScene 重写（填 3D 段）
+// + Phase 3 GL 宿主（t42，design_phase3.md §2.2：内嵌 QOpenGLWidget 组合；QPainter 路径共存，
+//   后端开关属实现⑤ t48；shader/主 pass 属实现③ t44）。
 #include "QChartWidget3D.h"
 #include "QCartesianProjection.h"   // 构造占位 2D 投影（§8.3 ⚠）
+#include "QOpenGLChartRenderer.h"
+#include "QChartGL.h"
+#include <QOpenGLWidget>
+#include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QtMath>
 #include <cmath>
+
+// ===== A9 兜底：QCHART_GL=0 环境变量强制 QPainter（§2.2；GL 默认、QPainter 保底）=====
+// 全局一次判定：环境变量存在且为 0 → GL 禁用（demo/测试可整进程回退，不弹 GL 窗口）
+static bool glForcedOffByEnv() {
+    static const bool s_off =
+        qEnvironmentVariableIsSet("QCHART_GL") && qEnvironmentVariableIntValue("QCHART_GL") == 0;
+    return s_off;
+}
+
+// ===== GlHost：内嵌 QOpenGLWidget（A2 组合；§2.2）=====
+// ⚠ 不重写 paintEvent（QOpenGLWidget 官方模式：GL 内容画在 paintGL；QPainter overlay 在 paintGL
+//   内以 widget 为 QPaintDevice 直接画——本骨架阶段 GL 清透明，QPainter 内容透出，两者共存）。
+class QChartWidget3D::GlHost : public QOpenGLWidget {
+public:
+    explicit GlHost(QChartWidget3D* outer) : QOpenGLWidget(outer), m_outer(outer) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);   // 事件透传外层 QChartWidget3D（§2.2）
+        setFormat(QChartGL::surfaceFormat());             // 3.3 Core + depth 24（§7.3）
+        QChartGL::registerHost();                         // 实例计数 → 共享根/程序池生命周期（§7.3）
+        if (QOpenGLContext* sc = QChartGL::sharedContext())
+            shareContextIfAvailable(sc);
+    }
+    ~GlHost() override { QChartGL::unregisterHost(); }
+
+protected:
+    void initializeGL() override {
+        // t44 主 pass 落地：初始化渲染器（上下文检查 + shader 编译）；就绪则保持显示。
+        // 上下文不可用（无 GL/EGL 故障）→ 隐藏，回退纯 QPainter（§5.1 ⚠ 透明语义教训）
+        if (m_outer->m_glRenderer)
+            m_outer->m_glRenderer->initializeGL();
+        if (!m_outer->m_glRenderer || !m_outer->m_glRenderer->isReady())
+            hide();
+    }
+    void paintGL() override {
+        // GL 主 pass（§5.1：不透明清屏 + Grid/Series/Decor 分层）
+        const QChartScene scene = m_outer->buildScreenScene();
+        if (!m_outer->m_glRenderer) return;
+        m_outer->m_glRenderer->paintGL(scene);
+        // §6 Overlay：GL 不透明底色之上 QPainter 画 billboard 标签 + 图例（官方模式：paintGL 内
+        //   QPainter；不重写 paintEvent）。标签 screenPos 为外层 plotArea 坐标 → 平移至本部件局部。
+        QPainter p(this);
+        p.setClipRect(QRectF(0, 0, scene.plotArea.width(), scene.plotArea.height()));
+        p.translate(-scene.plotArea.topLeft());
+        QFont f = p.font();
+        for (const QChartTextLabel& lbl : m_outer->m_glRenderer->labels()) {
+            f.setPointSizeF(lbl.fontSize);
+            f.setBold(lbl.isTitle);
+            p.setFont(f);
+            p.setPen(lbl.color);
+            p.drawText(QRectF(lbl.screenPos, QSizeF(0, 0)),
+                       int(lbl.anchor) | Qt::TextDontClip, lbl.text);
+        }
+        if (scene.legend && scene.legend->isVisible())
+            scene.legend->draw(&p, scene.plotArea, scene.legendItems);
+    }
+    void resizeGL(int w, int h) override {
+        if (m_outer->m_glRenderer) m_outer->m_glRenderer->resizeGL(w, h);
+    }
+
+private:
+    /// 多实例共享（A2）：Qt ≥6.5 提供 QOpenGLWidget::setShareContext（须在 widget 上下文创建前调用）；
+    /// 6.4.x 无此 API → 本实例上下文独立（共享根仍供程序池 t44 使用；单实例场景不受影响）
+    void shareContextIfAvailable(QOpenGLContext* sc) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+        setShareContext(sc);
+#else
+        Q_UNUSED(sc);
+#endif
+    }
+    QChartWidget3D* m_outer;
+};
 
 QChartWidget3D::QChartWidget3D(QWidget* parent) : QChartWidget(parent) {
     // §8.3 ⚠：基类流程需要 m_projection 非空（addLayer 接线/布局/2D 相机初始化）；
@@ -21,6 +97,40 @@ QChartWidget3D::QChartWidget3D(QWidget* parent) : QChartWidget(parent) {
         pushAxesDataBoxToLayers();
         invalidateForeground();
     });
+
+    // Phase 3 GL 宿主（t42）：内嵌 QOpenGLWidget 组合 + 渲染器挂接（先与 QPainter 路径共存）
+    m_glHost = std::make_unique<GlHost>(this);
+    m_glRenderer = new QOpenGLChartRenderer(m_glHost.get());
+    // t48：QCHART_GL=0 强制 QPainter 兜底（A9；环境变量存在且为 0）
+    m_renderBackend = glForcedOffByEnv() ? RenderBackend::QPainter : RenderBackend::OpenGL;
+    // t44 恢复显示（队长统筹方案 A 的 TODO）：主 pass 已落地（§5.1 不透明清屏）→ GL 可用时
+    // 显示 GlHost；无 GL（offscreen/EGL 故障，共享根创建失败）或 QCHART_GL=0 → 隐藏回退纯 QPainter——
+    // QOpenGLWidget 原生子窗口的透明像素会露桌面，绝不透明示人（§5.1 ⚠ 透明语义教训）
+    if (m_renderBackend == RenderBackend::OpenGL && QChartGL::sharedContext())
+        m_glHost->show();
+    else
+        m_glHost->hide();
+    layoutGlHost();
+}
+
+QChartWidget3D::~QChartWidget3D() {
+    // GL 渲染器为裸指针（设计 §2.2：GlHost 生命周期内）→ 先于 GlHost 销毁
+    delete m_glRenderer;
+    m_glRenderer = nullptr;
+    // m_glHost（unique_ptr）在 dtor 体后销毁 → GlHost 析构 unregisterHost（§7.3 引用计数）
+}
+
+void QChartWidget3D::setRenderBackend(RenderBackend b) {
+    // A9：QCHART_GL=0 强制 QPainter（GL 禁用，setRenderBackend(OpenGL) 亦被压制——环境变量兜底优先）
+    if (glForcedOffByEnv()) b = RenderBackend::QPainter;
+    if (m_renderBackend == b) return;
+    m_renderBackend = b;
+    // ⚠ §5.1：GlHost 仅 GL 就绪且后端为 OpenGL 时显示（不透明主 pass 闭环）；否则隐藏回退纯 QPainter
+    if (m_glHost) {
+        const bool showGl = (b == RenderBackend::OpenGL) && m_glRenderer && m_glRenderer->isReady();
+        showGl ? m_glHost->show() : m_glHost->hide();
+    }
+    invalidateForeground();   // 后端切换 → 重绘（拾取分支随之切换，§8.2 统一后端原则）
 }
 
 // ===== 相机 / 投影 / 图层 =====
@@ -243,32 +353,53 @@ void QChartWidget3D::leaveEvent(QEvent* e) {
     QChartWidget::leaveEvent(e);
 }
 
-// ===== 3D 悬停简化版（§8.3 修订）：屏幕近邻 → dataIndex → Data (u,v) =====
-// Phase 3 任务 0：近邻判定委托 QChartHitTester（纯重构：Series 层过滤/点与线段距离/
-// 8px 阈值/dataIndex 透传原样搬入）；逐系列收集以定位系列 → (u,v)，跨系列全局最近语义保持。
+// ===== 3D 悬停（§8.2 后端分支；R5 语义不变）=====
+// ⚠ 后端统一原则（用户定案，§8.2）：渲染与拾取必须同后端——GL 后端就绪时走 ID 帧拾取
+//   （pickIdAt + hitTestGPU 解码）；GL 未就绪（QPainter 兜底渲染）→ CPU 屏幕近邻（A7 保留），禁止混搭。
+// CPU 路径（Phase 2 保留）：Series 层过滤/点与线段距离/8px 阈值/dataIndex 透传（QChartHitTester）；
+// 逐系列收集以定位系列 → (u,v)，跨系列全局最近语义保持。
 void QChartWidget3D::updateHover(const QPointF& pos) {
     if (!m_camera3D) return;
 
     QChartSeries3D* hitSeries = nullptr;
     int hitIndex = -1;
-    qreal bestDist = 8.0;   // 阈值 8px（§8.3）
-    for (QChartLayer3D* g : m_layers3D) {
-        if (!g) continue;
-        const ProjectFn3D fn = g->makeProjectFn(m_camera3D.get(), m_plotArea);
-        for (QChartSeries3D* s : g->series3DList()) {
-            if (!s || !s->isVisible()) continue;
-            QVector<QChartPrimitive> items;
-            s->collectPrimitives(fn, items);
-            const QChartHitTester::HitResult r = QChartHitTester::hitTest(pos, items, bestDist);
-            if (r.dataIndex >= 0) {
-                // 收紧全局阈值（保持跨系列全局最近语义）：命中距离 = 该 dataIndex 图元最近距离
-                hitSeries = s;
-                hitIndex = r.dataIndex;
-                qreal d = bestDist;
-                for (const QChartPrimitive& prim : items)
-                    if (prim.dataIndex == r.dataIndex)
-                        d = qMin(d, QChartHitTester::distanceToPrimitive(pos, prim));
-                bestDist = d;
+
+    // GL 后端：ID 帧拾取（§5.3 三闸限流在 pickIdAt 内；m_glReady 守卫保证与渲染同后端）
+    const bool glActive = (m_renderBackend == RenderBackend::OpenGL)
+                          && m_glRenderer && m_glRenderer->isReady();
+    if (glActive) {
+        const QChartScene scene = buildScreenScene();
+        // GlHost 几何 == plotArea → 外层坐标换算为宿主局部坐标（ID 帧视口 = plotArea）
+        const QPoint local = pos.toPoint() - scene.plotArea.topLeft().toPoint();
+        const QRgb id = m_glRenderer->pickIdAt(local, scene);
+        const QChartHitTester::HitResult r =
+            QChartHitTester::hitTestGPU(qRed(id), qGreen(id), qBlue(id),
+                                        m_glRenderer->pickTable());
+        if (r.dataIndex >= 0 && r.series) {
+            hitSeries = qobject_cast<QChartSeries3D*>(r.series);
+            hitIndex = r.dataIndex;
+        }
+    } else {
+        // QPainter 后端：CPU 屏幕近邻（8px 阈值，§8.3；A7 保留路径）
+        qreal bestDist = 8.0;
+        for (QChartLayer3D* g : m_layers3D) {
+            if (!g) continue;
+            const ProjectFn3D fn = g->makeProjectFn(m_camera3D.get(), m_plotArea);
+            for (QChartSeries3D* s : g->series3DList()) {
+                if (!s || !s->isVisible()) continue;
+                QVector<QChartPrimitive> items;
+                s->collectPrimitives(fn, items);
+                const QChartHitTester::HitResult r = QChartHitTester::hitTest(pos, items, bestDist);
+                if (r.dataIndex >= 0) {
+                    // 收紧全局阈值（保持跨系列全局最近语义）：命中距离 = 该 dataIndex 图元最近距离
+                    hitSeries = s;
+                    hitIndex = r.dataIndex;
+                    qreal d = bestDist;
+                    for (const QChartPrimitive& prim : items)
+                        if (prim.dataIndex == r.dataIndex)
+                            d = qMin(d, QChartHitTester::distanceToPrimitive(pos, prim));
+                    bestDist = d;
+                }
             }
         }
     }
@@ -296,6 +427,8 @@ QChartScene QChartWidget3D::buildScreenScene() const {
     scene.camera3D = m_camera3D.get();
     scene.layers3D = m_layers3D;
     scene.worldBounds = m_worldBounds;
+    scene.legend = legend();                     // §6 overlay：图例（GL 路径同源绘制）
+    scene.legendItems = legendItems();
     return scene;
 }
 
@@ -312,4 +445,19 @@ QChartScene QChartWidget3D::buildExportScene(QChartExportScope scope, const QSiz
     scene.dataBounds = QRectF();
     scene.viewRect = QRectF();
     return scene;
+}
+
+// ===== 布局：GlHost 跟随 plotArea（Phase 3 GL 宿主；基类 resizeEvent 逻辑保留）=====
+void QChartWidget3D::resizeEvent(QResizeEvent* e) {
+    QChartWidget::resizeEvent(e);   // 基类：invalidate 缓存 + layoutAxes（更新 m_plotArea）
+    layoutGlHost();
+}
+
+void QChartWidget3D::layoutGlHost() {
+    if (!m_glHost) return;
+    // 覆盖 plotArea（3D 画布）；plotArea 未就绪（首次布局前）→ 覆盖整个 widget
+    const QRect area = (m_plotArea.isValid() && m_plotArea.width() > 1 && m_plotArea.height() > 1)
+        ? m_plotArea.toRect()
+        : rect();
+    m_glHost->setGeometry(area);
 }

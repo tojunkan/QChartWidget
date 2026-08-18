@@ -40,6 +40,10 @@ struct QChartPrimitive {
     QColor color;             // 绘制色（收集时已按系列主题/override 展开）
     qreal penWidth = 1.0;     // 线宽（px）
     Layer layer = Layer::Series;   // 默认 Series → 现有系列收集代码零改动
+    // ★ Phase 3 GL（t42，design_phase3.md §3.2）：World 端点（A5：VBO 顶点 = World float3，仅 u_viewProj 变换）。
+    // QPainter 路径忽略（默认零值）；GL 路径 buildBatches 用它打包 16B interleaved 顶点。
+    QVector3D worldA{0, 0, 0};   // Point 位置 / LineSegment 起点（World 空间，toWorld 后）
+    QVector3D worldB{0, 0, 0};   // LineSegment 终点（World 空间；Point 忽略）
 };
 
 /// 网格深度偏置（§7.2，painter 版 polygon offset）：Grid 项 depth -= kGridDepthBias，

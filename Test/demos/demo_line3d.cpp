@@ -48,6 +48,7 @@ QWidget* buildDemoLine3D() {
     qDebug() << "\n========== 3D 参数螺旋线（相机沿路径）==========";
 
     auto* w = new QChartWidget3D();
+    w->setRenderBackend(QChartWidget3D::RenderBackend::OpenGL);   // §12：默认 GL（QCHART_GL=0 由 Widget 兜底回退 QPainter）
     w->setWindowTitle("3D 螺旋线 - 相机沿路径飞行");
     w->resize(560, 520);
     w->setFocusPolicy(Qt::StrongFocus);

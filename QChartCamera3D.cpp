@@ -190,5 +190,6 @@ QChartProjectedPoint QChartCamera3D::project(const QVector3D& world, const QRect
     QChartProjectedPoint result;
     result.screen = QChartMath::clipToScreen(clip, plotArea);
     result.depth = QChartMath::viewDepth(view, world);
+    result.world = world;   // GL 顶点源（t42，§3.2）
     return result;
 }

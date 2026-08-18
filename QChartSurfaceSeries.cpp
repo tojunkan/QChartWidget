@@ -15,8 +15,7 @@ void QChartSurfaceSeries::setGrid(int rows, int cols, const QVector<QDataPoint3D
     }
     m_rows = rows;
     m_cols = cols;
-    m_points = pts;
-    m_worldCache.clear();          // 网格变更 → 旧 World 缓存失效（Layer3D 下次渲染重建）
+    setPointsInternal(pts);    // QVariant 路径：m_points 权威、numericCache 失效、worldCache 失效（不发信号）
     emit gridChanged();
     emit dataChanged();
 }
@@ -45,12 +44,12 @@ void QChartSurfaceSeries::collectPrimitives(const ProjectFn3D& projectFn,
                                             QVector<QChartPrimitive>& out) const {
     if (!projectFn || m_rows <= 0 || m_cols <= 0) return;
 
-    // 全链闭包预投影全部网格点（Data→{screen,depth}）
-    const int n = m_points.size();
+    // 全链闭包预投影全部网格点（Data→{screen,depth}）；count()/at() 双存储统一访问
+    const int n = count();
     QVector<QChartProjectedPoint> proj(n);
     QVector<bool> valid(n, false);
     for (int i = 0; i < n; ++i) {
-        proj[i] = projectFn(m_points.at(i));
+        proj[i] = projectFn(at(i));
         valid[i] = std::isfinite(proj[i].screen.x()) && std::isfinite(proj[i].screen.y());
     }
 
@@ -64,6 +63,8 @@ void QChartSurfaceSeries::collectPrimitives(const ProjectFn3D& projectFn,
         prim.dataIndex = i0;                                     // 裁决 c：线段起点数据索引
         prim.penWidth = 1.0;
         prim.color = color();
+        prim.worldA = proj[i0].world;                            // GL 顶点源（t42，§3.2）
+        prim.worldB = proj[i1].world;
         out.append(prim);
     };
 

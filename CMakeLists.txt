@@ -22,7 +22,7 @@ option(BUILD_DEMOS "构建演示程序" ON)
 option(BUILD_TESTS "构建单元测试" ON)
 option(BUILD_BENCH "构建性能基准" ON)
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Svg)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Svg OpenGL OpenGLWidgets)
 
 # ---- 库源码 ----
 set(QCHART_SOURCES
@@ -36,6 +36,8 @@ set(QCHART_SOURCES
     QChartWidget3D.cpp
     QChartAxes3D.cpp
     QChartHitTester.cpp
+    QChartGL.cpp
+    QOpenGLChartRenderer.cpp
     QChartRenderer.cpp
     QPainterChartRenderer.cpp
     QChartAxis.cpp
@@ -69,7 +71,7 @@ add_library(QChartWidget STATIC ${QCHART_SOURCES})
 add_library(QChartWidget::QChartWidget ALIAS QChartWidget)
 
 target_include_directories(QChartWidget PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(QChartWidget PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg)
+target_link_libraries(QChartWidget PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::OpenGL Qt6::OpenGLWidgets)
 
 # moc 的唯一持有者：库内所有 Q_OBJECT 类的 moc 在此生成并编入静态库，
 # 消费目标（demo/test）一律关掉 AUTOMOC，避免重复 moc 导致链接符号冲突。
@@ -119,6 +121,8 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qchartlegend.h
         TestUnit/tests/test_legend_interact.h
         TestUnit/tests/test_export.h
+        TestUnit/tests/test_qchartgl.h
+        TestUnit/tests/test_qopenglrenderer.h
     )
 
     # 测试类自身带 Q_OBJECT，但关闭 AUTOMOC 以免重复 moc 库头文件，
@@ -145,6 +149,8 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qchartlegend.cpp
         TestUnit/tests/test_legend_interact.cpp
         TestUnit/tests/test_export.cpp
+        TestUnit/tests/test_qchartgl.cpp
+        TestUnit/tests/test_qopenglrenderer.cpp
         ${QCHART_TEST_MOCS}
     )
     set_target_properties(QChartTests PROPERTIES AUTOMOC OFF)

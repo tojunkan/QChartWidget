@@ -1,8 +1,8 @@
 // QChartSurfaceSeries.h —— 曲面线框系列（行主序网格）
 // Data 层：网格 QVector<QDataPoint3D>（rows×cols 行主序）；setParametricGrid 便捷生成 (u,v) 格点。
-// World 层缓存：m_worldCache 行主序 rows*cols，由 QChartLayer3D 渲染时经自身 axis toNumeric
-//   + projection3D toWorld 直算填充（不走系列闭包；参数曲面莫比乌斯/球面的 toWorld 在此发生），
-//   供 Phase 3 VBO 直接消费；collectPrimitives 仍走全链闭包 ProjectFn3D（队长裁决 b）。
+// World 层缓存：m_worldCache（基类 QChartSeries3D，Phase 3 上移）行主序 rows*cols，由 QChartLayer3D
+//   渲染时经自身 axis toNumeric + projection3D toWorld 直算填充（不走系列闭包；参数曲面莫比乌斯/球面的
+//   toWorld 在此发生），供 Phase 3 VBO 直接消费；collectPrimitives 仍走全链闭包 ProjectFn3D（队长裁决 b）。
 // collectPrimitives：线框 rows·(cols-1) + cols·(rows-1) 条 LineSegment，任一端投影 screen 非有限 → 跳过；
 //   深度 = 两端点 depth 均值（裁决 a）；dataIndex = 线段起点数据索引（裁决 c）。
 #pragma once
@@ -23,9 +23,7 @@ public:
     void setParametricGrid(int rows, int cols,
                            qreal u0, qreal u1, qreal v0, qreal v1);
 
-    // ===== World 层缓存（渲染时由 Layer3D 直算填充；连续内存，Phase 3 VBO 直接消费）=====
-    const QVector<QVector3D>& worldCache() const { return m_worldCache; }  // 行主序 rows*cols，仅渲染后有效
-    QVector<QVector3D>& worldCache() { return m_worldCache; }              // Layer3D 填充入口（内部）
+    // ===== World 层缓存：基类 QChartSeries3D::worldCache（t51 上移，VBO 源）=====
 
     void collectPrimitives(const ProjectFn3D& projectFn,
                            QVector<QChartPrimitive>& out) const override;
@@ -37,5 +35,4 @@ signals:
 
 private:
     int m_rows = 0, m_cols = 0;
-    QVector<QVector3D> m_worldCache;
 };
