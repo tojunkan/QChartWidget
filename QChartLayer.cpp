@@ -185,16 +185,9 @@ void QChartLayer::drawAllSeries(QPainter* painter, const DrawContext& ctx) {
     }
 }
 
-// ===== 命中检测 =====
+// ===== 命中检测（Phase 3 任务 0：逻辑委托 QChartHitTester，行为零变化）=====
 QChartLayer::HitResult QChartLayer::hitTest(const QPointF& pixel,
                                                    const DrawContext& ctx) const {
     auto toPixel = makeToPixel(const_cast<DrawContext&>(ctx));
-    for (int i = m_series.size() - 1; i >= 0; --i) {
-        auto* s = m_series[i];
-        if (!s || !s->isVisible()) continue;
-        int idx = s->hitTest(pixel, toPixel, &ctx);
-        if (idx >= 0)
-            return { s, idx };
-    }
-    return { nullptr, -1 };
+    return QChartHitTester::hitTest(pixel, m_series, toPixel, &ctx);
 }

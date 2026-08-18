@@ -244,29 +244,11 @@ void QChartWidget3D::leaveEvent(QEvent* e) {
 }
 
 // ===== 3D 悬停简化版（§8.3 修订）：屏幕近邻 → dataIndex → Data (u,v) =====
-qreal QChartWidget3D::distToPrimitive(const QPointF& pos, const QChartPrimitive& prim) {
-    if (prim.type == QChartPrimitive::Type::Point) {
-        const QPointF d = pos - prim.a;
-        return std::sqrt(QPointF::dotProduct(d, d));
-    }
-    // 点到线段距离
-    const QPointF ab = prim.b - prim.a;
-    const qreal len2 = QPointF::dotProduct(ab, ab);
-    if (len2 < 1e-12) {
-        const QPointF d = pos - prim.a;
-        return std::sqrt(QPointF::dotProduct(d, d));
-    }
-    qreal t = QPointF::dotProduct(pos - prim.a, ab) / len2;
-    t = qBound<qreal>(0.0, t, 1.0);
-    const QPointF proj = prim.a + ab * t;
-    const QPointF d = pos - proj;
-    return std::sqrt(QPointF::dotProduct(d, d));
-}
-
+// Phase 3 任务 0：近邻判定委托 QChartHitTester（纯重构：Series 层过滤/点与线段距离/
+// 8px 阈值/dataIndex 透传原样搬入）；逐系列收集以定位系列 → (u,v)，跨系列全局最近语义保持。
 void QChartWidget3D::updateHover(const QPointF& pos) {
     if (!m_camera3D) return;
 
-    // 与渲染同路径收集图元（逐系列，命中即可定位系列 → dataIndex → Data (u,v)）
     QChartSeries3D* hitSeries = nullptr;
     int hitIndex = -1;
     qreal bestDist = 8.0;   // 阈值 8px（§8.3）
@@ -277,15 +259,16 @@ void QChartWidget3D::updateHover(const QPointF& pos) {
             if (!s || !s->isVisible()) continue;
             QVector<QChartPrimitive> items;
             s->collectPrimitives(fn, items);
-            for (const QChartPrimitive& prim : items) {
-                if (prim.dataIndex < 0 || prim.layer != QChartPrimitive::Layer::Series)
-                    continue;   // §7.4：hover 只扫 Series 层图元（Grid/ForegroundDecor 排除）
-                const qreal d = distToPrimitive(pos, prim);
-                if (d < bestDist) {
-                    bestDist = d;
-                    hitSeries = s;
-                    hitIndex = prim.dataIndex;
-                }
+            const QChartHitTester::HitResult r = QChartHitTester::hitTest(pos, items, bestDist);
+            if (r.dataIndex >= 0) {
+                // 收紧全局阈值（保持跨系列全局最近语义）：命中距离 = 该 dataIndex 图元最近距离
+                hitSeries = s;
+                hitIndex = r.dataIndex;
+                qreal d = bestDist;
+                for (const QChartPrimitive& prim : items)
+                    if (prim.dataIndex == r.dataIndex)
+                        d = qMin(d, QChartHitTester::distanceToPrimitive(pos, prim));
+                bestDist = d;
             }
         }
     }

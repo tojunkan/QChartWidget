@@ -12,6 +12,7 @@
 #include <functional>
 #include <optional>
 #include "QChartAxis.h" // DrawContext 在此定义
+#include "QChartHitTester.h"   // 统一命中引擎（Phase 3 任务 0）：HitResult 定义提升于此
 
 class QChartSeries;
 
@@ -50,7 +51,8 @@ public:
     void drawGrid(QPainter* p, const DrawContext& ctx) const;
 
     // ===== 命中检测 =====
-    struct HitResult { QChartSeries* series = nullptr; int index = -1; };
+    /// 统一 HitResult（Phase 3 任务 0：定义提升到 QChartHitTester，本类保留别名，调用方零改动）
+    using HitResult = QChartHitTester::HitResult;
     HitResult hitTest(const QPointF& pixel, const DrawContext& ctx) const;
 
 signals:

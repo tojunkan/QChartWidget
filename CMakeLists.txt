@@ -35,6 +35,7 @@ set(QCHART_SOURCES
     QChartLayer3D.cpp
     QChartWidget3D.cpp
     QChartAxes3D.cpp
+    QChartHitTester.cpp
     QChartRenderer.cpp
     QPainterChartRenderer.cpp
     QChartAxis.cpp
@@ -113,6 +114,7 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qchartrenderer.h
         TestUnit/tests/test_qchartrenderer3d.h
         TestUnit/tests/test_hittest.h
+        TestUnit/tests/test_qcharthittester.h
         TestUnit/tests/test_qcharttheme.h
         TestUnit/tests/test_qchartlegend.h
         TestUnit/tests/test_legend_interact.h
@@ -138,6 +140,7 @@ if(BUILD_TESTS)
         TestUnit/tests/test_qchartrenderer.cpp
         TestUnit/tests/test_qchartrenderer3d.cpp
         TestUnit/tests/test_hittest.cpp
+        TestUnit/tests/test_qcharthittester.cpp
         TestUnit/tests/test_qcharttheme.cpp
         TestUnit/tests/test_qchartlegend.cpp
         TestUnit/tests/test_legend_interact.cpp

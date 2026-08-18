@@ -19,6 +19,7 @@
 #include "tests/test_qchartrenderer.h"
 #include "tests/test_qchartrenderer3d.h"
 #include "tests/test_hittest.h"
+#include "tests/test_qcharthittester.h"
 #include "tests/test_qcharttheme.h"
 #include "tests/test_qchartlegend.h"
 #include "tests/test_legend_interact.h"
@@ -43,6 +44,7 @@ int main(int argc, char* argv[])
     rc += QTest::qExec(new TestQChartRenderer, argc, argv);
     rc += QTest::qExec(new TestQChartRenderer3D, argc, argv);
     rc += QTest::qExec(new TestHitTest, argc, argv);
+    rc += QTest::qExec(new TestQChartHitTester, argc, argv);
     rc += QTest::qExec(new TestQChartTheme, argc, argv);
     rc += QTest::qExec(new TestQChartLegend, argc, argv);
     rc += QTest::qExec(new TestLegendInteract, argc, argv);

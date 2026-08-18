@@ -35,6 +35,7 @@ build-*/
 # Agent local config
 .claude/
 .superpowers/
+.agent-teams/
 
 # 本机构建配置（scripts/config.local.bat.example 为模板，跟踪；实际配置不跟踪）
 scripts/config.local.bat

@@ -67,10 +67,9 @@ protected:
                                  QSizeF& outDeviceSize) const override;
 
 private:
-    /// 3D 悬停简化版（§8.3 修订）：屏幕近邻（图元与鼠标 <8px 取最近）→ dataIndex → Data (u,v)
+    /// 3D 悬停简化版（§8.3 修订）：屏幕近邻（QChartHitTester，Phase 3 任务 0）→ dataIndex → Data (u,v)
     /// → 发 uvHovered/uvHoveredEnd；不弹 tooltip（D-3D-13）
     void updateHover(const QPointF& pos);
-    static qreal distToPrimitive(const QPointF& pos, const QChartPrimitive& prim);
 
     // ===== 控制器（§2.2/§3）=====
     /// viewCube 5×5×5 网格采样 → fromWorld → min/max 聚合（非有限跳过，全 NaN → Valid=false）；
