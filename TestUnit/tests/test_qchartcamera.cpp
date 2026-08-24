@@ -1,7 +1,7 @@
 // test_qchartcamera.cpp —— QChartCamera2D 单元测试
 // 覆盖：映射往返、pan/zoom 几何、四种 fit 模式、center/zoom 属性一致性
 #include <QtTest>
-#include "../../QChartCamera.h"
+#include "QChartCamera.h"
 #include "test_qchartcamera.h"
 
 // ===== View Cartesian → Pixel → View Cartesian 往返恒等 =====

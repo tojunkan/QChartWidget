@@ -2,7 +2,7 @@
 // 历史 bug 回归：qreal 直通（Bar 用小数索引）、类别名线性映射（5 类别 4 槽位）
 // 类声明见 test_qbarcategoryaxis.h
 #include <QtTest>
-#include "../../QBarCategoryAxis.h"
+#include "QBarCategoryAxis.h"
 #include "test_qbarcategoryaxis.h"
 
 // ===== qreal 直通：Bar 用小数索引定位，不查类别表 =====

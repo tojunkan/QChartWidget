@@ -2,7 +2,7 @@
 // tickValues/niceStep 纯函数断言：输入 Numeric 范围，输出刻度序列
 // 类声明见 test_qvalueaxis.h（Q_OBJECT 在头文件，moc 由 QtMoc 处理）
 #include <QtTest>
-#include "../../QValueAxis.h"
+#include "QValueAxis.h"
 #include "test_qvalueaxis.h"
 
 // ===== (0,100)：niceStep 应选 20 =====

@@ -3,7 +3,7 @@
 基于 **QPainter** 的轻量图表库。架构采用「五空间模型」（Data → Numeric → View Cartesian → ViewNorm → Pixel），
 由 `QChartWidget`（容器）+ `QChartAxis`（轴）+ `QChartLayer`（图层）+ `QChartSeries`（系列）+ `QChartProjection`（投影）组成。
 
-> 架构与设计细节见 [`design_notes.md`](design_notes.md)。
+> 架构与设计细节见 [`design_notes.md`](docs/design/design_notes.md)。
 
 ## 目录结构
 

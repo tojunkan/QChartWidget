@@ -4,11 +4,11 @@
 // §12：加盒/spine/刻度（Cylindrical3D 有反向 → 视图驱动路径，orbit 时盒随 dataBounds 更新）；'A' 键开关。
 // 交互：左键 orbit / 滚轮 dolly（R6 无平移手势）。
 #include "demos.h"
-#include "../../QChartWidget3D.h"
-#include "../../QChartLayer3D.h"
-#include "../../QChartLineSeries3D.h"
-#include "../../QChartCylindricalProjection3D.h"
-#include "../../QValueAxis.h"
+#include "QChartWidget3D.h"
+#include "QChartLayer3D.h"
+#include "QChartLineSeries3D.h"
+#include "QChartCylindricalProjection3D.h"
+#include "QValueAxis.h"
 #include <QPropertyAnimation>
 #include <QKeyEvent>
 #include <QtMath>

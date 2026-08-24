@@ -2,8 +2,8 @@
 // 覆盖：Cartesian/Polar 映射往返、包络转换、createPath 断路径
 #include <QtTest>
 #include <QPainterPath>
-#include "../../QCartesianProjection.h"
-#include "../../QPolarProjection.h"
+#include "QCartesianProjection.h"
+#include "QPolarProjection.h"
 #include "test_qchartprojection.h"
 
 // ===== Cartesian：恒等映射往返 =====

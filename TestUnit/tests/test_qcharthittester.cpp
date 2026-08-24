@@ -2,13 +2,13 @@
 // 2D 部分与 test_hittest 同构（Cartesian + plotArea(0,0,100,100) + viewRect/dataBounds(0,0,10,10)
 // → Data(x,y) → Pixel(10x, 100-10y)）；3D 部分直接构造 QChartPrimitive。
 #include <QtTest>
-#include "../../QChartHitTester.h"
-#include "../../QChartLayer.h"
-#include "../../QValueAxis.h"
-#include "../../QCartesianProjection.h"
-#include "../../QScatterSeries.h"
-#include "../../QChartRenderer.h"   // QChartPrimitive
-#include "../../QChartLineSeries3D.h"   // PickRecord.series 具体类型
+#include "QChartHitTester.h"
+#include "QChartLayer.h"
+#include "QValueAxis.h"
+#include "QCartesianProjection.h"
+#include "QScatterSeries.h"
+#include "QChartRenderer.h"
+#include "QChartLineSeries3D.h"
 #include "test_qcharthittester.h"
 
 namespace {

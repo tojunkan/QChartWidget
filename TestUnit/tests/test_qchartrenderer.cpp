@@ -4,11 +4,11 @@
 #include <QtTest>
 #include <QImage>
 #include <memory>
-#include "../../QPainterChartRenderer.h"
-#include "../../QValueAxis.h"
-#include "../../QChartLayer.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QChartProjection.h"
+#include "QPainterChartRenderer.h"
+#include "QValueAxis.h"
+#include "QChartLayer.h"
+#include "QChartProjectionFactory.h"
+#include "QChartProjection.h"
 #include "test_qchartrenderer.h"
 
 namespace {

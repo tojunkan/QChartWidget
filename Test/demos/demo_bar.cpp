@@ -1,10 +1,10 @@
 // demo_bar.cpp —— Cartesian 柱状图（drawRect 快路径）
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QBarSeries.h"
-#include "../../QValueAxis.h"
-#include "../../QBarCategoryAxis.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "QBarSeries.h"
+#include "QValueAxis.h"
+#include "QBarCategoryAxis.h"
 #include <QDebug>
 
 QWidget* buildDemoBar() {

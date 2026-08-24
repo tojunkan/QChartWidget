@@ -1,11 +1,11 @@
 // demo_swirl.cpp —— 投影切换动画（恒等 ↔ Swirl 涡流）
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../ProjectionToolKit.h"
-#include "../../QScatterSeries.h"
-#include "../../QValueAxis.h"
-#include "../../QProjectionSwitchAnimation.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "ProjectionToolKit.h"
+#include "QScatterSeries.h"
+#include "QValueAxis.h"
+#include "QProjectionSwitchAnimation.h"
 #include <QTimer>
 #include <QDebug>
 
