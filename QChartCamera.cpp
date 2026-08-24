@@ -63,12 +63,12 @@ bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy s
 
     if (plotArea.width() <= 0.0 || plotArea.height() <= 0.0) return false;
 
+    qreal plotAspect = plotArea.width() / plotArea.height();
+    qreal viewAspect = m_viewRect.width() / m_viewRect.height();
     // 目标长宽比：Fixed 模式用用户指定的，否则用 plotArea 的
     qreal targetAspect = (m_fitMode == ViewRectFitMode::Fixed)
         ? m_fixedAspectRatio
-        : plotArea.width() / plotArea.height();
-
-    qreal viewAspect = m_viewRect.width() / m_viewRect.height();
+        : viewAspect;
 
     // 长宽比已经匹配（1% 容差）→ 跳过
     if (qAbs(targetAspect - viewAspect) < 0.01 * targetAspect) return false;

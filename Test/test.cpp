@@ -1,5 +1,6 @@
 // test.cpp —— 五空间架构验证主程序
 // 每个演示独立封装在 demos/ 下，main 按需调用
+#include <iostream>
 #include <QApplication>
 #include <QDebug>
 #include <QFile>
@@ -29,6 +30,9 @@ int main(int argc, char* argv[]) {
     // 重定向日志到文件
     QString logPath = "test_log.txt";  // 相对路径：落在程序当前工作目录
     g_logFile.setFileName(logPath);
+    
+    const char* path = std::getenv("PATH");
+    std::cout << "PATH = " << (path ? path : "(null)") << std::endl;
     if (!g_logFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         fprintf(stderr, "无法打开日志文件: %s\n", qPrintable(logPath));
         return 1;
@@ -48,16 +52,16 @@ int main(int argc, char* argv[]) {
     //   用法：QChartDemo.exe [polar bar pendulum sort camera swirl stress theme scatter3d line3d surface3d]
     struct Demo { const char* name; QWidget* (*build)(); };
     const Demo demos[] = {
-        { "polar",    buildDemoPolar },
-        { "bar",      buildDemoBar },
-        { "pendulum", buildDemoPendulum },
-        { "sort",     buildDemoSort },
-        { "camera",   buildDemoCamera },
-        { "swirl",    buildDemoSwirl },
-        { "stress",   buildDemoStress },
-        { "theme",    buildDemoTheme },
+        { "polar",     buildDemoPolar },
+        { "bar",       buildDemoBar },
+        { "pendulum",  buildDemoPendulum },
+        { "sort",      buildDemoSort },
+        { "camera",    buildDemoCamera },
+        { "swirl",     buildDemoSwirl },
+        { "stress",    buildDemoStress },
+        { "theme",     buildDemoTheme },
         { "scatter3d", buildDemoScatter3D },
-        { "line3d",   buildDemoLine3D },
+        { "line3d",    buildDemoLine3D },
         { "surface3d", buildDemoSurface3D },
     };
 

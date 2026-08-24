@@ -5,6 +5,7 @@
 #include "../../QPolygonSeries.h"
 #include "../../QScatterSeries.h"
 #include "../../QValueAxis.h"
+#include "../../QChartCamera.h"
 #include <QDebug>
 
 QWidget* buildDemoPolar() {
@@ -13,11 +14,13 @@ QWidget* buildDemoPolar() {
     auto* w = new QChartWidget();
     w->setWindowTitle("Polar 五边形 - 曲线边验证");
     w->setProjection(QChartProjectionFactory::create(CoordinateSystem::Polar));
+    w->setViewRectFitMode(ViewRectFitMode::Crop);
 
     auto* angleAxis = new QValueAxis(w, Qt::AlignHCenter);
     w->addAxis(angleAxis);
     angleAxis->setLabelFormat("%g°");
     angleAxis->setRange(0, 360);
+    angleAxis->setTickInterval(72);
 
     auto* radialAxis = new QValueAxis(w, Qt::AlignVCenter);
     w->addAxis(radialAxis);

@@ -1,5 +1,6 @@
 # Visual Studio
 .vs/
+.vscode/
 *.user
 *.suo
 
@@ -31,6 +32,9 @@ demo_export.*
 
 # CMake build dirs
 build-*/
+
+#Cmake configuration
+CMakePresets.json
 
 # Agent local config
 .claude/

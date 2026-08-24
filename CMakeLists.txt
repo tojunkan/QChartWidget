@@ -96,6 +96,17 @@ if(BUILD_DEMOS)
     # 演示源码不含 Q_OBJECT，moc 全在库内，故关闭 AUTOMOC
     set_target_properties(QChartDemo PROPERTIES AUTOMOC OFF)
     target_link_libraries(QChartDemo PRIVATE QChartWidget::QChartWidget)
+
+    # 寻找 windeployqt（位于 Qt 的 bin 目录）
+    find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS ${CMAKE_PREFIX_PATH}/bin)
+    if(WINDEPLOYQT_EXECUTABLE)
+        add_custom_command(TARGET QChartDemo POST_BUILD
+            COMMAND ${WINDEPLOYQT_EXECUTABLE} $<TARGET_FILE:QChartDemo>
+            COMMENT "Deploying Qt dependencies for QChartDemo"
+        )
+    else()
+        message(WARNING "windeployqt not found, skipping deployment")
+    endif()
 endif()
 
 # ---- 单元测试 ----

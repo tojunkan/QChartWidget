@@ -8,6 +8,7 @@
 #include "QOpenGLChartRenderer.h"
 #include "QChartGL.h"
 #include <QOpenGLWidget>
+#include <QOpenGLContext>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -76,7 +77,7 @@ private:
     /// 6.4.x 无此 API → 本实例上下文独立（共享根仍供程序池 t44 使用；单实例场景不受影响）
     void shareContextIfAvailable(QOpenGLContext* sc) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-        setShareContext(sc);
+        sc->setShareContext(sc);
 #else
         Q_UNUSED(sc);
 #endif
