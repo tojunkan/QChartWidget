@@ -3,11 +3,11 @@
 //   开 chart.series.verbose=true 可看 culled 计数占比；
 //   帧时打印在日志里（关闭 verbose 复测以排除日志开销）。
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QLineSeries.h"
-#include "../../QValueAxis.h"
-#include "../../QDataPoint.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "QLineSeries.h"
+#include "QValueAxis.h"
+#include "QDataPoint.h"
 #include <QElapsedTimer>
 #include <QTimer>
 #include <QVector>

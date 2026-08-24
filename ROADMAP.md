@@ -1,8 +1,8 @@
 # QChartWidget 项目总纲（现状 · 设计框架 · 路线图 · 协作约定）
 
-> **本文档的用途**：主对话统筹各阶段工作的权威备忘录；每个阶段交给 AgentTeams 执行时，把本文 + `design_notes.md` 作为种子上下文喂给成员。
+> **本文档的用途**：主对话统筹各阶段工作的权威备忘录；每个阶段交给 AgentTeams 执行时，把本文 + `docs/design/design_notes.md` 作为种子上下文喂给成员。
 > **维护约定**：每完成一个阶段，回写本文对应小节（勾选 + 验收结果），保证文档永远反映事实。
-> 设计细节以 [`design_notes.md`](design_notes.md) 为准（本文是「现状 + 差距 + 路线图 + 决策」，design_notes 是「五空间模型如何工作」）。
+> 设计细节以 [`docs/design/design_notes.md`](docs/design/design_notes.md) 为准（本文是「现状 + 差距 + 路线图 + 决策」，design_notes 是「五空间模型如何工作」）。
 
 ---
 
@@ -87,7 +87,7 @@ Data ──[Axis::toNumeric]──► Numeric ──[Projection::toCartesian]─
       ──[线性]──► ViewNorm ──[线性]──► Pixel
 ```
 
-各空间职责、Data≠Numeric 语义、NaN/Inf 策略、边框轴 vs 数据主脊、Grid 画法等见 `design_notes.md`。
+各空间职责、Data≠Numeric 语义、NaN/Inf 策略、边框轴 vs 数据主脊、Grid 画法等见 `docs/design/design_notes.md`。
 
 ### 2.2 现状的关键约定
 
@@ -210,7 +210,7 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 - ✅ 深色演示 `demo_theme`（Dark 主题 + 图例 + 一键导出三格式）；旧 7 demo 去硬编码白轴。
 
 **验收结果（reviewer 逐任务审查 + t29 终验 + captain 复核）**：干净构建 0 error/0 warning；ctest **12 类 69 用例全绿**（旧 44 + 新 25）；8 demo 冒烟无回归；theme 三格式产物复核通过（PNG 640×480 暗底 / SVG 15 个 `<path>` 无栅格 / PDF `%PDF-1.4`）。
-**设计文档**：`design_theme.md` / `design_legend.md` / `design_export.md`（拆分 + QChart 命名规范 + QChartScene 说明）。
+**设计文档**：`docs/design/design_theme.md` / `docs/design/design_legend.md` / `docs/design/design_export.md`（拆分 + QChart 命名规范 + QChartScene 说明）。
 **遗留小观察**：`Test/test.cpp` 提示文案漏写 "theme"（demos[] 已含）；`QChartProjection.h:13` 死注释（Phase 0 遗留）。
 
 ### Phase 2 —— 3D 数学先行（不碰 GPU）✅ **已完成**
@@ -237,12 +237,12 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 7. ✅ 3 demo 按「散点→线→曲面、静态→动态」节奏：`demo_scatter3d` / `demo_line3d`（相机飞行动画）/ `demo_surface3d`（球面/莫比乌斯切换 + 双 Widget 联动）。
 
 **验收结果（7 次独立审查 + t17 终验 + captain 复核）**：`--clean-first` 干净全量 0 error/0 warning（四 target）；ctest **16 类 134 用例全绿**（旧 69 零回归 + 新 33）；**11 demo 冒烟全过**（8 旧 + 3 新，无参=全部）；旋转透视正确（orbit 像素差异实证）、**无万向锁**（pitch 恰 clamp 89.0000°、40× 混合 orbit 不越界）、参数曲面可交互旋转、双 Widget 联动互显（合成事件实证）；theme 三格式导出回归 PASS；脚本结构核查通过（`config.local.bat.example` 行内 REM 缺陷 D14 自修）。**性能基线**：3D 单帧（64×64 曲面 + 2000 散点 ≈ 1 万图元）≈ **44.5ms**（collect 47% 主成本：worldCache 每帧重填 + 闭包逐点投影；Phase 3 第一优化目标）；QChartBench 复跑与旧基线一致（终验期间环境负载致 ~2× 波动，非回归）。
-**设计文档**：`design_3d.md`（14 节 + 实现期修订记录 R1~R4：全链闭包定案、深度降序修正、渲染边界、orthographicBox）。
+**设计文档**：`docs/design/design_3d.md`（14 节 + 实现期修订记录 R1~R4：全链闭包定案、深度降序修正、渲染边界、orthographicBox）。
 **遗留**：3D 轴刻度/射线拾取/3D tooltip/光照 → Phase 3+；数值预转换缓存 + 非数值 Axis 渲染转换 → Phase 3（D19）；3D 场景导出（buildExportScene 已虚化，天然支持，未验收）。
 
 ### Phase 2 补项 —— 3D 轴/网格控制流（用户反馈升级）✅ **已完成**
 
-**背景**：用户实测后判定「只做了数据计算流，没有控制流——三维轴/网格/刻度/标签完全没有」，升级为必补项。经三轮架构切磋定案（问卷作废存档于 `design_3d_axes_questionnaire.md`）。
+**背景**：用户实测后判定「只做了数据计算流，没有控制流——三维轴/网格/刻度/标签完全没有」，升级为必补项。经三轮架构切磋定案（问卷作废存档于 `docs/questionnaires/design_3d_axes_questionnaire.md`）。
 
 **完成项**（7 实现任务 + 7 逐任务审查 + 终验，全程零回退）：
 1. ✅ **viewCube 主状态相机（R5）**：`QChartCamera3D` 状态 = viewCube（World 空间盒，2D viewRect 的 3D 对标物，与相机无关）+ orientation(yaw/pitch) + fovY；position/lookAt/up/near/far 派生只读；Q_PROPERTY 迁移；**D-3D-2 硬验收新形态直接成立**（正交模式 viewCube 即投影盒 → 线性映射同构 ≡ cartesianToPixel）；删 orthographicBox。
@@ -255,7 +255,7 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 8. ✅ **demo 同步**：surface3d（球面/莫比乌斯 A9 静态路径 + 'A' 键 + 联动不回归）、line3d（Cylindrical 视图驱动路径 + viewCube 动画）、scatter3d 统一观感。
 
 **验收结果（t22→t34 逐项独立审查 + t35 终验 + captain 复核）**：`--clean-first` 干净全量 0 error/0 warning（四 target）；ctest **17 类 158 用例全绿**（旧 69 零回归 + 补项新增 22）；11 demo 冒烟全过；验收项复核：轴/网格/标签可见（surface3d grid=224/decor=392/labels=11）、'A' 开关、晶格行数公式、深度偏置像素语义、viewCube 派生不变量、R6 无平移手势、联动双向不回归；**性能增量（归一化）**：盒模式 ≈+1~6ms、晶格 ≈+25~28ms（19200 次投影为主成本；Phase 3 输入：轴/网格图元缓存 + 裁剪前移）；QChartBench 与基线一致（环境负载非回归）。
-**设计文档**：`design_3d_axes.md`（A1~A10 + v2/v3/v4 修订记录）；`design_3d.md` 增 R5/R6 修订记录。
+**设计文档**：`docs/design/design_3d_axes.md`（A1~A10 + v2/v3/v4 修订记录）；`docs/design/design_3d.md` 增 R5/R6 修订记录。
 **遗留**：正交模式 2D 边框轴（A4 后置）；3D 轴/网格动画（Phase 4）；tick 次刻度；轴/网格图元缓存（Phase 3）；精确拟合距离公式（注释备将来）。
 
 ### Phase 3 —— GPU 实时 ✅ **已完成**
@@ -269,7 +269,7 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 6. ✅ **QChartBench GL 扩展**：gl_vbo_upload_1M / gl_rotate_100k / gl_rotate_1M / gl_rss_simple / gl_rss_1M，CSV backend 列。
 
 **验收结果（逐任务独立审查 + t50 终验 + captain 复核）**：`--clean-first` 干净全量 0 error/0 warning（四 target）；offscreen **180 PASS + 2 SKIP**（旧 158 锁 QPainter 零回归）+ wayland GL 实跑 **190 PASS**；11 demo 冒烟全过（3D demo GL + QCHART_GL=0 回退各验）；**性能（Linux/WSLg llvmpipe 软渲染）**：10 万点相机旋转 ≈15.7ms/帧 ≈**63fps**（软渲染下已达标）、1M 点 157~201ms（冒烟，**正式 GPU 验收转用户 Windows MSVC 侧执行，A8 硬件基线表已填**）；**内存**：简单图 RSS 增量 +0.03MB、**1M 点 65.9MB ≤70MB ✓**（A3 修复闭环：图元列表瞬态化 clear+squeeze，180.4MB→65.9MB）；VBO 上传 1M 点 1.15~1.49ms；QChartBench 传统场景与基线一致。
-**设计文档**：`design_phase3.md`（15 节 + A1~A9 + §5.1 透明语义教训 + §7.1 预算核算修正）。
+**设计文档**：`docs/design/design_phase3.md`（15 节 + A1~A9 + §5.1 透明语义教训 + §7.1 预算核算修正）。
 **遗留**：光照（后置）；射线拾取（Phase 4，unproject 已预留）；数学积木+shader 翻译器（**Phase 3.5**，用户构想）；pickTable 16MB 常驻优化（按需/分片）；offscreen 下含 QOpenGLWidget 窗口 show 崩溃 = Qt 6.4.2 已知平台缺陷；1px 线拾取半像素对齐手感（t50 观察）；xcb 侧 GL 实跑与正式性能/内存验收转 Windows（A8）。
 
 ### Phase 4 —— Manim 级动画
@@ -286,7 +286,7 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
   - `designer`（设计者）：与用户沟通设计——发问卷、提方案、出设计文档；**设计定稿前不动代码**；沟通经 captain 中转。
   - `engineer`（实现者）：按设计文档实现；每完成一个 task 立即交付，不等批量。
   - `reviewer`（校验员）：**每个 engineer task 完成后立即独立审查**（不做阶段末合并审查）；审查必须**实际运行**测试与 demo 找问题，尽可能挑错、宁可错杀不放过；不只通读代码。
-- **每个阶段 = 一串小任务**：设计任务（designer）→ 用户确认设计 → 实现任务×N（engineer），**每个实现任务后紧跟一个审查任务（reviewer）**，审查通过才进下一个实现任务。任务描述必须引用本文档对应章节 + `design_notes.md` + 验收标准（D6）。
+- **每个阶段 = 一串小任务**：设计任务（designer）→ 用户确认设计 → 实现任务×N（engineer），**每个实现任务后紧跟一个审查任务（reviewer）**，审查通过才进下一个实现任务。任务描述必须引用本文档对应章节 + `docs/design/design_notes.md` + 验收标准（D6）。
 - **阶段结束回写本文**：勾选完成项、更新 1.3 验证状态、记录新增决策（D7、D8…）。
 - **红线**：不碰 moc 所有权约定（1.3）；不改 CMake target 结构除非阶段目标要求；git 操作留给用户（D5）；任何设计分歧/阻塞必须上报 captain 转用户商讨，不得自作主张。
 - 工作区路径：`/home/unidu/dsh/QChartWidget`；构建命令见 1.4。
@@ -305,4 +305,4 @@ GPU 批量（VBO）· 帧循环（requestUpdate + vsync）· 缓存策略升级�
 5. **designer 问卷 + 用户拍板省返工**：Phase 1 每个 API/交互点都先问清（14 题 + 3 次补充确认），实现阶段零返工；新功能坚持「设计定稿 → 用户确认 → 再动手」。
 6. **任务粒度按用户节奏动态调**：Phase 1 从 10 个小任务调整到「主题 4 + 白轴修复 + 图例 1 + 导出 1 + demo 1」——用户有权随时合并/拆分，captain 只负责把依赖链改对（注意：取消任务前先看有没有下游依赖它，本次 t20/t21 链就踩了这个坑）。
 7. **工具链差异必须双测**：MinGW/MSVC 行为与性能不一致（动画卡顿、日志规则等），重要结论都要两边验证过才算数。
-8. **Phase 2 沉淀**：①设计文档内部矛盾（闭包签名归属、深度排序方向）在实现期暴露——处理机制有效：engineer 上报 → captain 转 designer 出权威修订 → 修订清单统一回写文档（design_3d.md R1~R4）；②设计文档的矛盾靠 reviewer 实跑（像素断言 nearCoversFar）与 engineer 上报双通道发现，比纯读代码有效；③终验性能数字受环境负载影响（~2× 波动）——复测时先核对代码 mtime，非回归要注明；④「先立零回归门槛再动新功能」策略有效：改名+基类任务先行，旧 69 例全绿后才进 3D 新代码。
+8. **Phase 2 沉淀**：①设计文档内部矛盾（闭包签名归属、深度排序方向）在实现期暴露——处理机制有效：engineer 上报 → captain 转 designer 出权威修订 → 修订清单统一回写文档（docs/design/design_3d.md R1~R4）；②设计文档的矛盾靠 reviewer 实跑（像素断言 nearCoversFar）与 engineer 上报双通道发现，比纯读代码有效；③终验性能数字受环境负载影响（~2× 波动）——复测时先核对代码 mtime，非回归要注明；④「先立零回归门槛再动新功能」策略有效：改名+基类任务先行，旧 69 例全绿后才进 3D 新代码。

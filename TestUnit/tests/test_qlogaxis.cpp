@@ -2,7 +2,7 @@
 // Data(qreal>0) ↔ Numeric(log10) 换算 + 对数域刻度
 // 类声明见 test_qlogaxis.h
 #include <QtTest>
-#include "../../QLogAxis.h"
+#include "QLogAxis.h"
 #include "test_qlogaxis.h"
 
 void TestQLogAxis::toNumeric_positive() {

@@ -6,10 +6,10 @@
 #include <QFile>
 #include <QDir>
 #include <QLoggingCategory>
-#include "../../QChartWidget.h"
-#include "../../QChartLayer.h"
-#include "../../QValueAxis.h"
-#include "../../QScatterSeries.h"
+#include "QChartWidget.h"
+#include "QChartLayer.h"
+#include "QValueAxis.h"
+#include "QScatterSeries.h"
 #include "test_export.h"
 
 namespace {

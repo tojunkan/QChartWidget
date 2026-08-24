@@ -26,51 +26,127 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Svg OpenGL OpenGLWidge
 
 # ---- 库源码 ----
 set(QCHART_SOURCES
-    QChartCamera.cpp
-    QChartCamera3D.cpp
-    QChartSeries3D.cpp
-    QChartScatterSeries3D.cpp
-    QChartLineSeries3D.cpp
-    QChartSurfaceSeries.cpp
-    QChartLayer3D.cpp
-    QChartWidget3D.cpp
-    QChartAxes3D.cpp
-    QChartHitTester.cpp
-    QChartGL.cpp
-    QOpenGLChartRenderer.cpp
-    QChartRenderer.cpp
-    QPainterChartRenderer.cpp
-    QChartAxis.cpp
-    QChartLayer.cpp
-    QChartSeries.cpp
-    QChartWidget.cpp
-    QValueAxis.cpp
-    QLogAxis.cpp
-    QDateTimeAxis.cpp
-    QBarCategoryAxis.cpp
-    QXYSeries.cpp
-    QLineSeries.cpp
-    QScatterSeries.cpp
-    QPolygonSeries.cpp
-    QBarSeries.cpp
-    QRegionSeries.cpp
-    QChartAnimation.cpp
-    QNumericSeriesAnimation.cpp
-    QBarAnimation.cpp
-    QViewRectAnimation.cpp
-    QProjectionSwitchAnimation.cpp
-    QInterpolatedProjection.cpp
-    QChartTheme.cpp
-    QChartLegend.cpp
+    src/core/QChartCamera.cpp
+    src/core/QChartCamera3D.cpp
+    src/series/3d/QChartSeries3D.cpp
+    src/series/3d/QChartScatterSeries3D.cpp
+    src/series/3d/QChartLineSeries3D.cpp
+    src/series/3d/QChartSurfaceSeries.cpp
+    src/layers/3d/QChartLayer3D.cpp
+    src/core/QChartWidget3D.cpp
+    src/axes/3d/QChartAxes3D.cpp
+    src/core/QChartHitTester.cpp
+    src/core/QChartGL.cpp
+    src/core/QOpenGLChartRenderer.cpp
+    src/core/QChartRenderer.cpp
+    src/core/QPainterChartRenderer.cpp
+    src/axes/QChartAxis.cpp
+    src/layers/QChartLayer.cpp
+    src/series/QChartSeries.cpp
+    src/core/QChartWidget.cpp
+    src/axes/2d/QValueAxis.cpp
+    src/axes/2d/QLogAxis.cpp
+    src/axes/2d/QDateTimeAxis.cpp
+    src/axes/2d/QBarCategoryAxis.cpp
+    src/series/2d/QXYSeries.cpp
+    src/series/2d/QLineSeries.cpp
+    src/series/2d/QScatterSeries.cpp
+    src/series/2d/QPolygonSeries.cpp
+    src/series/2d/QBarSeries.cpp
+    src/series/2d/QRegionSeries.cpp
+    src/animation/QChartAnimation.cpp
+    src/animation/QNumericSeriesAnimation.cpp
+    src/animation/QBarAnimation.cpp
+    src/animation/QViewRectAnimation.cpp
+    src/animation/QProjectionSwitchAnimation.cpp
+    src/projection/QInterpolatedProjection.cpp
+    src/core/QChartTheme.cpp
+    src/core/QChartLegend.cpp
+)
+
+# ---- 库头文件（显式列出）----
+# AUTOMOC 兜底：CMake 3.28 automoc 对"被源文件引用的头文件"仅解析相对源文件目录，
+# 无法经 include 目录命中 include/<module>/ 子目录头（R1 实测），
+# 故把全部头文件列入目标源，automoc 对列入源的头必扫（Q_OBJECT → moc，其余跳过）。
+set(QCHART_HEADERS
+    include/animation/QBarAnimation.h
+    include/animation/QChartAnimation.h
+    include/animation/QNumericSeriesAnimation.h
+    include/animation/QViewRectAnimation.h
+    include/animation/QProjectionSwitchAnimation.h
+    include/axes/QChartAxis.h
+    include/axes/2d/QBarCategoryAxis.h
+    include/axes/2d/QValueAxis.h
+    include/axes/2d/QLogAxis.h
+    include/axes/2d/QDateTimeAxis.h
+    include/axes/3d/QChartAxes3D.h
+    include/core/QChartWidget.h
+    include/core/QChartWidget3D.h
+    include/core/QChartCamera.h
+    include/core/QChartCamera3D.h
+    include/core/QChartTheme.h
+    include/core/QChartLegend.h
+    include/core/QChartRenderer.h
+    include/core/QPainterChartRenderer.h
+    include/core/QOpenGLChartRenderer.h
+    include/core/QChartGL.h
+    include/core/QChartHitTester.h
+    include/layers/QChartLayer.h
+    include/layers/3d/QChartLayer3D.h
+    include/series/QChartSeries.h
+    include/series/2d/QXYSeries.h
+    include/series/2d/QLineSeries.h
+    include/series/2d/QScatterSeries.h
+    include/series/2d/QPolygonSeries.h
+    include/series/2d/QBarSeries.h
+    include/series/2d/QRegionSeries.h
+    include/series/3d/QChartSeries3D.h
+    include/series/3d/QChartLineSeries3D.h
+    include/series/3d/QChartScatterSeries3D.h
+    include/series/3d/QChartSurfaceSeries.h
+    include/utils/ProjectionToolKit.h
+    include/utils/QChartMath.h
+    include/utils/QChartDebug.h
+    include/utils/QDataPoint.h
+    include/utils/QDataPoint3D.h
+    include/utils/QDataRect.h
+    include/projection/QChartProjection.h
+    include/projection/QChartProjectionFactory.h
+    include/projection/QCartesianProjection.h
+    include/projection/QPolarProjection.h
+    include/projection/QFunctionalProjection.h
+    include/projection/QInterpolatedProjection.h
+    include/projection/QChartProjection3D.h
+    include/projection/QChartCartesianProjection3D.h
+    include/projection/QChartCylindricalProjection3D.h
+    include/projection/QChartSphericalProjection3D.h
+    include/projection/QChartFunctionalProjection3D.h
 )
 
 # ---- 库目标 ----
 # 静态库：当前公共类没有 QCHARTWIDGET_EXPORT 导出宏，暂不支持 shared；
 # 后续若要共享库，需给公共类加导出宏。
-add_library(QChartWidget STATIC ${QCHART_SOURCES})
+add_library(QChartWidget STATIC ${QCHART_SOURCES} ${QCHART_HEADERS})
 add_library(QChartWidget::QChartWidget ALIAS QChartWidget)
 
-target_include_directories(QChartWidget PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# include/ 根 + 各模块目录：扁平 #include "QChartXxx.h" 写法不变（头文件按模块放子目录，
+# 编译器不递归 -I，故需把每个模块目录显式加入 include 路径；basename 全库唯一，无遮蔽风险）
+target_include_directories(QChartWidget PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/animation
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/axes
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/axes/2d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/axes/3d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/layers
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/layers/2d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/layers/3d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/series
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/series/2d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/series/3d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/utils
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/projection
+)
 target_link_libraries(QChartWidget PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::OpenGL Qt6::OpenGLWidgets)
 
 # moc 的唯一持有者：库内所有 Q_OBJECT 类的 moc 在此生成并编入静态库，

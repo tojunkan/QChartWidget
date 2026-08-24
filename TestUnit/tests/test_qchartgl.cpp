@@ -5,8 +5,8 @@
 #include <QOpenGLWidget>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
-#include "../../QChartGL.h"
-#include "../../QOpenGLChartRenderer.h"
+#include "QChartGL.h"
+#include "QOpenGLChartRenderer.h"
 #include "test_qchartgl.h"
 
 // ===== 1. QChartRenderer 接口契约（全平台，无 GL 依赖）=====

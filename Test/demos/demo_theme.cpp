@@ -1,12 +1,12 @@
 // demo_theme.cpp —— 深色模式演示（Phase 1）
 // setTheme(Dark) + 多系列（调色板循环取色）+ 图例可见 + 点击切换 + 启动即导出三格式
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QChartLayer.h"
-#include "../../QValueAxis.h"
-#include "../../QLineSeries.h"
-#include "../../QScatterSeries.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "QChartLayer.h"
+#include "QValueAxis.h"
+#include "QLineSeries.h"
+#include "QScatterSeries.h"
 #include <QtMath>
 #include <QDebug>
 

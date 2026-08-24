@@ -5,8 +5,8 @@
 #include <QVariantAnimation>
 #include <QPropertyAnimation>
 #include <cmath>
-#include "../../QChartCamera3D.h"
-#include "../../QChartCamera.h"   // QChartCamera2D::cartesianToPixel（硬验收对照）
+#include "QChartCamera3D.h"
+#include "QChartCamera.h"
 #include "test_qchartcamera3d.h"
 
 namespace {

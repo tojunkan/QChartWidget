@@ -4,12 +4,12 @@
 #include <QtTest>
 #include <QDateTime>
 #include <cmath>
-#include "../../QDataPoint3D.h"
-#include "../../QChartSeries3D.h"
-#include "../../QChartScatterSeries3D.h"
-#include "../../QChartLineSeries3D.h"
-#include "../../QChartSurfaceSeries.h"
-#include "../../QChartCylindricalProjection3D.h"
+#include "QDataPoint3D.h"
+#include "QChartSeries3D.h"
+#include "QChartScatterSeries3D.h"
+#include "QChartLineSeries3D.h"
+#include "QChartSurfaceSeries.h"
+#include "QChartCylindricalProjection3D.h"
 #include "test_qchartsurface3d.h"
 
 // ===== 1. QDataPoint3D：QVariant 三元组（qreal/QDateTime）存取一致 =====

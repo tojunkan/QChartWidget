@@ -1,10 +1,10 @@
 // demo_polar.cpp —— Polar 五边形（曲线边验证）
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QPolygonSeries.h"
-#include "../../QScatterSeries.h"
-#include "../../QValueAxis.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "QPolygonSeries.h"
+#include "QScatterSeries.h"
+#include "QValueAxis.h"
 #include <QDebug>
 
 QWidget* buildDemoPolar() {

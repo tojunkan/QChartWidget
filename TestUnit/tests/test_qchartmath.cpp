@@ -4,18 +4,18 @@
 //   + Projection3D 家族：圆柱/球/笛卡尔/函数式映射、莫比乌斯采样、computeWorldBounds 兜底
 #include <QtTest>
 #include <memory>
-#include "../../QChartMath.h"
-#include "../../QChartProjection3D.h"
-#include "../../QChartCartesianProjection3D.h"
-#include "../../QChartCylindricalProjection3D.h"
-#include "../../QChartSphericalProjection3D.h"
-#include "../../QChartFunctionalProjection3D.h"
-#include "../../QChartCamera.h"   // 仅用 QChartCamera2D::cartesianToPixel 做 y 翻转一致性对照
-#include "../../QChartSeries3D.h"
-#include "../../QChartScatterSeries3D.h"
-#include "../../QChartLineSeries3D.h"
-#include "../../QChartLayer3D.h"
-#include "../../QChartCamera3D.h"
+#include "QChartMath.h"
+#include "QChartProjection3D.h"
+#include "QChartCartesianProjection3D.h"
+#include "QChartCylindricalProjection3D.h"
+#include "QChartSphericalProjection3D.h"
+#include "QChartFunctionalProjection3D.h"
+#include "QChartCamera.h"
+#include "QChartSeries3D.h"
+#include "QChartScatterSeries3D.h"
+#include "QChartLineSeries3D.h"
+#include "QChartLayer3D.h"
+#include "QChartCamera3D.h"
 #include "test_qchartmath.h"
 
 namespace {

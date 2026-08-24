@@ -1,10 +1,10 @@
 // demo_camera.cpp —— 相机漫游（QViewRectAnimation）
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QScatterSeries.h"
-#include "../../QValueAxis.h"
-#include "../../QViewRectAnimation.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "QScatterSeries.h"
+#include "QValueAxis.h"
+#include "QViewRectAnimation.h"
 #include <QSequentialAnimationGroup>
 #include <QRandomGenerator>
 #include <QtMath>
