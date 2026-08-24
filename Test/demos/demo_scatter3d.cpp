@@ -3,12 +3,12 @@
 // （同一数据两种投影演示）。交互：左键 orbit / 滚轮 dolly（R6 无平移手势）。
 // 按键：'S' 球面投影、'C' 柱面投影、'A' 轴/网格开关（§12 建议同步，统一观感）。
 #include "demos.h"
-#include "../../QChartWidget3D.h"
-#include "../../QChartLayer3D.h"
-#include "../../QChartScatterSeries3D.h"
-#include "../../QChartSphericalProjection3D.h"
-#include "../../QChartCylindricalProjection3D.h"
-#include "../../QValueAxis.h"
+#include "QChartWidget3D.h"
+#include "QChartLayer3D.h"
+#include "QChartScatterSeries3D.h"
+#include "QChartSphericalProjection3D.h"
+#include "QChartCylindricalProjection3D.h"
+#include "QValueAxis.h"
 #include <QRandomGenerator>
 #include <QKeyEvent>
 #include <QtMath>

@@ -1,11 +1,11 @@
 // test_qchartlegend.cpp —— QChartLegend 单元测试
 #include <QtTest>
 #include <QImage>
-#include "../../QChartLegend.h"
-#include "../../QChartWidget.h"
-#include "../../QChartLayer.h"
-#include "../../QScatterSeries.h"
-#include "../../QPainterChartRenderer.h"
+#include "QChartLegend.h"
+#include "QChartWidget.h"
+#include "QChartLayer.h"
+#include "QScatterSeries.h"
+#include "QPainterChartRenderer.h"
 #include "test_qchartlegend.h"
 
 namespace {

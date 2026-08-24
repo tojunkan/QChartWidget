@@ -1,10 +1,10 @@
 // test_legend_interact.cpp —— 图例点击交互集成测试（B4）
 #include <QtTest>
 #include <QApplication>
-#include "../../QChartWidget.h"
-#include "../../QChartLayer.h"
-#include "../../QChartLegend.h"
-#include "../../QScatterSeries.h"
+#include "QChartWidget.h"
+#include "QChartLayer.h"
+#include "QChartLegend.h"
+#include "QScatterSeries.h"
 #include "test_legend_interact.h"
 
 // ===== 点击图例项 → 对应 series 可见性翻转，再点复原 =====

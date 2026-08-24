@@ -7,16 +7,16 @@
 // 按键：'S' 球面、'M' 莫比乌斯（v 域统一 [-90,90] → 带内 [-0.5,0.5]，联动域一致）。
 // 交互：左键 orbit / 滚轮 dolly / 右键 pan。
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartWidget3D.h"
-#include "../../QChartLayer.h"
-#include "../../QChartLayer3D.h"
-#include "../../QChartSurfaceSeries.h"
-#include "../../QChartScatterSeries3D.h"
-#include "../../QChartFunctionalProjection3D.h"
-#include "../../QCartesianProjection.h"
-#include "../../QScatterSeries.h"
-#include "../../QValueAxis.h"
+#include "QChartWidget.h"
+#include "QChartWidget3D.h"
+#include "QChartLayer.h"
+#include "QChartLayer3D.h"
+#include "QChartSurfaceSeries.h"
+#include "QChartScatterSeries3D.h"
+#include "QChartFunctionalProjection3D.h"
+#include "QCartesianProjection.h"
+#include "QScatterSeries.h"
+#include "QValueAxis.h"
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMouseEvent>

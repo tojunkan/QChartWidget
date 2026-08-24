@@ -3,12 +3,12 @@
 // 坐标系：Cartesian + plotArea(0,0,100,100) + viewRect/dataBounds(0,0,10,10)，
 // 故 Data(x,y) → Pixel(10x, 100-10y)。
 #include <QtTest>
-#include "../../QChartLayer.h"
-#include "../../QValueAxis.h"
-#include "../../QCartesianProjection.h"
-#include "../../QScatterSeries.h"
-#include "../../QLineSeries.h"
-#include "../../QBarSeries.h"
+#include "QChartLayer.h"
+#include "QValueAxis.h"
+#include "QCartesianProjection.h"
+#include "QScatterSeries.h"
+#include "QLineSeries.h"
+#include "QBarSeries.h"
 #include "test_hittest.h"
 
 namespace {

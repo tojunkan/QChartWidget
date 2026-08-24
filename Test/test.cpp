@@ -8,7 +8,7 @@
 #include <QDateTime>
 #include <QLoggingCategory>
 #include <QStringList>
-#include "../QChartWidget.h"
+#include "QChartWidget.h"
 #include "demos/demos.h"
 
 // 将 Qt 日志同时写入文件和 stderr（Windows 下 qDebug 默认不输出到控制台）

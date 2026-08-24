@@ -1,12 +1,12 @@
 // demo_sort.cpp —— 冒泡排序动画（QBarAnimation Generator 模式）
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QBarSeries.h"
-#include "../../QValueAxis.h"
-#include "../../QBarCategoryAxis.h"
-#include "../../QDataPoint.h"
-#include "../../QBarAnimation.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "QBarSeries.h"
+#include "QValueAxis.h"
+#include "QBarCategoryAxis.h"
+#include "QDataPoint.h"
+#include "QBarAnimation.h"
 #include <QSequentialAnimationGroup>
 #include <QDebug>
 

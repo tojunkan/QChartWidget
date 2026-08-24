@@ -1,11 +1,11 @@
 // demo_pendulum.cpp —— 单摆动画（QNumericSeriesAnimation Generator 模式）
 #include "demos.h"
-#include "../../QChartWidget.h"
-#include "../../QChartProjectionFactory.h"
-#include "../../QScatterSeries.h"
-#include "../../QLineSeries.h"
-#include "../../QValueAxis.h"
-#include "../../QNumericSeriesAnimation.h"
+#include "QChartWidget.h"
+#include "QChartProjectionFactory.h"
+#include "QScatterSeries.h"
+#include "QLineSeries.h"
+#include "QValueAxis.h"
+#include "QNumericSeriesAnimation.h"
 #include <QParallelAnimationGroup>
 #include <QtMath>
 #include <QDebug>

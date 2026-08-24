@@ -5,11 +5,11 @@
 #include <optional>
 #include <QApplication>
 #include <QPalette>
-#include "../../QChartTheme.h"
-#include "../../QChartWidget.h"
-#include "../../QValueAxis.h"
-#include "../../QChartLayer.h"
-#include "../../QScatterSeries.h"
+#include "QChartTheme.h"
+#include "QChartWidget.h"
+#include "QValueAxis.h"
+#include "QChartLayer.h"
+#include "QScatterSeries.h"
 #include "test_qcharttheme.h"
 
 // ===== light/dark 的框架色两两互异 =====

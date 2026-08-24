@@ -1,9 +1,9 @@
 // test_qchartaxes3d.cpp —— QChartAxes3D 编排器单元测试
 // 覆盖（design_3d_axes.md §10.1 全部 8 例）；三层分离红线：本类无 QPainter/相机/投影引用。
 #include <QtTest>
-#include "../../QChartAxes3D.h"
-#include "../../QChartAxis.h"
-#include "../../QValueAxis.h"
+#include "QChartAxes3D.h"
+#include "QChartAxis.h"
+#include "QValueAxis.h"
 #include "test_qchartaxes3d.h"
 
 // ===== 1. boxCorners：8 角约定 index = u | (v<<1) | (w<<2) =====

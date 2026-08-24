@@ -2,7 +2,7 @@
 // Data(QDateTime) ↔ Numeric(epoch ms) + 自适应时间步长
 // 类声明见 test_qdatetimeaxis.h
 #include <QtTest>
-#include "../../QDateTimeAxis.h"
+#include "QDateTimeAxis.h"
 #include "test_qdatetimeaxis.h"
 
 void TestQDateTimeAxis::toNumeric_epoch() {
