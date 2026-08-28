@@ -53,13 +53,34 @@ cy = vt + ny · vh
 
 `fitViewRectToPlotArea(plotArea, strategy)` 只改 viewRect、不反算 dataBounds（`src/core/QChartCamera.cpp`）：
 
-| FitStrategy | 语义 | 操作 |
+**物理模式（由 `m_fitMode` 决定）：**
+| 模式 | 语义 | 缩放系数 |
 |---|---|---|
-| KeepWidth | 锁 dim0 宽度 | `newH = w / targetAspect`，高度对称扩张 |
-| KeepHeight | 锁 dim1 高度 | `newW = h · targetAspect`，宽度对称扩张 |
-| KeepCenter | 初始化/布局 | targetAspect > viewAspect → 扩宽，否则扩高（数据完整） |
+| Stretch | 不做任何调整，`cartesianToPixel` 硬拉伸 | — |
+| Fit | 保持 viewRect 比例，完整显示（留白） | `scale = min(plotW/viewW, plotH/viewH)` |
+| Crop | 保持 viewRect 比例，填满屏幕（裁剪） | `scale = max(plotW/viewW, plotH/viewH)` |
 
-Fit/Crop 决定"扩张较小维（数据完整）"还是"收缩较大维（裁掉超出）"；Fixed 强制 `fixedAspectRatio()` 忽略 plotArea。返回 true 表示 viewRect 实际被修改（调用方据此决定是否重算 dataBounds）。
+**定位策略（由 `strategy` 参数决定）：**
+| 策略 | 语义 |
+|---|---|
+| KeepCenter | 几何中心与 plotArea 中心对齐 |
+| KeepTopLeft | 左上角与 plotArea 左上角对齐 |
+| KeepBottomRight | 右下角与 plotArea 右下角对齐 |
+| ...（其他 Keep*）| 对应边或顶点对齐 |
+
+**额外缩放（可选）：**
+- 用户可通过 `setFixedAspectRatio(factor)` 设置整体缩放系数，在适配完成后应用于 `viewRect`。
+- `factor > 0` 有效，1.0 表示不缩放，非 1.0 时 `newW *= factor; newH *= factor;`。
+
+**返回 true 的场景：**
+- 用户显式调用 `fitViewRectToPlotArea`
+- `setDataRangeAndFit()` 组合函数内部调用
+- `resizeEvent` 中布局变化触发（可选）
+
+**返回 false 的场景：**
+- `viewRect` 比例已匹配 plotArea（容差 1%）
+- `plotArea` 宽高 ≤ 0
+- `Stretch` 模式（不调整 viewRect）
 
 ## 2. 数学推导：viewCube → 相机派生（3D）
 
@@ -112,6 +133,13 @@ viewProjectionMatrix = projectionMatrix(aspect) · viewMatrix  # World → Clip
 4. **viewCube 零尺寸**：`orbit` 对零尺寸盒 no-op（防除零）；`dolly` factor<1 = 盒缩小 = 内容放大（与 2D zoom 同构）。
 5. **Fixed 模式**：忽略 plotArea 长宽比，强制 `fixedAspectRatio()`——映射可能裁切，文档注明。
 6. **fit 返回语义**：fit 修改了 viewRect 才返回 true，调用方才重算 dataBounds（避免无效重算风暴）。
+
+7. **通用投影下的“漂移”陷阱**：`fitViewRectToPlotArea` 修改 `viewRect` 后，`QChartWidget` 会通过 `projection->computeDataBounds(viewRect)` 反算新的 `dataBounds`。
+
+- **笛卡尔投影下**：反算是精确且可逆的，`dataBounds` 与 `viewRect` 一一对应，无漂移。
+
+- **极坐标/球面投影下**：反算涉及 32×32 网格采样（`QChartProjection::computeDataBounds`），采样结果可能略大于用户设定的原始 `dataBounds`。这是采样法的固有误差，**不是 Bug**，但应在文档中说明，避免用户将“设定的范围”与“反算后的范围”视为完全一致。
+
 
 ## 5. 单测对照
 

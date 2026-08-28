@@ -58,83 +58,114 @@ void QChartCamera2D::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal 
 
 // ===== fit 几何 =====
 bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy strategy) {
-    // Stretch 模式：不调整 viewRect，直接拉伸
+    // Stretch：不做任何调整
     if (m_fitMode == ViewRectFitMode::Stretch) return false;
-
     if (plotArea.width() <= 0.0 || plotArea.height() <= 0.0) return false;
 
-    qreal plotAspect = plotArea.width() / plotArea.height();
-    qreal viewAspect = m_viewRect.width() / m_viewRect.height();
-    // 目标长宽比：Fixed 模式用用户指定的，否则用 plotArea 的
-    qreal targetAspect = (m_fitMode == ViewRectFitMode::Fixed)
-        ? m_fixedAspectRatio
-        : viewAspect;
+    qreal viewW = m_viewRect.width();
+    qreal viewH = m_viewRect.height();
+    qreal plotW = plotArea.width();
+    qreal plotH = plotArea.height();
 
-    // 长宽比已经匹配（1% 容差）→ 跳过
-    if (qAbs(targetAspect - viewAspect) < 0.01 * targetAspect) return false;
+    // 记录旧 viewRect 的中心和四个角
+    QPointF oldCenter = m_viewRect.center();
+    qreal oldLeft = m_viewRect.left();
+    qreal oldTop = m_viewRect.top();
+    qreal oldRight = m_viewRect.right();
+    qreal oldBottom = m_viewRect.bottom();
 
-    qCDebug(logCamera) << "fitViewRectToPlotArea: before" << m_viewRect
-                       << "mode=" << (int)m_fitMode
-                       << "strategy=" << (int)strategy
-                       << "targetAspect=" << targetAspect << "viewAspect=" << viewAspect;
+    qreal viewAspect = viewW / viewH;
+    qreal plotAspect = plotW / plotH;
 
-    bool expand; // true=扩张，false=收缩
-    if (m_fitMode == ViewRectFitMode::Crop) {
-        // Crop：收缩较大维度，裁掉超出部分
-        expand = false;
-    } else {
-        // Fit / Fixed：扩张较小维度，数据完整
-        expand = true;
-    }
+    // 如果长宽比已经相同，跳过比例调整（但仍然可能应用额外缩放）
+    bool sameAspect = qFuzzyCompare(viewAspect, plotAspect);
 
-    if (expand) {
-        switch (strategy) {
-        case FitStrategy::KeepWidth:
-            // 用户设了 dim0 → 锁宽度，只调高度
-            {
-                qreal newH = m_viewRect.width() / targetAspect;
-                qreal d = (newH - m_viewRect.height()) / 2.0;
-                m_viewRect.adjust(0.0, -d, 0.0, d);
-            }
-            break;
-        case FitStrategy::KeepHeight:
-            // 用户设了 dim1 → 锁高度，只调宽度
-            {
-                qreal newW = m_viewRect.height() * targetAspect;
-                qreal d = (newW - m_viewRect.width()) / 2.0;
-                m_viewRect.adjust(-d, 0.0, d, 0.0);
-            }
-            break;
-        case FitStrategy::KeepCenter:
-            // 初始化/布局变化 → 双向均等扩张
-            if (targetAspect > viewAspect) {
-                qreal newW = m_viewRect.height() * targetAspect;
-                qreal d = (newW - m_viewRect.width()) / 2.0;
-                m_viewRect.adjust(-d, 0.0, d, 0.0);
-            } else {
-                qreal newH = m_viewRect.width() / targetAspect;
-                qreal d = (newH - m_viewRect.height()) / 2.0;
-                m_viewRect.adjust(0.0, -d, 0.0, d);
-            }
-            break;
-        }
-    } else {
-        // Crop：收缩较大维度
-        if (viewAspect > targetAspect) {
-            // 太宽 → 收缩宽度
-            qreal newW = m_viewRect.height() * targetAspect;
-            qreal d = (m_viewRect.width() - newW) / 2.0;
-            m_viewRect.adjust(d, 0.0, -d, 0.0);
+    qreal newW = viewW;
+    qreal newH = viewH;
+
+    if (!sameAspect) {
+        if (viewAspect > plotAspect) {
+            // viewRect 更宽（瘦长）
+            if (m_fitMode == ViewRectFitMode::Fit) 
+                newH = newW / plotAspect;
+                // Fit：宽度不变，调整高度使比例匹配 → 高度变小（留白）
+            else if(m_fitMode == ViewRectFitMode::Crop) 
+                // Crop：高度不变，调整宽度使比例匹配 → 宽度变大（裁剪）
+                newW = newH * plotAspect;
         } else {
-            // 太高 → 收缩高度
-            qreal newH = m_viewRect.width() / targetAspect;
-            qreal d = (m_viewRect.height() - newH) / 2.0;
-            m_viewRect.adjust(0.0, d, 0.0, -d);
+            // viewRect 更高（胖）
+            if (m_fitMode == ViewRectFitMode::Fit) 
+                // Fit：高度不变，调整宽度使比例匹配 → 宽度变小（留白）
+                newW = newH * plotAspect;
+            else if(m_fitMode == ViewRectFitMode::Crop) 
+                // Crop：宽度不变，调整高度使比例匹配 → 高度变大（裁剪）
+                newH = newW / plotAspect;
         }
     }
 
-    qCDebug(logCamera) << "fitViewRectToPlotArea: after" << m_viewRect;
+    // 应用额外缩放因子（如果用户设置）
+    // 复用 m_scale 作为整体缩放系数，>0 有效，1.0 表示不缩放
+    if (m_scale > 0.0 && !qFuzzyCompare(m_scale, 1.0)) {
+        newW *= m_scale;
+        newH *= m_scale;
+    }
+    qCDebug(logCamera) << "fitViewRectToPlotArea: viewRect" << m_viewRect
+                  << "plotArea" << plotArea
+                  << "newW" << newW << "newH" << newH
+                  << "strategy" << static_cast<int>(strategy)
+                  << "fitMode" << static_cast<int>(m_fitMode)
+                  << "scale" << m_scale;
 
+    // 如果尺寸没有变化，返回
+    if (qFuzzyCompare(newW, m_viewRect.width()) && qFuzzyCompare(newH, m_viewRect.height()))
+        return false;
+
+    // 根据锚点定位（你现有的 Keep* 枚举）
+    qreal left, top;
+    switch (strategy) {
+    case FitStrategy::KeepCenter:
+        left = oldCenter.x() - newW / 2.0;
+        top  = oldCenter.y() - newH / 2.0;
+        break;
+    case FitStrategy::KeepTopLeft:
+        left = oldLeft;
+        top  = oldTop;
+        break;
+    case FitStrategy::KeepTopRight:
+        left = oldRight - newW;
+        top  = oldTop;
+        break;
+    case FitStrategy::KeepBottomLeft:
+        left = oldLeft;
+        top  = oldBottom - newH;
+        break;
+    case FitStrategy::KeepBottomRight:
+        left = oldRight - newW;
+        top  = oldBottom - newH;
+        break;
+    case FitStrategy::KeepLeft:
+        left = oldLeft;
+        top  = oldCenter.y() - newH / 2.0;
+        break;
+    case FitStrategy::KeepRight:
+        left = oldRight - newW;
+        top  = oldCenter.y() - newH / 2.0;
+        break;
+    case FitStrategy::KeepTop:
+        left = oldCenter.x() - newW / 2.0;
+        top  = oldTop;
+        break;
+    case FitStrategy::KeepBottom:
+        left = oldCenter.x() - newW / 2.0;
+        top  = oldBottom - newH;
+        break;
+    default:
+        left = oldCenter.x() - newW / 2.0;
+        top  = oldCenter.y() - newH / 2.0;
+        break;
+    }
+
+    m_viewRect = QRectF(left, top, newW, newH);
     emit viewChanged();
     return true;
 }

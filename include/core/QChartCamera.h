@@ -18,7 +18,6 @@ enum class ViewRectFitMode {
     Stretch,  // 不调整 viewRect——cartesianToPixel 直接拉伸，图形可能变形
     Fit,      // 扩张 viewRect 较小维度以匹配 plotArea 长宽比，数据始终完整（默认）
     Crop,     // 收缩 viewRect 较大维度以匹配 plotArea 长宽比，可能裁掉部分数据
-    Fixed     // 强制 viewRect 匹配指定长宽比（fixedAspectRatio()），忽略 plotArea
 };
 
 /// 相机基类：共同信号（2D/3D 视图状态变化都发 viewChanged）
@@ -70,11 +69,14 @@ public:
     // ===== fit 策略 =====
     ViewRectFitMode fitMode() const { return m_fitMode; }
     void setFitMode(ViewRectFitMode mode) { m_fitMode = mode; }
-    qreal fixedAspectRatio() const { return m_fixedAspectRatio; }
-    void setFixedAspectRatio(qreal ratio) { m_fixedAspectRatio = ratio; }
+    qreal scale() const { return m_scale; }
+    void setScale(qreal ratio) { m_scale = ratio; }
 
     // ===== fit 几何 =====
-    enum class FitStrategy { KeepWidth, KeepHeight, KeepCenter };
+    enum class FitStrategy { KeepCenter, 
+        KeepLeft, KeepRight, KeepTop, KeepBottom, 
+        KeepTopLeft, KeepTopRight, KeepBottomLeft, KeepBottomRight 
+    };
     /// 调整 viewRect 使长宽比匹配 plotArea（只做几何，不反算 dataBounds）。
     /// 返回 true 表示 viewRect 实际被修改（调用方据此决定是否重算 dataBounds）。
     bool fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy strategy);
@@ -97,8 +99,8 @@ public:
 
 private:
     QRectF m_viewRect;
-    ViewRectFitMode m_fitMode = ViewRectFitMode::Fit;
-    qreal m_fixedAspectRatio = 1.0; // Fixed 模式下使用
+    ViewRectFitMode m_fitMode = ViewRectFitMode::Crop;
+    qreal m_scale = 1.0; // 提供放缩因子以提供修改长宽绝对值的功能
 };
 
 #endif // QCHARTCAMERA_H

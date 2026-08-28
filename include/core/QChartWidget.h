@@ -77,8 +77,8 @@ public:
     // ===== viewRect 匹配策略 =====
     ViewRectFitMode viewRectFitMode() const { return m_camera->fitMode(); }
     void setViewRectFitMode(ViewRectFitMode mode);
-    qreal fixedAspectRatio() const { return m_camera->fixedAspectRatio(); }
-    void setFixedAspectRatio(qreal ratio);
+    qreal scale() const { return m_camera->scale(); }
+    void setScale(qreal ratio);
 
     // ===== 主题 =====
     /// 一键切换预设主题（A2）

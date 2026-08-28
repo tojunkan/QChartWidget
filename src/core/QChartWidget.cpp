@@ -169,20 +169,20 @@ void QChartWidget::setViewRectFitMode(ViewRectFitMode mode) {
     invalidateForeground();
 }
 
-void QChartWidget::setFixedAspectRatio(qreal ratio) {
+void QChartWidget::setScale(qreal ratio) {
     if (ratio <= 0.0) {
-        qWarning() << "setFixedAspectRatio: ratio must be > 0, ignoring" << ratio;
+        qWarning() << "setScale: ratio must be > 0, ignoring" << ratio;
         return;
     }
-    m_camera->setFixedAspectRatio(ratio);
-    qCDebug(logWidget) << "fixedAspectRatio:" << ratio;
-    fitViewRectToPlotArea(FitStrategy::KeepCenter);
+    m_camera->setScale(ratio);
+    qCDebug(logWidget) << "Scale:" << ratio;
     invalidateBackground();
     invalidateForeground();
 }
 
 void QChartWidget::fitViewRectToPlotArea(FitStrategy strategy) {
     if (!m_projection) return;
+    if (m_plotArea.width() <= 0.0 || m_plotArea.height() <= 0.0) return;
 
     // 相机只做 viewRect 几何拟合；dataBounds 依赖 projection，故由 Widget 反算。
     // 仅在 viewRect 实际变化时反算，保持与旧实现一致（避免 Polar 下
@@ -265,7 +265,7 @@ void QChartWidget::setDataRangeDim0(qreal min, qreal max) {
         m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
         qCDebug(logWidget) << "setDataRangeDim0:" << min << "→" << max
                            << "viewRect=" << m_camera->viewRect();
-        fitViewRectToPlotArea(FitStrategy::KeepWidth);
+        fitViewRectToPlotArea(FitStrategy::KeepCenter);
     }
     invalidateBackground();
     invalidateForeground();
@@ -279,7 +279,7 @@ void QChartWidget::setDataRangeDim1(qreal min, qreal max) {
         m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
         qCDebug(logWidget) << "setDataRangeDim1:" << min << "→" << max
                            << "viewRect=" << m_camera->viewRect();
-        fitViewRectToPlotArea(FitStrategy::KeepHeight);
+        fitViewRectToPlotArea(FitStrategy::KeepCenter);
     }
     invalidateBackground();
     invalidateForeground();
@@ -317,6 +317,7 @@ void QChartWidget::setMargins(qreal l, qreal t, qreal r, qreal b) {
 void QChartWidget::layoutAxes() {
     m_plotArea = plotAreaForSize(this->size());
     qCDebug(logWidget) << "layoutAxes: plotArea=" << m_plotArea;
+    // m_camera->fitViewRectToPlotArea(m_plotArea, FitStrategy::KeepCenter);
     // 注意：resize 只更新 plotArea，不动 viewRect。
     // viewRect 是数据窗口（相机状态），plotArea 是像素窗口——两者解耦：
     // 拉伸窗口 = 变相调整视图（像素映射拉伸），fit 只在数据范围/投影
