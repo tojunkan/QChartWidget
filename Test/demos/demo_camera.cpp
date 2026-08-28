@@ -16,7 +16,6 @@ QWidget* buildDemoCamera() {
     auto* w = new QChartWidget();
     w->setWindowTitle("相机漫游 - waypoint + sizeCurve");
     w->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
-    w->setViewRectFitMode(ViewRectFitMode::Crop);
 
     auto* xAxis = new QValueAxis(w, Qt::AlignBottom);
     auto* yAxis = new QValueAxis(w, Qt::AlignLeft);

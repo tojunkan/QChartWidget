@@ -109,7 +109,7 @@ void TestQChartCamera2D::fitMode_Stretch_noChange() {
 
 void TestQChartCamera2D::fitMode_Fit_expands() {
     QChartCamera2D cam;
-    cam.setFitMode(ViewRectFitMode::Fit);
+    cam.setFitMode(ViewRectFitMode::Expand);
     cam.setViewRect(QRectF(0, 0, 10, 10));        // aspect 1.0
     cam.fitViewRectToPlotArea(QRectF(0, 0, 400, 200),  // aspect 2.0
                               QChartCamera2D::FitStrategy::KeepCenter);
@@ -157,7 +157,7 @@ void TestQChartCamera2D::fitMode_Crop_shrinks() {
 
 void TestQChartCamera2D::scaleFactor_appliedAfterFit() {
     QChartCamera2D cam;
-    cam.setFitMode(ViewRectFitMode::Fit);
+    cam.setFitMode(ViewRectFitMode::Expand);
     cam.setScale(0.5);                     // 整体缩小一半
     cam.setViewRect(QRectF(0, 0, 10, 10));
     cam.fitViewRectToPlotArea(QRectF(0, 0, 400, 200),
@@ -172,7 +172,7 @@ void TestQChartCamera2D::scaleFactor_appliedAfterFit() {
 
 void TestQChartCamera2D::scaleFactor_centerInvariant() {
     QChartCamera2D cam;
-    cam.setFitMode(ViewRectFitMode::Fit);
+    cam.setFitMode(ViewRectFitMode::Expand);
     cam.setScale(0.7);
     cam.setViewRect(QRectF(0, 0, 10, 10));
     QPointF beforeCenter = cam.viewRect().center();

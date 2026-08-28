@@ -13,7 +13,6 @@ QWidget* buildDemoPolar() {
     auto* w = new QChartWidget();
     w->setWindowTitle("Polar 五边形 - 曲线边验证");
     w->setProjection(QChartProjectionFactory::create(CoordinateSystem::Polar));
-    w->setViewRectFitMode(ViewRectFitMode::Fit);
 
     auto* angleAxis = new QValueAxis(w, Qt::AlignHCenter);
     w->addAxis(angleAxis);

@@ -7,6 +7,7 @@
 #include "QDataPoint.h"
 #include "QChartProjectionFactory.h"
 #include "QPainterChartRenderer.h"
+#include "QOpenGLChartRenderer.h"
 #include "QChartLegend.h"
 #include "QChartDebug.h"
 #include <QPainter>
@@ -209,8 +210,11 @@ QPointF QChartWidget::pixelToCartesian(const QPointF& pixel) const {
 // 按解耦哲学：viewRect 是数据窗口（相机状态），这里"设置什么就是什么"，
 // 不做 fit 修正——长宽比由调用者负责（QViewRectAnimation 内部用 plotArea
 // 快照保证）。fit 只在数据范围/投影变更时发生
+// Not Recommended using it manually because 
+// it will turn the fitmode to Stretch, which may cause distortion of the chart.
 void QChartWidget::setViewRect(const QRectF& r) {
     m_camera->setViewRect(r);
+    // m_camera->fitViewRectToPlotArea(m_plotArea, FitStrategy::KeepCenter);
     if (m_projection)
         m_dataBounds = m_projection->computeDataBounds(m_camera->viewRect());
     qCDebug(logWidget) << "setViewRect:" << r << "→ viewRect=" << m_camera->viewRect()
@@ -258,11 +262,12 @@ bool QChartWidget::dimensionInteractive(int dim) const {
     return true;
 }
 
+// Not Recommended because it will turn the fitmode to Stretch, which may cause distortion of the chart.
 void QChartWidget::setDataRangeDim0(qreal min, qreal max) {
     m_dataBounds.setLeft(min);
     m_dataBounds.setWidth(max - min);
     if (m_projection) {
-        m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
+        setViewRect(m_projection->computeViewRect(m_dataBounds));
         qCDebug(logWidget) << "setDataRangeDim0:" << min << "→" << max
                            << "viewRect=" << m_camera->viewRect();
         fitViewRectToPlotArea(FitStrategy::KeepCenter);
@@ -272,11 +277,13 @@ void QChartWidget::setDataRangeDim0(qreal min, qreal max) {
     emit viewChanged();
 }
 
+
+// Not Recommended because it will turn the fitmode to Stretch, which may cause distortion of the chart.
 void QChartWidget::setDataRangeDim1(qreal min, qreal max) {
     m_dataBounds.setTop(min);
     m_dataBounds.setHeight(max - min);
     if (m_projection) {
-        m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
+        setViewRect(m_projection->computeViewRect(m_dataBounds));
         qCDebug(logWidget) << "setDataRangeDim1:" << min << "→" << max
                            << "viewRect=" << m_camera->viewRect();
         fitViewRectToPlotArea(FitStrategy::KeepCenter);
@@ -290,7 +297,7 @@ void QChartWidget::setProjection(std::unique_ptr<QChartProjection> proj) {
     m_projection = std::move(proj);
     if (m_projection && !m_viewInitialized) {
         m_dataBounds = m_projection->defaultDataBounds();
-        m_camera->setViewRect(m_projection->computeViewRect(m_dataBounds));
+        setViewRect(m_projection->computeViewRect(m_dataBounds));
         m_viewInitialized = true;
         qCDebug(logWidget) << "setProjection: viewRect initialized from defaultDataBounds:"
                            << m_camera->viewRect();
@@ -316,6 +323,7 @@ void QChartWidget::setMargins(qreal l, qreal t, qreal r, qreal b) {
 
 void QChartWidget::layoutAxes() {
     m_plotArea = plotAreaForSize(this->size());
+    fitViewRectToPlotArea(FitStrategy::KeepCenter);
     qCDebug(logWidget) << "layoutAxes: plotArea=" << m_plotArea;
     // m_camera->fitViewRectToPlotArea(m_plotArea, FitStrategy::KeepCenter);
     // 注意：resize 只更新 plotArea，不动 viewRect。
@@ -323,6 +331,8 @@ void QChartWidget::layoutAxes() {
     // 拉伸窗口 = 变相调整视图（像素映射拉伸），fit 只在数据范围/投影
     // 显式变更时发生（setDataRange/setProjection/setViewRectFitMode）。
     // 若 resize 也去 fit，会从"已收缩的当前值"反复收缩 → 累积漂移
+    // 已修复：根本原因在于fitViewRectToPlotArea()的实现里缺少面积不变这一约束。
+    // 现在在fitViewRectToPlotArea()在这里会被调用一次，因为plotArea会更新。
 }
 
 QRectF QChartWidget::plotAreaForSize(const QSize& size) const {

@@ -19,6 +19,79 @@ paintEvent(QPaintEvent*)
        └─（QPainterChartRenderer::render）→ drawBackground/drawForeground（blit 到 this）
        └─（QOpenGLChartRenderer::render）→ device==宿主校验 → 否则 qWarning（GL 由 GlHost paintGL 驱动）
 ```
+> 本图明确展示**调用方（上游触发者）** → **失效函数（设置脏标记）** → **paintEvent（消费者）** 的完整链路。
+
+```mermaid
+graph TD
+    %% ========== 上游触发者（谁调用了 invalidate*） ==========
+    subgraph 触发者_Triggers
+        T1[用户/系统: resizeEvent]
+        T2[用户: setMargins / addAxis / removeAxis]
+        T3[轴: rangeChanged 信号]
+        T4[轴: visible/style/tickCountChanged 信号]
+        T5[系列: color/opacity/visible/nameChanged 信号]
+        T6[图例: visible/alignment/textColorChanged 信号]
+        T7[用户: setTheme / setBackgroundColor]
+        T8[用户交互: panViewCartesian / zoomViewCartesian / setViewRect]
+        T9[用户: setCachingEnabled]
+    end
+
+    %% ========== 失效函数（设置脏标记） ==========
+    subgraph 失效函数_Invalidation
+        F1[invalidateLayout]
+        F2[invalidateBackground]
+        F3[invalidateForeground]
+    end
+
+    %% ========== 内部状态（脏标记） ==========
+    subgraph 内部状态_State
+        S1[Widget::m_layoutDirty = true]
+        S2[Renderer::m_bgDirty = true]
+        S3[Renderer::m_fgDirty = true]
+    end
+
+    %% ========== 最终绘制入口 ==========
+    subgraph 绘制_Execution
+        P1[update - Qt 事件循环合并]
+        P2[paintEvent]
+        P3{消费脏标记}
+        P4[layoutAxes -> 清 m_layoutDirty]
+        P5[renderer->render -> 消费 bg/fg 脏标记]
+    end
+
+    %% ---------------- 连线规则 ----------------
+    %% 触发 → 失效
+    T1 --> F1
+    T2 --> F1
+    T3 --> F1  
+    %% rangeChanged 走 setDataRangeDim → 触发 viewChanged + layout
+    T4 --> F2
+    T5 --> F3
+    T6 --> F3
+    T7 --> F2 & F3
+    T8 --> F3 & P1  
+    %% 直接改 viewRect 后立刻 update
+    T9 --> P1        
+    %% 仅切换缓存开关，无需脏标记
+
+    %% 失效 → 状态
+    F1 --> S1
+    F2 --> S2
+    F3 --> S3
+
+    %% 状态 / 直接触发 → update
+    S1 --> P1
+    S2 --> P1
+    S3 --> P1
+
+    %% paintEvent 消费
+    P1 --> P2
+    P2 --> P3
+    P3 -->|true| P4
+    P3 -->|true| P5
+    P4 --> P5
+    P5 --> R[重绘完成/Blit缓存]
+```
 
 ## 数据流（入参/出参/状态变更）
 

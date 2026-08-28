@@ -15,7 +15,6 @@ QWidget* buildDemoSwirl() {
     auto* w = new QChartWidget();
     w->setWindowTitle("投影切换 - 恒等 ↔ Swirl 涡流");
     w->setProjection(createIdentityProjection()); // 起点：恒等
-    w->setViewRectFitMode(ViewRectFitMode::Crop);
 
     auto* xAxis = new QValueAxis(w, Qt::AlignBottom);
     auto* yAxis = new QValueAxis(w, Qt::AlignLeft);

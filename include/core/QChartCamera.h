@@ -15,9 +15,10 @@
 
 // viewRect 与 plotArea 长宽比匹配策略
 enum class ViewRectFitMode {
-    Stretch,  // 不调整 viewRect——cartesianToPixel 直接拉伸，图形可能变形
-    Fit,      // 扩张 viewRect 较小维度以匹配 plotArea 长宽比，数据始终完整（默认）
-    Crop,     // 收缩 viewRect 较大维度以匹配 plotArea 长宽比，可能裁掉部分数据
+    Stretch,     // 不调整 viewRect——cartesianToPixel 直接拉伸，图形可能变形
+    Expand,      // 扩张 viewRect 较小维度以匹配 plotArea 长宽比，数据始终完整（默认）
+    Crop,        // 收缩 viewRect 较大维度以匹配 plotArea 长宽比，可能裁掉部分数据
+    Preserve     // 保持 viewRect 不变的同时保证其面积也不变，依此保证数据的完整性和比例不变（新增，修复了Stretch/Expand/Crop的缺陷）
 };
 
 /// 相机基类：共同信号（2D/3D 视图状态变化都发 viewChanged）
@@ -99,7 +100,7 @@ public:
 
 private:
     QRectF m_viewRect;
-    ViewRectFitMode m_fitMode = ViewRectFitMode::Crop;
+    ViewRectFitMode m_fitMode = ViewRectFitMode::Preserve; // 默认保持 viewRect 不变的同时保证其面积也不变，依此保证数据的完整性和比例不变
     qreal m_scale = 1.0; // 提供放缩因子以提供修改长宽绝对值的功能
 };
 

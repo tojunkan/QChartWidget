@@ -16,7 +16,6 @@ QWidget* buildDemoPendulum() {
     auto* w = new QChartWidget();
     w->setWindowTitle("单摆动画 - Generator 模式");
     w->setProjection(QChartProjectionFactory::create(CoordinateSystem::Cartesian));
-    w->setViewRectFitMode(ViewRectFitMode::Crop); // 物理模拟不能变形
 
     auto* xAxis = new QValueAxis(w, Qt::AlignBottom);
     w->addAxis(xAxis);

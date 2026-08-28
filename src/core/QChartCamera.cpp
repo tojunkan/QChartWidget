@@ -86,28 +86,40 @@ bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy s
     if (!sameAspect) {
         if (viewAspect > plotAspect) {
             // viewRect 更宽（瘦长）
-            if (m_fitMode == ViewRectFitMode::Fit) 
+            if (m_fitMode == ViewRectFitMode::Expand) 
                 newH = newW / plotAspect;
                 // Fit：宽度不变，调整高度使比例匹配 → 高度变小（留白）
-            else if(m_fitMode == ViewRectFitMode::Crop) 
-                // Crop：高度不变，调整宽度使比例匹配 → 宽度变大（裁剪）
+            else 
+                // Crop/Preserve：高度不变，调整宽度使比例匹配 → 宽度变大（裁剪）
                 newW = newH * plotAspect;
         } else {
             // viewRect 更高（胖）
-            if (m_fitMode == ViewRectFitMode::Fit) 
+            if (m_fitMode == ViewRectFitMode::Expand) 
                 // Fit：高度不变，调整宽度使比例匹配 → 宽度变小（留白）
                 newW = newH * plotAspect;
-            else if(m_fitMode == ViewRectFitMode::Crop) 
-                // Crop：宽度不变，调整高度使比例匹配 → 高度变大（裁剪）
+            else 
+                // Crop/Preserve：宽度不变，调整高度使比例匹配 → 高度变大（裁剪）
                 newH = newW / plotAspect;
         }
     }
 
     // 应用额外缩放因子（如果用户设置）
     // 复用 m_scale 作为整体缩放系数，>0 有效，1.0 表示不缩放
-    if (m_scale > 0.0 && !qFuzzyCompare(m_scale, 1.0)) {
-        newW *= m_scale;
-        newH *= m_scale;
+    if(m_fitMode == ViewRectFitMode::Preserve) {
+        // Preserve：保持 viewRect 不变的同时保证其面积也不变，依此保证数据的完整性和比例不变
+        qreal oldArea = viewW * viewH;
+        qreal newArea = newW * newH;
+        if (newArea > 0.0) {
+            qreal areaScale = qSqrt(oldArea / newArea);
+            newW *= areaScale;
+            newH *= areaScale;
+        }
+    }
+    else {
+        if (m_scale > 0.0 && !qFuzzyCompare(m_scale, 1.0)) {
+            newW *= m_scale;
+            newH *= m_scale;
+        }
     }
     qCDebug(logCamera) << "fitViewRectToPlotArea: viewRect" << m_viewRect
                   << "plotArea" << plotArea
