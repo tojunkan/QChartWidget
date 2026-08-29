@@ -9,7 +9,7 @@
 #include <QLoggingCategory>
 #include <QStringList>
 #include "QChartWidget.h"
-#include "demos/demos.h"
+#include "demos.h"
 
 // 将 Qt 日志同时写入文件和 stderr（Windows 下 qDebug 默认不输出到控制台）
 static QFile g_logFile;
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
     qInstallMessageHandler(logToFile);
     // 关闭所有 *.verbose 每帧细节日志（verbose 分类默认已静默，此规则确保显式关闭；
     // 注意：Qt 规则的 '*' 通配符只能出现在模式末尾，`chart.*.verbose` 是非法规则会被忽略）
-    QLoggingCategory::setFilterRules("chart.camera.debug=true");
+    QLoggingCategory::setFilterRules("*.verbose=false");
 
     QApplication app(argc, argv);
     qDebug() << "========== 测试开始 ==========";
