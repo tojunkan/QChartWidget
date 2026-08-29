@@ -80,6 +80,7 @@ QWidget* buildDemoScatter3D() {
     layer->setAxisX(axisR);
     layer->setAxisY(axisTh);
     layer->setAxisZ(axisPh);
+    layer->setGridVisible(false);
     filter->layer = layer;
 
     auto* scatter = new QChartScatterSeries3D("球面采样点", layer);

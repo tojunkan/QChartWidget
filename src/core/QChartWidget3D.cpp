@@ -150,6 +150,16 @@ void QChartWidget3D::setCamera3D(std::unique_ptr<QChartCamera3D> cam) {
     invalidateForeground();
 }
 
+void QChartWidget3D::invalidateBackground() {
+    QChartWidget::invalidateBackground();
+    if(m_glHost) m_glHost->update();   // Phase 3 GL 宿主：背景重绘 → GlHost update，否则子类不会更新！！
+}
+
+void QChartWidget3D::invalidateForeground() {
+    QChartWidget::invalidateForeground();
+    if(m_glHost) m_glHost->update();   // Phase 3 GL 宿主：前景重绘 → GlHost update，否则子类不会更新！！
+}
+
 void QChartWidget3D::setProjection3D(std::unique_ptr<QChartProjection3D> proj) {
     if (!proj) return;
     m_projection3D = std::move(proj);

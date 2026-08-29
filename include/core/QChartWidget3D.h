@@ -55,6 +55,9 @@ public:
     /// A3 全链：resolveDataBox → computeWorldBounds → setViewCubeToFit → 反算 → 推轴盒 → 重绘
     void fitWorld();
 
+    virtual void invalidateBackground() override;
+    virtual void invalidateForeground() override;
+
     // ===== 双 Widget 联动信号（§9；(u,v) 为 Numeric 空间）=====
 signals:
     void uvHovered(qreal u, qreal v);     // 悬停点 (u,v)（3D 侧 = 屏幕近邻命中）

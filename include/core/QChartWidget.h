@@ -126,8 +126,8 @@ public:
     bool isZoomEnabled() const { return m_zoomEnabled; }
     void setZoomEnabled(bool v) { m_zoomEnabled = v; }
 
-    void invalidateBackground();
-    void invalidateForeground();
+    virtual void invalidateBackground();
+    virtual void invalidateForeground();
     void invalidateLayout();
 
 signals:
