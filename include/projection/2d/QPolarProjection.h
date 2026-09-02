@@ -41,6 +41,21 @@ public:
         return QPointF(deg, r);
     }
 
+    // QPolarProjection.h 中添加
+    QString glslToCartesian() const override {
+        // num.x = θ(°), num.y = r, num.z 忽略
+        return "vec3(num.y * cos(radians(num.x)), num.y * sin(radians(num.x)), 0.0)";
+    }
+    QString glslFromCartesian() const override {
+        // 处理奇点 r=0 -> θ=NaN (0.0/0.0)
+        return R"(
+            (length(cart.xy) < 1e-8) ? 
+            vec3(0.0/0.0, 0.0, 0.0) : 
+            vec3(degrees(atan(cart.y, cart.x) + 6.28318530718 * float(atan(cart.y, cart.x) < 0.0)), 
+                length(cart.xy), 0.0)
+        )";
+    }
+
     // ── 包络转换 ──
 
 // QPolarProjection.h —— computeDataBounds 完整修复版

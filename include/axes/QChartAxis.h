@@ -5,6 +5,8 @@
 #ifndef QCHARTAXIS_H
 #define QCHARTAXIS_H
 
+#include "QChartPrimitive.h"
+#include "QChartTextLabel.h"
 #include "QChartProjection.h"
 #include "QChartCamera.h" // View↔Pixel 线性映射的唯一实现（去重 1.5-3）
 #include <QObject>
@@ -23,56 +25,10 @@ struct DrawContext;
 
 // ===== DrawContext：每次 draw 调用时传递的上下文 =====
 struct DrawContext {
-    QRectF plotArea;                   // 绘图区像素矩形
-    QRectF dataBounds;                 // 当前可见 Numeric 范围: (dim0Min, dim1Min, dim0Span, dim1Span)
-    QRectF viewRect;                   // 当前 View Cartesian 窗口
-    const QChartProjection* projection = nullptr;
-
-    // ===== Series 画曲线边用 =====
-    /// Data→Numeric 函数（Layer 注入闭包，Series 零依赖 Axis）
-    std::function<qreal(QVariant)> toNumeric0;  // dim0
-    std::function<qreal(QVariant)> toNumeric1;  // dim1
-
-    /// Numeric 单点 → Pixel（动画覆盖层用：点集已在 Numeric 空间，无需走 Axis）
-    QPointF numericToPixel(qreal num0, qreal num1) const {
-        if (!projection) return QPointF(qQNaN(), qQNaN());
-        QPointF c = projection->toCartesian(num0, num1);
-        if (!std::isfinite(c.x()) || !std::isfinite(c.y()))
-            return QPointF(qQNaN(), qQNaN());
-        return QChartCamera2D::cartesianToPixel(viewRect, plotArea, c.x(), c.y());
-    }
-
-    /// Numeric 空间曲线 → Pixel 路径（创建 createPath + cartesian→pixel in one shot）
-    QPainterPath toPixelCurve(std::function<QPointF(qreal)> dataCurve,
-                              int segments = 64) const {
-        QPainterPath pixelPath;
-        if (!projection || !dataCurve) return pixelPath;
-        QPainterPath viewPath = projection->createPath(dataCurve, segments);
-        for (int i = 0; i < viewPath.elementCount(); ++i) {
-            const auto& el = viewPath.elementAt(i);
-            QPointF p = QChartCamera2D::cartesianToPixel(viewRect, plotArea, el.x, el.y);
-            if (i == 0 || el.isMoveTo()) pixelPath.moveTo(p);
-            else                         pixelPath.lineTo(p);
-        }
-        return pixelPath;
-    }
-
-    // ===== 像素空间可见性粗筛（所有投影通用）=====
-    // 可见性由投影输出（像素）定义，不由 Numeric 输入定义——只能在 pixel/plotArea 判
-    /// 点是否落在 plotArea 内（可加 margin 余量）
-    bool pixelVisible(const QPointF& p, qreal margin = 0.0) const {
-        return std::isfinite(p.x()) && std::isfinite(p.y())
-            && p.x() >= plotArea.left()  - margin
-            && p.x() <= plotArea.right() + margin
-            && p.y() >= plotArea.top()   - margin
-            && p.y() <= plotArea.bottom() + margin;
-    }
-    /// 像素 bbox 与 plotArea 是否相交（可加 margin 余量，margin>0 时更保守）
-    bool rectVisible(const QRectF& bbox, qreal margin = 0.0) const {
-        return bbox.normalized()
-            .adjusted(-margin, -margin, margin, margin)
-            .intersects(plotArea);
-    }
+    QRectF plotArea;      // 绘图区像素矩形
+    QRectF dataBounds;    // 当前可见 Numeric 范围
+    QRectF viewRect;      // View Cartesian 窗口
+    const class QChartProjection* projection = nullptr;
 };
 
 class QChartAxis : public QObject
@@ -113,10 +69,16 @@ public:
     void drawAtEdge(QPainter* painter, const DrawContext& ctx,
                     bool drawAxisLine, bool drawLabels, bool drawTicks) const;
 
-    /// 数据主脊模式：画在 offset 指定的 Numeric 位置（所有坐标系有效）
-    /// offset 是另一维度的 Numeric 值（由调用者 Layer 提供）
-    void drawAtPosition(QPainter* painter, const DrawContext& ctx, qreal offset,
-                        bool drawAxisLine, bool drawLabels, bool drawTicks, QString& label, QPen* pen = nullptr) const;
+    /// 数据主脊：生成 Numeric 空间的图元
+    /// dimMin/dimMax: 本轴的 Numeric 范围
+    /// offset0/offset1: 另外两维的固定值
+    /// dimIndex: 0/1/2，表示本轴沿哪个维度变化
+    /// 二维情况下，offset1表示z轴，恒为0，且dimIndex只能是0或1
+    virtual void drawAtPosition(qreal dimMin, qreal dimMax,
+                                qreal offset0, qreal offset1,
+                                int dimIndex,
+                                QVector<QChartPrimitive>& outPrims,
+                                QVector<QChartTextLabel>& outLabels) const;
 
     /// 边框轴占用空间估算；数据主脊返回 {0, 0}
     virtual QSizeF sizeHint(const QFont& font) const;

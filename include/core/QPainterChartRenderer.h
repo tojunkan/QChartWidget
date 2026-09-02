@@ -1,45 +1,63 @@
 // QPainterChartRenderer.h —— QPainter 后端渲染器
-// 持有 bg/fg 两张 QPixmap 缓存 + 脏标记，收编原 QChartWidget 的
-// drawBackground/drawForeground 绘制编排（轴、网格、系列、调试黄框）。
-// 缓存启用：背景脏→重建背景缓存、前景脏→重建前景缓存，再 blit 到目标 device；
-// 缓存禁用：直接绘制。
 #ifndef QPAINTERCHARTRENDERER_H
 #define QPAINTERCHARTRENDERER_H
 
 #include "QChartRenderer.h"
-#include <QPixmap>
 
-class QPainter;
-
-class QPainterChartRenderer : public QChartRenderer {
+class QPainterChartRenderer : public QChartRenderer
+{
 public:
     QPainterChartRenderer() = default;
     ~QPainterChartRenderer() override = default;
 
-    void render(const QChartScene& scene, QPaintDevice* device) override;
-    void renderUncached(const QChartScene& scene, QPaintDevice* device) override;
-    void invalidateBackground() override;
-    void invalidateForeground() override;
-    void setCachingEnabled(bool enabled) override;
-    bool isCachingEnabled() const override;
+protected:
+    // ===== 基类虚函数实现 =====
+
+    /// Numeric → Cartesian 变换（CPU 端调用 projection->toCartesian）
+    void transformNumericToCartesian(QChartScene& scene) override;
+
+    /// 裁剪 + 标签解析（精确裁剪，填充 m_visibilityCache）
+    void cullAndResolveLabels(QChartScene& scene) override;
+
+    /// 绘制图元（从 cart* 转像素，用 QPainter 画）
+    void drawPrimitives(QChartScene& scene,
+                        QPaintDevice* device,
+                        const QVector<bool>& visibility) override;
+
+    /// 绘制标签（从 cartesianAnchor 转像素，用 QPainter 画文字）
+    void drawLabels(QChartScene& scene,
+                    QPaintDevice* device) override;
 
 private:
-    void drawBackground(QPainter* p, const QChartScene& scene);
-    void drawForeground(QPainter* p, const QChartScene& scene);
-    /// 3D 子路径（design_3d_axes.md §7.2）：collect → 分桶（depthItems=Grid+Series / decor=ForegroundDecor）
-    /// → Grid 深度偏置 → depthItems 降序（远→近）→ decor 顺序 → labels → 2D overlay 后画
-    void drawForeground3D(QPainter* p, const QChartScene& scene);
-    /// 逐图元绘制（Point=drawEllipse、LineSegment=drawLine，pen=color+penWidth）
-    void drawPrimitives(QPainter* p, const QVector<QChartPrimitive>& items);
-    /// billboard 文本（drawText，裁剪 plotArea；isTitle 加大加粗）
-    void drawLabels(QPainter* p, const QChartScene& scene, const QVector<QChartTextLabel>& labels);
-    /// 无缓存直接绘制（drawBackground + drawForeground）
-    void drawDirect(QPainter* p, const QChartScene& scene);
+    // ===== 裁剪辅助 =====
 
-    QPixmap m_bgCache, m_fgCache;
-    bool m_bgDirty = true;
-    bool m_fgDirty = true;
-    bool m_cachingEnabled = true;
+    /// 判断图元是否在视口内（2D/3D 通过 camera 多态区分）
+    bool isPrimitiveVisible(const QChartPrimitive& prim,
+                            const QChartAbstractCamera* camera) const;
+
+    /// 2D 裁剪：图元与 QRectF 相交测试
+    bool isPrimitiveVisible2D(const QChartPrimitive& prim, const QRectF& viewRect) const;
+
+    /// 3D 裁剪：图元与 ViewCube 相交测试
+    bool isPrimitiveVisible3D(const QChartPrimitive& prim, const ViewCube& viewCube) const;
+
+    // ===== 绘制辅助（拆分 2D/3D） =====
+
+    void drawPrimitives2D(QPainter& painter,
+                          const QChartScene& scene,
+                          const QChartCamera* cam2d);
+
+    void drawPrimitives3D(QPainter& painter,
+                          const QChartScene& scene,
+                          const QChartCamera3D* cam3d);
+
+    void drawLabels2D(QPainter& painter,
+                      const QChartScene& scene,
+                      const QChartCamera* cam2d);
+
+    void drawLabels3D(QPainter& painter,
+                      const QChartScene& scene,
+                      const QChartCamera3D* cam3d);
 };
 
 #endif // QPAINTERCHARTRENDERER_H

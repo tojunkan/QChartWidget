@@ -1,4 +1,4 @@
-// QChartFunctionalProjection3D.h —— 用户自定义 3D 坐标投影
+// QFunctionalProjection3D.h —— 用户自定义 3D 坐标投影
 // 通过 lambda 定义 Numeric ↔ World 映射，无需子类化。
 // 统一支持两类用法：
 //   - 2→3 参数曲面嵌入：forward 忽略 n2（如莫比乌斯环 u∈[0,360), v∈[-0.5,0.5]）
@@ -10,18 +10,18 @@
 #include <functional>
 #include <QDebug>
 
-class QChartFunctionalProjection3D : public QChartProjection3D {
+class QFunctionalProjection3D : public QChartProjection3D {
 public:
     /// forward: Numeric (n0,n1,n2) → World，必传
     /// backward: World → Numeric；nullptr → fromWorld 返回 NaN
     /// defaultDataMin/Max: 默认 Numeric 范围（Widget3D 首次 fit 用）
     /// boundsFn: 自定义包围盒计算；nullptr → 内部采样
-    QChartFunctionalProjection3D(
+    QFunctionalProjection3D(
         std::function<QVector3D(qreal n0, qreal n1, qreal n2)> forward,
         std::function<QVector3D(qreal x, qreal y, qreal z)> backward = nullptr,
         QVector3D defaultDataMin = QVector3D(0, 0, 0),
         QVector3D defaultDataMax = QVector3D(1, 1, 1),
-        std::function<QChartWorldBox(const QVector3D&, const QVector3D&)> boundsFn = nullptr,
+        std::function<ViewCube(const QVector3D&, const QVector3D&)> boundsFn = nullptr,
         QString name0 = "u", QString name1 = "v", QString name2 = "w")
         : QChartProjection3D(std::move(name0), std::move(name1), std::move(name2))
         , m_forward(std::move(forward))
@@ -32,29 +32,29 @@ public:
     {}
 
     // ── Numeric → World ──
-    QVector3D toWorld(qreal n0, qreal n1, qreal n2 = 0.0) const override {
+    QVector3D toCartesian(qreal n0, qreal n1, qreal n2 = 0.0) const override {
         if (!m_forward) {
-            qWarning() << "QChartFunctionalProjection3D::toWorld: forward mapping is null";
+            qWarning() << "QFunctionalProjection3D::toCartesian: forward mapping is null";
             return QVector3D(qQNaN(), qQNaN(), qQNaN());
         }
         return m_forward(n0, n1, n2);
     }
 
     // ── World → Numeric ──
-    QVector3D fromWorld(const QVector3D& w) const override {
+    QVector3D fromCartesian(const QVector3D& cart) const override {
         if (!m_backward) {
-            qWarning() << "QChartFunctionalProjection3D::fromWorld: backward mapping is null, returning NaN";
+            qWarning() << "QFunctionalProjection3D::fromCartesian: backward mapping is null, returning NaN";
             return QVector3D(qQNaN(), qQNaN(), qQNaN());
         }
-        return m_backward(w.x(), w.y(), w.z());
+        return m_backward(cart.x(), cart.y(), cart.z());
     }
 
     // ── 包围盒：自定义优先，否则基类采样 ──
-    QChartWorldBox computeWorldBounds(const QVector3D& dataMin,
+    ViewCube computeViewCube(const QVector3D& dataMin,
                                       const QVector3D& dataMax) const override {
         if (m_boundsFn)
             return m_boundsFn(dataMin, dataMax);
-        return QChartProjection3D::computeWorldBounds(dataMin, dataMax);
+        return QChartProjection3D::computeViewCube(dataMin, dataMax);
     }
 
     // ── 初始值 ──
@@ -67,5 +67,5 @@ private:
     std::function<QVector3D(qreal x, qreal y, qreal z)> m_backward;
     QVector3D m_defaultDataMin;
     QVector3D m_defaultDataMax;
-    std::function<QChartWorldBox(const QVector3D&, const QVector3D&)> m_boundsFn;
+    std::function<ViewCube(const QVector3D&, const QVector3D&)> m_boundsFn;
 };

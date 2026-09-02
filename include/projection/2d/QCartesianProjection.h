@@ -11,6 +11,8 @@ public:
 
     CoordinateSystem type() const override { return CoordinateSystem::Cartesian; }
 
+    bool isIdentityMapping() const override { return true; }
+
     // ── Numeric ↔ View Cartesian：恒等 ──
     QPointF toCartesian(qreal num0, qreal num1) const override {
         return QPointF(num0, num1);
@@ -18,6 +20,14 @@ public:
 
     QPointF fromCartesian(qreal x, qreal y) const override {
         return QPointF(x, y);
+    }
+
+    // QCartesianProjection.h 中添加
+    QString glslToCartesian() const override {
+        return "vec3(num.x, num.y, 0.0)";
+    }
+    QString glslFromCartesian() const override {
+        return "vec3(cart.x, cart.y, 0.0)";
     }
 
     // ── 包络：恒等（Cartesian 下两种空间同构）──

@@ -1,6 +1,9 @@
 // QChartLegend.cpp —— 图例实现（Phase 1：单列竖向，四角 overlay）
 #include "QChartLegend.h"
 #include "QChartSeries.h"
+#include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(logLegend, "chart.legend.debug")   // 图例调试（Phase 1 简化：单列竖向，四角 overlay）
 
 namespace {
 // 布局常量（Phase 1 简化：固定行高/色块，文字宽度按字符数估算）
@@ -17,14 +20,14 @@ struct Layout {
 };
 
 Layout computeLayout(Qt::Alignment alignment, const QRectF& plotArea,
-                     const QList<QChartSeries*>& items) {
+                     const QList<QChartSeries*>& items, const QFontMetricsF& fm = QFontMetricsF(QFont())) {
     Layout L;
     const int n = items.size();
     if (n == 0) return L;
 
     qreal textW = 0.0;
     for (const QChartSeries* s : items)
-        if (s) textW = qMax(textW, static_cast<qreal>(s->name().size()) * CHAR_W);
+        if (s) textW = qMax(textW, fm.horizontalAdvance(s->name()));
 
     const qreal contentW = COLOR_BOX + GAP + textW;
     const qreal boxW = contentW + 2.0 * PADDING;
@@ -77,7 +80,7 @@ void QChartLegend::clearTextColor() {
 void QChartLegend::draw(QPainter* p, const QRectF& plotArea,
                         const QList<QChartSeries*>& items) const {
     if (!p || !m_visible || items.isEmpty()) return;
-    const Layout L = computeLayout(m_alignment, plotArea, items);
+    const Layout L = computeLayout(m_alignment, plotArea, items, p->fontMetrics());
     if (L.box.isEmpty()) return;
 
     p->save();
@@ -104,6 +107,7 @@ void QChartLegend::draw(QPainter* p, const QRectF& plotArea,
         p->setBrush(Qt::NoBrush);
         p->drawText(row.adjusted(COLOR_BOX + GAP, 0, 0, 0),
                     Qt::AlignVCenter | Qt::AlignLeft, s->name());
+        qCDebug(logLegend) << "row:" << row << "textRect:" << row.adjusted(COLOR_BOX + GAP, 0, 0, 0);
     }
     p->restore();
 }

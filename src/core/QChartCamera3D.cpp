@@ -7,7 +7,7 @@
 #include <QVariantAnimation>
 #include <QtMath>
 
-QChartCamera3D::QChartCamera3D(QObject* parent) : QChartCamera(parent) {
+QChartCamera3D::QChartCamera3D(QObject* parent) : QChartAbstractCamera(parent) {
     // D-3D-3：QVector3D 若 Qt 未内建 QVariantAnimation 插值器则补齐（线性插值）。
     // 在首个相机构造时注册（库初始化处的实际落点）；重复注册幂等（覆盖为同一线性实现）。
     static const bool registered = []() {
@@ -22,7 +22,7 @@ QChartCamera3D::QChartCamera3D(QObject* parent) : QChartCamera(parent) {
 }
 
 // ===== 主状态：viewCube =====
-void QChartCamera3D::setViewCube(const QChartWorldBox& box) {
+void QChartCamera3D::setViewCube(const ViewCube& box) {
     if (m_viewCube.min == box.min && m_viewCube.max == box.max) return;
     m_viewCube = box;
     emit viewChanged();
@@ -43,7 +43,7 @@ void QChartCamera3D::setViewCubeSize(const QVector3D& s) {
     }
     const QVector3D center = viewCubeCenter();
     const QVector3D half = s * 0.5f;
-    const QChartWorldBox box{ center - half, center + half };
+    const ViewCube box{ center - half, center + half };
     if (box.min == m_viewCube.min && box.max == m_viewCube.max) return;
     m_viewCube = box;
     emit viewChanged();
@@ -176,20 +176,53 @@ void QChartCamera3D::panViewCube(qreal dxWorld, qreal dyWorld) {
 }
 
 // ===== fit：初始取景框（A3 链终点）=====
-void QChartCamera3D::setViewCubeToFit(const QChartWorldBox& box) {
+void QChartCamera3D::setViewCubeToFit(const ViewCube& box) {
     setViewCube(box);   // orientation/fovY 保持
 }
 
 // ===== 投影 =====
-QChartProjectedPoint QChartCamera3D::project(const QVector3D& world, const QRectF& plotArea) const {
+QChartProjectedPoint QChartCamera3D::project(const QVector3D& cart, const QRectF& plotArea) const {
     qreal aspect = 1.0;
     if (plotArea.height() > 0.0) aspect = plotArea.width() / plotArea.height();
 
     const QMatrix4x4 view = viewMatrix();
-    const QVector4D clip = viewProjectionMatrix(aspect) * QVector4D(world, 1.0f);
+    const QVector4D clip = viewProjectionMatrix(aspect) * QVector4D(cart, 1.0f);
     QChartProjectedPoint result;
     result.screen = QChartMath::clipToScreen(clip, plotArea);
-    result.depth = QChartMath::viewDepth(view, world);
-    result.world = world;   // GL 顶点源（t42，§3.2）
+    result.depth = QChartMath::viewDepth(view, cart);
+    result.cart = cart;   // GL 顶点源（t42，§3.2）
     return result;
+}
+
+// ===== 反投影：屏幕像素 → 世界空间射线 =====
+Ray QChartCamera3D::unproject(const QPointF& pixel, const QRectF& plotArea) const {
+    // 1. 将像素坐标转换为 NDC（-1 到 1），注意 Y 轴翻转
+    qreal ndcX = (pixel.x() - plotArea.left()) / plotArea.width() * 2.0 - 1.0;
+    qreal ndcY = 1.0 - (pixel.y() - plotArea.top()) / plotArea.height() * 2.0;  // 屏幕 Y 向下，NDC Y 向上
+
+    // 2. 构造近裁面（z=-1）和远裁面（z=+1）的 NDC 点（齐次坐标，w=1）
+    const QVector4D nearNDC(ndcX, ndcY, -1.0, 1.0);
+    const QVector4D farNDC(ndcX, ndcY,  1.0, 1.0);
+
+    // 3. 计算视图-投影合并矩阵的逆矩阵
+    qreal aspect = plotArea.width() / plotArea.height();
+    QMatrix4x4 invVP = viewProjectionMatrix(aspect).inverted();
+
+    // 4. 将 NDC 点映射到世界空间（齐次除法）
+    QVector4D worldNear = invVP * nearNDC;
+    QVector4D worldFar  = invVP * farNDC;
+    if (qFuzzyIsNull(worldNear.w()) || qFuzzyIsNull(worldFar.w())) {
+        // 如果 w 接近 0，说明点在无穷远，退化情况返回零射线
+        return Ray{ QVector3D(), QVector3D(0,0,1) };
+    }
+    QVector3D origin = QVector3D(worldNear.x() / worldNear.w(),
+                                 worldNear.y() / worldNear.w(),
+                                 worldNear.z() / worldNear.w());
+    QVector3D farPoint = QVector3D(worldFar.x() / worldFar.w(),
+                                   worldFar.y() / worldFar.w(),
+                                   worldFar.z() / worldFar.w());
+    QVector3D direction = (farPoint - origin).normalized();
+
+    // 5. 返回射线
+    return Ray{ origin, direction };
 }

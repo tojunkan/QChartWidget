@@ -14,6 +14,9 @@
 #include <QWheelEvent>
 #include <QtMath>
 #include <cmath>
+#include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(logGlHost, "chart.glhost.debug")   // GlHost 内部调试（§5.1/§6.1）
 
 // ===== A9 兜底：QCHART_GL=0 环境变量强制 QPainter（§2.2；GL 默认、QPainter 保底）=====
 // 全局一次判定：环境变量存在且为 0 → GL 禁用（demo/测试可整进程回退，不弹 GL 窗口）
@@ -54,8 +57,13 @@ protected:
         // §6 Overlay：GL 不透明底色之上 QPainter 画 billboard 标签 + 图例（官方模式：paintGL 内
         //   QPainter；不重写 paintEvent）。标签 screenPos 为外层 plotArea 坐标 → 平移至本部件局部。
         QPainter p(this);
-        p.setClipRect(QRectF(0, 0, scene.plotArea.width(), scene.plotArea.height()));
+        // p.setClipRect(QRectF(0, 0, scene.plotArea.width(), scene.plotArea.height()));
+        p.setPen(Qt::yellow);
         p.translate(-scene.plotArea.topLeft());
+        qCDebug(logGlHost) << "GlHost geometry:" << geometry();
+        qCDebug(logGlHost) << "plotArea:" << scene.plotArea;
+        qCDebug(logGlHost) << "After translate: painter transform" << p.transform();
+        p.drawRect(scene.plotArea);   // §6.1 调试黄框（可选）
         QFont f = p.font();
         for (const QChartTextLabel& lbl : m_outer->m_glRenderer->labels()) {
             f.setPointSizeF(lbl.fontSize);
@@ -68,6 +76,7 @@ protected:
         if (scene.legend && scene.legend->isVisible())
             scene.legend->draw(&p, scene.plotArea, scene.legendItems);
     }
+
     void resizeGL(int w, int h) override {
         if (m_outer->m_glRenderer) m_outer->m_glRenderer->resizeGL(w, h);
     }

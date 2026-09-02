@@ -20,6 +20,24 @@ public:
     QPointF toCartesian(qreal num0, qreal num1) const override;
     QPointF fromCartesian(qreal x, qreal y) const override;
 
+    // 使用插值投影的 Shader 必须显式声明 uniform float u_blendAlpha;
+    // 并在渲染循环中通过 setUniformValue 将 C++ 端的 m_alpha 传入。
+    QString glslToCartesian() const override {
+        if (!m_a || !m_b) return "num";
+        // 拼接两个子投影的表达式，并用 GLSL 内置 mix 进行线性插值
+        return QString("mix( (%1), (%2), u_blendAlpha )")
+            .arg(m_a->glslToCartesian())
+            .arg(m_b->glslToCartesian());
+    }
+
+    QString glslFromCartesian() const override {
+        if (!m_a || !m_b) return "cart";
+        // 反向映射同样插值
+        return QString("mix( (%1), (%2), u_blendAlpha )")
+            .arg(m_a->glslFromCartesian())
+            .arg(m_b->glslFromCartesian());
+    }
+
     /// 包络委托给目标投影 B（动画期间不 pan/zoom，仅刻度/包络用近似值）
     QRectF computeDataBounds(const QRectF& viewRect) const override;
     QRectF computeViewRect(const QRectF& dataBounds) const override;

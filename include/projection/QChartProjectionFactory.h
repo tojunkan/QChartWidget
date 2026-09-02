@@ -2,10 +2,17 @@
 // 根据 CoordinateSystem 枚举创建对应 Projection 实例
 // 也可通过 createFunctional 传入 lambda 创建自定义投影
 #pragma once
+#include "QChartAbstractProjection.h"
 #include "QChartProjection.h"
 #include "QCartesianProjection.h"
 #include "QPolarProjection.h"
 #include "QFunctionalProjection.h"
+
+#include "QChartProjection3D.h"
+#include "QCartesianProjection3D.h"
+#include "QSphericalProjection3D.h"
+#include "QCylindricalProjection3D.h"
+#include "QFunctionalProjection3D.h"
 #include <memory>
 #include <functional>
 #include <QDebug>
@@ -17,17 +24,23 @@ public:
     /// <summary>
     /// 根据坐标系类型创建投影。Functional 类型不能通过此方法创建（缺少 lambda）
     /// </summary>
-    static std::unique_ptr<QChartProjection> create(CoordinateSystem type) {
+    static std::unique_ptr<QChartAbstractProjection> create(QChartAbstractProjection::CoordinateSystem type) {
         switch (type) {
-        case CoordinateSystem::Cartesian:
-            qCDebug(logFactory) << "Creating QCartesianProjection";
+        // ---- 2D ----
+        case QChartAbstractProjection::CoordinateSystem::Cartesian:
             return std::make_unique<QCartesianProjection>();
-
-        case CoordinateSystem::Polar:
-            qCDebug(logFactory) << "Creating QPolarProjection";
+        case QChartAbstractProjection::CoordinateSystem::Polar:
             return std::make_unique<QPolarProjection>();
 
-        case CoordinateSystem::Functional:
+        // ---- 3D ----
+        case QChartAbstractProjection::CoordinateSystem::Cartesian3D:
+            return std::make_unique<QCartesianProjection3D>();
+        case QChartAbstractProjection::CoordinateSystem::Spherical:
+            return std::make_unique<QSphericalProjection3D>();
+        case QChartAbstractProjection::CoordinateSystem::Cylindrical:
+            return std::make_unique<QCylindricalProjection3D>();
+
+        case QChartAbstractProjection::CoordinateSystem::Functional:
             qWarning() << "QChartProjectionFactory: Cannot create QFunctionalProjection"
                           " without mapping functions — use createFunctional() instead";
             return nullptr;

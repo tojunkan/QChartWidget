@@ -11,12 +11,17 @@
 #include <QRectF>
 #include <QString>
 #include <QVector3D>
+#include <QpainterPath>
 #include <Qt>
-#include "QChartProjection3D.h"   // QChartWorldBox（QChartScene::worldBounds 按值）
+#include "QChartAbstractProjection.h"   // ViewCube（QChartScene::viewCube 按值）
+#include "QChartCamera.h"
+#include "QChartPrimitive.h"
+#include "QChartTextLabel.h"
+#include "QChartScene.h"
 
 class QChartAxis;
 class QChartLayer;
-class QChartProjection;
+class QChartAbstractProjection;
 class QChartLegend;
 class QChartSeries;
 class QChartCamera3D;
@@ -28,76 +33,73 @@ class QPaintDevice;
 // depth 由 ProjectFn3D 全链闭包（Layer3D 组装）返回直接填充（= camera project 的 viewDepth，-viewZ，越大越远）。
 // 分层（§7.1，v2 定案）：Grid 与 Series 统一深度排序（Grid 项 depth 减 kGridDepthBias 保证同深度系列优先）；
 // ForegroundDecor 恒后画（盒边/spine/刻度点，不与系列/网格比较深度）。
-struct QChartPrimitive {
-    enum class Type { Point, LineSegment };
-    enum class Layer { Grid, Series, ForegroundDecor };
-    Type type = Type::Point;
-    QPointF a;                // 屏幕坐标：Point 位置 / LineSegment 起点
-    QPointF b;                // 屏幕坐标：LineSegment 终点（Point 忽略）
-    qreal depth = 0.0;        // 排序键：-viewZ（越大越远；绘制按 depth 降序 = 远→近，近者后画覆盖远者）
-    int dataIndex = -1;       // 数据点索引（系列图元=起点/单点索引；轴/网格装饰=-1）；hover 用它定位 (u,v)
-    qreal markerSize = 4.0;   // Point 标记半径（px）
-    QColor color;             // 绘制色（收集时已按系列主题/override 展开）
-    qreal penWidth = 1.0;     // 线宽（px）
-    Layer layer = Layer::Series;   // 默认 Series → 现有系列收集代码零改动
-    // ★ Phase 3 GL（t42，design_phase3.md §3.2）：World 端点（A5：VBO 顶点 = World float3，仅 u_viewProj 变换）。
-    // QPainter 路径忽略（默认零值）；GL 路径 buildBatches 用它打包 16B interleaved 顶点。
-    QVector3D worldA{0, 0, 0};   // Point 位置 / LineSegment 起点（World 空间，toWorld 后）
-    QVector3D worldB{0, 0, 0};   // LineSegment 终点（World 空间；Point 忽略）
-};
 
 /// 网格深度偏置（§7.2，painter 版 polygon offset）：Grid 项 depth -= kGridDepthBias，
 /// 保证同深度处系列优先（z-fighting 时系列赢）。t29 Renderer 应用。
-static constexpr qreal kGridDepthBias = 1e-3;
+// static constexpr qreal kGridDepthBias = 1e-3;
 
 /// 3D billboard 文本标签（design_3d_axes.md §6.2；t27 Layer3D 收集、t29 Renderer 绘制）
-struct QChartTextLabel {
-    QPointF screenPos;          // 锚点屏幕坐标（已含偏移）
-    QString text;               // tickLabels 输出 或 轴标题
-    Qt::Alignment anchor = Qt::AlignLeft | Qt::AlignVCenter;  // 相对 screenPos 的对齐
-    qreal fontSize = 10.0;      // 像素字号
-    QColor color;               // 主题 textColor / axisColor
-    bool isTitle = false;       // 轴标题（渲染可加大加粗）
-};
 
 // 场景快照：render 时由 QChartWidget 组装。
 // projection 已解析临时投影优先级（tempProjection ? tempProjection : projection）。
-struct QChartScene {
-    QRectF plotArea;                 // 绘图区像素矩形
-    QRectF dataBounds;               // 当前可见 Numeric 范围
-    QRectF viewRect;                 // View Cartesian 视窗
-    const QChartProjection* projection = nullptr;
-    QList<QChartAxis*> axes;
-    QList<QChartLayer*> layers;
-    QColor backgroundColor;          // 画布底色（invalid = 不填充，即透明）
-    QChartLegend* legend = nullptr;  // 图例（Phase 1 overlay）
-    QList<QChartSeries*> legendItems; // 图例条目（widget 组装：汇总所有 layer、跳过空 name）
-    bool exportMode = false;         // 导出模式：跳过调试黄框等屏显专用绘制
 
-    // ===== 3D 段（design_3d.md §7.2；2D 场景保持默认值，零行为变化）=====
-    const QChartCamera3D* camera3D = nullptr;   // 非空 = 3D 场景（2D 场景保持 null）
-    QList<QChartLayer3D*> layers3D;             // 3D 图层（camera3D 非空时有效）
-    QChartWorldBox worldBounds;                 // 当前可见 World 盒（fit/网格地板用）
-    bool is3D() const { return camera3D != nullptr; }
-};
-
-class QChartRenderer {
+class QChartRenderer
+{
 public:
-    virtual ~QChartRenderer();
+    virtual ~QChartRenderer() = default;
 
-    /// 将场景渲染到目标设备。不得假设 device 是 QWidget。
-    virtual void render(const QChartScene& scene, QPaintDevice* device) = 0;
+    
+    // 公开接口
+    
 
-    /// 直接绘制到 device，不读写内部 QPixmap 缓存。
-    /// 用途：导出（PNG/SVG/PDF）——避免矢量 device 被栅格化，且避免污染屏显缓存。
-    virtual void renderUncached(const QChartScene& scene, QPaintDevice* device) = 0;
+    /// 主渲染入口：执行完整的 4 步流水线
+    /// 步骤 1（收集）由 Widget 在调用前完成，Scene 已填充 Numeric 数据
+    /// 步骤 2（变换+裁剪）由基类执行
+    /// 步骤 3（图元绘制）和步骤 4（标签绘制）由子类实现
+    void render(QChartScene& scene, QPaintDevice* device);
 
-    /// 置脏：下次 render 重建对应缓存（无缓存后端时可为空操作）
-    virtual void invalidateBackground() = 0;
-    virtual void invalidateForeground() = 0;
+    /// 数据变化（Series 增删改、颜色变化等）→ 下一次 render 重算变换
+    // void invalidateData() { m_dataDirty = true; }
 
-    virtual void setCachingEnabled(bool enabled) = 0;
-    virtual bool isCachingEnabled() const = 0;
+    /// 视图变化（Camera 变化、窗口 resize 等）→ 下一次 render 重算变换和裁剪
+    void invalidateView() { m_viewDirty = true; }
+
+protected:
+    
+    // 子类必须实现
+    
+    // ---- 步骤 2 拆分为两个虚函数 ----
+    // 1. 变换：Numeric → Cartesian（CPU 后端做，GPU 后端跳过）
+    virtual void transformNumericToCartesian(QChartScene& scene) = 0;
+
+    // 2. 裁剪 + 标签解析（CPU 后端精确裁，GPU 后端可以粗裁或全可见）
+    virtual void cullAndResolveLabels(QChartScene& scene) = 0;
+
+    /// 绘制所有可见图元（visibility[i] == true）
+    virtual void drawPrimitives(QChartScene& scene,
+                                QPaintDevice* device,
+                                const QVector<bool>& visibility) = 0;
+
+    /// 绘制所有可见标签（label.visible == true）
+    virtual void drawLabels(QChartScene& scene,
+                            QPaintDevice* device) = 0;
+
+    static void drawLabel(QPainter& painter,
+                          const QRectF& plotArea,
+                          const QPointF& pixelAnchor,
+                          const QString& text,
+                          const QColor& color,
+                          qreal fontSize,
+                          Qt::Alignment alignment);
+    // 可选钩子
+
+    virtual void onRenderBegin(QPaintDevice* device) { Q_UNUSED(device); }
+    virtual void onRenderEnd(QPaintDevice* device) { Q_UNUSED(device); }
+
+    // 内部状态
+    // bool m_dataDirty = true;          // 数据变化 → 需要重算变换 数据变化应该在构建scene的时候判定，这是widget的活
+    bool m_viewDirty = true;          // 视图变化 → 需要重算变换和裁剪
+    QVector<bool> m_visibilityCache;  // 与 scene.primitives 一一对应
 };
 
 #endif // QCHARTRENDERER_H

@@ -72,6 +72,9 @@ set(QCHART_HEADERS
     include/core/QChartCamera3D.h
     include/core/QChartTheme.h
     include/core/QChartLegend.h
+    include/core/QChartScene.h
+    include/core/QChartTextLabel.h
+    include/core/QChartPrimitive.h
     include/core/QChartRenderer.h
     include/core/QPainterChartRenderer.h
     include/core/QOpenGLChartRenderer.h
@@ -96,20 +99,22 @@ set(QCHART_HEADERS
     include/utils/QDataPoint.h
     include/utils/QDataPoint3D.h
     include/utils/QDataRect.h
-    include/projection/QChartProjection.h
-    include/projection/QChartProjectionFactory.h
-    include/projection/QCartesianProjection.h
-    include/projection/QPolarProjection.h
-    include/projection/QFunctionalProjection.h
     include/projection/QInterpolatedProjection.h
-    include/projection/QChartProjection3D.h
-    include/projection/QChartCartesianProjection3D.h
-    include/projection/QChartCylindricalProjection3D.h
-    include/projection/QChartSphericalProjection3D.h
-    include/projection/QChartFunctionalProjection3D.h
+    include/projection/QChartProjectionFactory.h
+    include/projection/QChartAbstractProjection.h
+    include/projection/2d/QChartProjection.h
+    include/projection/2d/QCartesianProjection.h
+    include/projection/2d/QPolarProjection.h
+    include/projection/2d/QFunctionalProjection.h
+    include/projection/3d/QChartProjection3D.h
+    include/projection/3d/QCartesianProjection3D.h
+    include/projection/3d/QCylindricalProjection3D.h
+    include/projection/3d/QSphericalProjection3D.h
+    include/projection/3d/QFunctionalProjection3D.h
 )
 
-add_library(QChartWidget STATIC ${QCHART_SOURCES} ${QCHART_HEADERS})
+add_library(QChartWidget STATIC ${QCHART_SOURCES} ${QCHART_HEADERS}
+    include/core/QChartAbstractCamera.h)
 add_library(QChartWidget::QChartWidget ALIAS QChartWidget)
 
 target_include_directories(QChartWidget PUBLIC
@@ -127,6 +132,8 @@ target_include_directories(QChartWidget PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include/series/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/utils
     ${CMAKE_CURRENT_SOURCE_DIR}/include/projection
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/projection/2d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/projection/3d
 )
 target_link_libraries(QChartWidget PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::OpenGL Qt6::OpenGLWidgets)
 set_target_properties(QChartWidget PROPERTIES AUTOMOC ON)

@@ -1,5 +1,4 @@
-// QChartCamera.cpp —— 相机实现（基类 QChartCamera + 2D 相机 QChartCamera2D）
-// 2D 只做 viewRect 几何：fit / pan / zoom / center / zoom / View↔Pixel 线性映射。
+// QChartCamera.cpp —— 2D 相机实现
 #include "QChartCamera.h"
 #include <QDebug>
 #include <QLoggingCategory>
@@ -7,47 +6,41 @@
 
 Q_LOGGING_CATEGORY(logCamera, "chart.camera")
 
-// ===== 基类 =====
-QChartCamera::QChartCamera(QObject* parent) : QObject(parent) {}
-QChartCamera::~QChartCamera() = default;
-
-// ===== 2D 相机 =====
-QChartCamera2D::QChartCamera2D(QObject* parent) : QChartCamera(parent) {}
+// ===== 构造 =====
+QChartCamera::QChartCamera(QObject* parent) : QChartAbstractCamera(parent) {}
 
 // ===== 视窗状态 =====
-void QChartCamera2D::setViewRect(const QRectF& r) {
+void QChartCamera::setViewRect(const QRectF& r) {
+    if (m_viewRect == r) return;
     m_viewRect = r;
     emit viewChanged();
 }
 
 // ===== center / zoom =====
-void QChartCamera2D::setCenter(const QPointF& c) {
+void QChartCamera::setCenter(const QPointF& c) {
     if (m_viewRect.center() == c) return;
     m_viewRect.moveCenter(c);
     emit viewChanged();
 }
 
-void QChartCamera2D::setZoom(qreal z) {
+void QChartCamera::setZoom(qreal z) {
     if (z <= 0.0) {
-        qWarning() << "QChartCamera2D::setZoom: zoom must be > 0, ignoring" << z;
+        qWarning() << "QChartCamera::setZoom: zoom must be > 0, ignoring" << z;
         return;
     }
     if (qFuzzyCompare(m_viewRect.width(), z)) return;
-    // 以 center 为中心、两维等比例缩放 → center 不变、长宽比不变、宽度变为 z
     qreal factor = z / m_viewRect.width();
-    zoomViewCartesian(m_viewRect.center().x(), m_viewRect.center().y(),
-                      factor, factor);
+    zoomViewCartesian(m_viewRect.center().x(), m_viewRect.center().y(), factor, factor);
 }
 
-// ===== 视窗几何操作 =====
-void QChartCamera2D::panViewCartesian(qreal dx, qreal dy) {
+// ===== 交互操作 =====
+void QChartCamera::panViewCartesian(qreal dx, qreal dy) {
     m_viewRect.translate(dx, dy);
     emit viewChanged();
 }
 
-void QChartCamera2D::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY) {
+void QChartCamera::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY) {
     if (factorX <= 0.0 || factorY <= 0.0) return;
-    // 以 (cx, cy) 为中心缩放 viewRect，两维独立（禁交互维度传 1.0）
     qreal newW = m_viewRect.width()  * factorX;
     qreal newH = m_viewRect.height() * factorY;
     qreal newLeft = cx - (cx - m_viewRect.left()) * factorX;
@@ -56,9 +49,8 @@ void QChartCamera2D::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal 
     emit viewChanged();
 }
 
-// ===== fit 几何 =====
-bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy strategy) {
-    // Stretch：不做任何调整
+// ===== fit 几何（内部使用 m_fitStrategy） =====
+bool QChartCamera::fitViewRectToPlotArea(const QRectF& plotArea) {
     if (m_fitMode == ViewRectFitMode::Stretch) return false;
     if (plotArea.width() <= 0.0 || plotArea.height() <= 0.0) return false;
 
@@ -67,7 +59,6 @@ bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy s
     qreal plotW = plotArea.width();
     qreal plotH = plotArea.height();
 
-    // 记录旧 viewRect 的中心和四个角
     QPointF oldCenter = m_viewRect.center();
     qreal oldLeft = m_viewRect.left();
     qreal oldTop = m_viewRect.top();
@@ -76,37 +67,27 @@ bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy s
 
     qreal viewAspect = viewW / viewH;
     qreal plotAspect = plotW / plotH;
-
-    // 如果长宽比已经相同，跳过比例调整（但仍然可能应用额外缩放）
     bool sameAspect = qFuzzyCompare(viewAspect, plotAspect);
 
     qreal newW = viewW;
     qreal newH = viewH;
 
     if (!sameAspect) {
-        if (viewAspect > plotAspect) {
-            // viewRect 更宽（瘦长）
-            if (m_fitMode == ViewRectFitMode::Expand) 
+        if (viewAspect > plotAspect) { // view 更宽
+            if (m_fitMode == ViewRectFitMode::Expand)
                 newH = newW / plotAspect;
-                // Fit：宽度不变，调整高度使比例匹配 → 高度变小（留白）
-            else 
-                // Crop/Preserve：高度不变，调整宽度使比例匹配 → 宽度变大（裁剪）
+            else
                 newW = newH * plotAspect;
-        } else {
-            // viewRect 更高（胖）
-            if (m_fitMode == ViewRectFitMode::Expand) 
-                // Fit：高度不变，调整宽度使比例匹配 → 宽度变小（留白）
+        } else { // view 更高
+            if (m_fitMode == ViewRectFitMode::Expand)
                 newW = newH * plotAspect;
-            else 
-                // Crop/Preserve：宽度不变，调整高度使比例匹配 → 高度变大（裁剪）
+            else
                 newH = newW / plotAspect;
         }
     }
 
-    // 应用额外缩放因子（如果用户设置）
-    // 复用 m_scale 作为整体缩放系数，>0 有效，1.0 表示不缩放
-    if(m_fitMode == ViewRectFitMode::Preserve) {
-        // Preserve：保持 viewRect 不变的同时保证其面积也不变，依此保证数据的完整性和比例不变
+    // 额外缩放
+    if (m_fitMode == ViewRectFitMode::Preserve) {
         qreal oldArea = viewW * viewH;
         qreal newArea = newW * newH;
         if (newArea > 0.0) {
@@ -114,27 +95,24 @@ bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy s
             newW *= areaScale;
             newH *= areaScale;
         }
+    } else if (m_scale > 0.0 && !qFuzzyCompare(m_scale, 1.0)) {
+        newW *= m_scale;
+        newH *= m_scale;
     }
-    else {
-        if (m_scale > 0.0 && !qFuzzyCompare(m_scale, 1.0)) {
-            newW *= m_scale;
-            newH *= m_scale;
-        }
-    }
-    qCDebug(logCamera) << "fitViewRectToPlotArea: viewRect" << m_viewRect
-                  << "plotArea" << plotArea
-                  << "newW" << newW << "newH" << newH
-                  << "strategy" << static_cast<int>(strategy)
-                  << "fitMode" << static_cast<int>(m_fitMode)
-                  << "scale" << m_scale;
 
-    // 如果尺寸没有变化，返回
+    qCDebug(logCamera) << "fitViewRectToPlotArea: viewRect" << m_viewRect
+                       << "plotArea" << plotArea
+                       << "newW" << newW << "newH" << newH
+                       << "fitMode" << static_cast<int>(m_fitMode)
+                       << "strategy" << static_cast<int>(m_fitStrategy)
+                       << "scale" << m_scale;
+
     if (qFuzzyCompare(newW, m_viewRect.width()) && qFuzzyCompare(newH, m_viewRect.height()))
         return false;
 
-    // 根据锚点定位（你现有的 Keep* 枚举）
+    // 根据 m_fitStrategy 锚点定位
     qreal left, top;
-    switch (strategy) {
+    switch (m_fitStrategy) {
     case FitStrategy::KeepCenter:
         left = oldCenter.x() - newW / 2.0;
         top  = oldCenter.y() - newH / 2.0;
@@ -182,22 +160,48 @@ bool QChartCamera2D::fitViewRectToPlotArea(const QRectF& plotArea, FitStrategy s
     return true;
 }
 
-// ===== 坐标转换（唯一线性映射实现）=====
-QPointF QChartCamera2D::cartesianToPixel(const QRectF& viewRect, const QRectF& plotArea,
-                                         qreal cx, qreal cy) {
-    // View Cartesian → ViewNorm → Pixel（线性）
-    qreal nx = (cx - viewRect.left()) / viewRect.width();
-    qreal ny = (cy - viewRect.top())  / viewRect.height();
-    qreal px = plotArea.left() + nx * plotArea.width();
-    qreal py = plotArea.bottom() - ny * plotArea.height();
-    return QPointF(px, py);
+// ============================================================
+// 实现统一矩阵接口（CPU/GPU 双路）
+// ============================================================
+
+QMatrix4x4 QChartCamera::viewMatrix() const {
+    QMatrix4x4 mat;
+    // 平移使 viewRect 中心位于原点
+    mat.translate(-m_viewRect.center().x(), -m_viewRect.center().y(), 0.0f);
+    // 缩放映射到 [-1, 1]，Y 轴取反使世界 Y 向上与 NDC 一致
+    mat.scale(2.0f / m_viewRect.width(), -2.0f / m_viewRect.height(), 1.0f);
+    return mat;
 }
 
-QPointF QChartCamera2D::pixelToCartesian(const QRectF& viewRect, const QRectF& plotArea,
-                                         const QPointF& pixel) {
-    // Pixel → ViewNorm → View Cartesian（逆线性）
+QMatrix4x4 QChartCamera::projectionMatrix(qreal /*aspect*/) const {
+    // 2D 相机视图矩阵已输出标准 NDC，投影矩阵为单位矩阵
+    return QMatrix4x4();
+}
+
+QChartProjectedPoint QChartCamera::project(const QVector3D& cart, const QRectF& plotArea) const {
+    QChartProjectedPoint result;
+    result.cart = cart;
+
+    // 线性映射（与 cartesianToPixel 逻辑一致）
+    qreal nx = (cart.x() - m_viewRect.left()) / m_viewRect.width();
+    qreal ny = (cart.y() - m_viewRect.top())  / m_viewRect.height();
+    qreal px = plotArea.left() + nx * plotArea.width();
+    qreal py = plotArea.bottom() - ny * plotArea.height();
+
+    result.screen = QPointF(px, py);
+    result.depth = 0.0; // 纯 2D 深度为 0
+    return result;
+}
+
+Ray QChartCamera::unproject(const QPointF& pixel, const QRectF& plotArea) const {
+    // 2D 反投影：像素 → 世界坐标（z=0）
     qreal nx = (pixel.x() - plotArea.left()) / plotArea.width();
-    qreal ny = (plotArea.bottom() - pixel.y()) / plotArea.height();
-    return QPointF(viewRect.left() + nx * viewRect.width(),
-                   viewRect.top()  + ny * viewRect.height());
+    qreal ny = (plotArea.bottom() - pixel.y()) / plotArea.height(); // Y 翻转
+    qreal wx = m_viewRect.left() + nx * m_viewRect.width();
+    qreal wy = m_viewRect.top()  + ny * m_viewRect.height();
+
+    Ray ray;
+    ray.origin = QVector3D(wx, wy, 0.0f);
+    ray.direction = QVector3D(0.0f, 0.0f, 1.0f); // 垂直于屏幕平面
+    return ray;
 }

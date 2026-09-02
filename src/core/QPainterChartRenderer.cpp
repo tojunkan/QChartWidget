@@ -1,269 +1,458 @@
-// QPainterChartRenderer.cpp —— QPainter 后端渲染器实现
+// QPainterChartRenderer.cpp
 #include "QPainterChartRenderer.h"
-#include "QChartAxis.h"    // DrawContext + 轴绘制
-#include "QChartLayer.h"   // drawGrid / drawAllSeries
-#include "QChartLayer3D.h" // 3D 图层 collectPrimitives
-#include "QChartLegend.h"  // 图例绘制
-#include "QChartDebug.h"   // logRender / logWidget
+#include "QChartAbstractProjection.h"
+#include "QChartCamera.h"
+#include "QChartCamera3D.h"
+#include "ViewCube.h"
 #include <QPainter>
-#include <QFont>
-#include <QDebug>
 #include <QLoggingCategory>
-#include <QtMath>
-#include <algorithm>
 
-// 渲染每帧细节（createPath 采样等）——默认静默（QtWarningMsg），
-// 可用规则 `*.verbose=true` / `chart.render.verbose=true` 精确打开。
-Q_LOGGING_CATEGORY(logRenderVerbose, "chart.render.verbose", QtWarningMsg)
+Q_LOGGING_CATEGORY(logPainter, "chart.render.painter")
 
-void QPainterChartRenderer::render(const QChartScene& scene, QPaintDevice* device) {
+// 步骤 2a：Numeric → Cartesian 变换
+
+void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
+{
+    const QChartAbstractProjection* proj = scene.projection;
+    if (!proj) return;
+
+    const bool isIdentity = proj->isIdentityMapping();
+
+    for (QChartPrimitive& prim : scene.primitives) {
+        switch (prim.type) {
+        case QChartPrimitive::Type::Point:
+            prim.cartA = proj->toCartesian(prim.numA);
+            break;
+
+        case QChartPrimitive::Type::Line:
+            prim.cartA = proj->toCartesian(prim.numA);
+            prim.cartB = proj->toCartesian(prim.numB);
+            break;
+
+        case QChartPrimitive::Type::Rect:
+        case QChartPrimitive::Type::Ellipse: {
+            if (isIdentity) {
+                QVector3D tl = proj->toCartesian(
+                    QVector3D(prim.numRect.left(), prim.numRect.top(), 0.0f));
+                QVector3D br = proj->toCartesian(
+                    QVector3D(prim.numRect.right(), prim.numRect.bottom(), 0.0f));
+                prim.cartRect = QRectF(tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y());
+            } else {
+                // Rect/Ellipse → Polygon
+                prim.type = QChartPrimitive::Type::Polygon;
+                prim.numVerts.clear();
+                prim.numVerts.reserve(4);
+                prim.numVerts.append(QVector3D(prim.numRect.left(),  prim.numRect.top(),    0.0f));
+                prim.numVerts.append(QVector3D(prim.numRect.right(), prim.numRect.top(),    0.0f));
+                prim.numVerts.append(QVector3D(prim.numRect.right(), prim.numRect.bottom(), 0.0f));
+                prim.numVerts.append(QVector3D(prim.numRect.left(),  prim.numRect.bottom(), 0.0f));
+                prim.cartVerts.resize(4);
+                for (int i = 0; i < 4; ++i) {
+                    prim.cartVerts[i] = proj->toCartesian(prim.numVerts[i]);
+                }
+            }
+            break;
+        }
+
+        case QChartPrimitive::Type::Polygon:
+        case QChartPrimitive::Type::Path:
+        case QChartPrimitive::Type::TriangleMesh:
+        case QChartPrimitive::Type::TriangleFan:
+        case QChartPrimitive::Type::TriangleStrip: {
+            prim.cartVerts.resize(prim.numVerts.size());
+            for (int j = 0; j < prim.numVerts.size(); ++j) {
+                prim.cartVerts[j] = proj->toCartesian(prim.numVerts[j]);
+            }
+            prim.cartIndices = prim.numIndices;
+            break;
+        }
+        }
+    }
+}
+
+// 步骤 2b：裁剪 + 标签解析
+
+void QPainterChartRenderer::cullAndResolveLabels(QChartScene& scene)
+{
+    const int N = scene.primitives.size();
+    QVector<bool>& visibility = m_visibilityCache;
+    visibility.resize(N);
+
+    const QChartAbstractCamera* camera = scene.camera;
+
+    QVector<int> lastVisibleIndex(scene.maxSourceId + 1, -1);
+
+    for (int i = 0; i < N; ++i) {
+        const QChartPrimitive& prim = scene.primitives[i];
+        bool visible = isPrimitiveVisible(prim, camera);
+        visibility[i] = visible;
+        if (visible) {
+            lastVisibleIndex[prim.sourceId] = i;
+        }
+    }
+
+    // 绑定标签
+    for (QChartTextLabel& label : scene.labels) {
+        if (label.refPrimitiveId >= 0 && label.refPrimitiveId < N) {
+            const QChartPrimitive& prim = scene.primitives[label.refPrimitiveId];
+            label.cartesianAnchor = prim.cartA;
+            label.visible = visibility[label.refPrimitiveId];
+        }
+    }
+
+    // 自由标签
+    for (QChartTextLabel& label : scene.labels) {
+        if (label.refPrimitiveId != -1) continue;
+        int sid = label.sourceId;
+        if (sid >= 0 && sid < lastVisibleIndex.size()) {
+            int idx = lastVisibleIndex[sid];
+            if (idx != -1) {
+                label.cartesianAnchor = scene.primitives[idx].cartA;
+                label.visible = true;
+                continue;
+            }
+        }
+        label.visible = false;
+    }
+}
+
+// 步骤 3：图元绘制
+
+void QPainterChartRenderer::drawPrimitives(QChartScene& scene,
+                                           QPaintDevice* device,
+                                           const QVector<bool>& visibility)
+{
     if (!device) return;
 
-    QPainter p(device);
-    p.setRenderHint(QPainter::Antialiasing, true);
+    const QChartAbstractCamera* camera = scene.camera;
+    if (!camera) return;
 
-    if (!m_cachingEnabled) {
-        drawDirect(&p, scene);
-        return;
+    QPainter painter(device);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setClipRect(scene.plotArea);
+
+    // 根据相机类型选择映射方式
+    if (const QChartCamera* cam2d = dynamic_cast<const QChartCamera*>(camera)) {
+        drawPrimitives2D(painter, scene, cam2d);
+    } else if (const QChartCamera3D* cam3d = dynamic_cast<const QChartCamera3D*>(camera)) {
+        drawPrimitives3D(painter, scene, cam3d);
+    } else {
+        qWarning() << "QPainterChartRenderer: 未知相机类型";
     }
-
-    // 目标设备像素尺寸：QPaintDevice::width()/height() 对 QWidget 是逻辑尺寸、
-    // 对 QImage 是像素尺寸；统一乘 devicePixelRatioF() 得到设备像素尺寸。
-    qreal dpr = device->devicePixelRatioF();
-    QSize devicePixels(qRound(device->width() * dpr),
-                       qRound(device->height() * dpr));
-
-    if (m_bgDirty || m_bgCache.isNull() || m_bgCache.size() != devicePixels
-        || m_bgCache.devicePixelRatio() != dpr) {
-        m_bgCache = QPixmap(devicePixels);
-        m_bgCache.setDevicePixelRatio(dpr);
-        m_bgCache.fill(Qt::transparent);
-        QPainter bg(&m_bgCache);
-        bg.setRenderHint(QPainter::Antialiasing, true);
-        drawBackground(&bg, scene);
-        m_bgDirty = false;
-    }
-    p.drawPixmap(0, 0, m_bgCache);
-
-    if (m_fgDirty || m_fgCache.isNull() || m_fgCache.size() != devicePixels
-        || m_fgCache.devicePixelRatio() != dpr) {
-        m_fgCache = QPixmap(devicePixels);
-        m_fgCache.setDevicePixelRatio(dpr);
-        m_fgCache.fill(Qt::transparent);
-        QPainter fg(&m_fgCache);
-        fg.setRenderHint(QPainter::Antialiasing, true);
-        drawForeground(&fg, scene);
-        m_fgDirty = false;
-    }
-    p.drawPixmap(0, 0, m_fgCache);
 }
 
-void QPainterChartRenderer::renderUncached(const QChartScene& scene, QPaintDevice* device) {
-    if (!device) return;
-    QPainter p(device);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    drawDirect(&p, scene);
-}
+void QPainterChartRenderer::drawPrimitives2D(QPainter& painter,
+                                             const QChartScene& scene,
+                                             const QChartCamera* cam2d)
+{
+    const QRectF& plotArea = scene.plotArea;
+    auto& visibility = m_visibilityCache;
 
-void QPainterChartRenderer::invalidateBackground() { m_bgDirty = true; }
-void QPainterChartRenderer::invalidateForeground() { m_fgDirty = true; }
-void QPainterChartRenderer::setCachingEnabled(bool enabled) { m_cachingEnabled = enabled; }
-bool QPainterChartRenderer::isCachingEnabled() const { return m_cachingEnabled; }
+    for (int i = 0; i < scene.primitives.size(); ++i) {
+        if (!visibility[i]) continue;
+        const QChartPrimitive& prim = scene.primitives[i];
 
-void QPainterChartRenderer::drawDirect(QPainter* p, const QChartScene& scene) {
-    drawBackground(p, scene);
-    drawForeground(p, scene);
-}
+        QPointF pixelA = cam2d->project(QVector3D(prim.cartA.x(), prim.cartA.y(), 0), plotArea).screen;
+        painter.setPen(QPen(prim.color, prim.penWidth));
 
-// ===== 背景层（背景填充 + 轴 + 网格 + 调试黄框）=====
-void QPainterChartRenderer::drawBackground(QPainter* p, const QChartScene& scene) {
-    // 3D 模式：只填背景色（3D Widget 不向 scene.axes 添加轴，2D 网格/轴路径自然不画，D-3D-9）
-    if (scene.is3D()) {
-        if (scene.backgroundColor.isValid())
-            p->fillRect(QRectF(p->window()), scene.backgroundColor);
-        return;
-    }
-
-    // 画布底色：整 device 矩形填充（plotArea 跟随，无独立填充）；invalid 不填
-    if (scene.backgroundColor.isValid())
-        p->fillRect(QRectF(p->window()), scene.backgroundColor);
-
-    QFont f = p->font();
-    f.setPointSize(f.pointSize() - 1);
-    p->setFont(f);
-
-    // 构建 DrawContext —— 所有 draw 调用共用
-    DrawContext ctx;
-    ctx.plotArea   = scene.plotArea;
-    ctx.dataBounds = scene.dataBounds;
-    ctx.viewRect   = scene.viewRect;
-    ctx.projection = scene.projection;
-
-    qCDebug(logRender) << "drawBackground: plotArea=" << scene.plotArea
-        << "viewRect=" << scene.viewRect
-        << "dataBounds=" << scene.dataBounds
-        << "projection type=" << (scene.projection ? (int)scene.projection->type() : -1);
-
-    // ── 绘制所有轴 ──
-    for (auto* a : scene.axes) {
-        if (!a || !a->isVisible()) continue;
-
-        qCDebug(logRender) << "drawBackground: drawing axis alignment=" << a->alignment()
-            << "color=" << a->color()
-            << "isInterior=" << (a->alignment() == Qt::AlignHCenter || a->alignment() == Qt::AlignVCenter);
-
-        bool isInterior = (a->alignment() == Qt::AlignHCenter
-                        || a->alignment() == Qt::AlignVCenter);
-        if (isInterior) {
-            // 数据主脊：画在 offset = 0 的位置（通过 dataBounds 确定默认位置）
-            // offset=0 意味着画在 Numeric dim0=0 或 dim1=0 的等值线上
-            qreal defaultOffset = 0.0;
-            if (a->alignment() == Qt::AlignHCenter)
-                defaultOffset = ctx.dataBounds.top();  // Y 维度在默认位置
-            else
-                defaultOffset = ctx.dataBounds.left(); // X 维度在默认位置
-
-            QString nullLabel = "";
-            p->save();
-            p->setClipRect(scene.plotArea);
-            a->drawAtPosition(p, ctx, defaultOffset,
-                              /*axisLine=*/true, /*labels=*/false, /*ticks=*/true,
-                              /*label=*/nullLabel, /*pen=*/nullptr);
-            p->restore();
-        } else {
-            // 边框轴：画在 plotArea 边缘
-            a->drawAtEdge(p, ctx,
-                          /*axisLine=*/true, /*labels=*/true, /*ticks=*/true);
+        switch (prim.type) {
+        case QChartPrimitive::Type::Point: {
+            painter.setBrush(prim.color);
+            qreal r = prim.markerSize * 0.5;
+            painter.drawEllipse(pixelA, r, r);
+            break;
         }
-    }
-
-    // ── 绘制网格（取最后一个几何体）──
-    if (!scene.layers.isEmpty()) {
-        auto* geo = scene.layers.last();
-        p->save();
-        p->setClipRect(scene.plotArea);
-        geo->drawGrid(p, ctx);
-        p->restore();
-    }
-
-    // ── 调试：黄色 plotArea 边框（仅屏显；导出模式跳过，避免泄漏进导出产物）──
-    if (!scene.exportMode && logWidget().isDebugEnabled()) {
-        p->save();
-        p->setPen(Qt::yellow);
-        p->drawRect(scene.plotArea);
-        p->restore();
-    }
-}
-
-// ===== 前景层（系列）=====
-void QPainterChartRenderer::drawForeground(QPainter* p, const QChartScene& scene) {
-    // 3D 子路径：2D 路径一行不动（3D 场景走 drawForeground3D）
-    if (scene.is3D()) {
-        drawForeground3D(p, scene);
-        return;
-    }
-
-    DrawContext ctx;
-    ctx.plotArea   = scene.plotArea;
-    ctx.dataBounds = scene.dataBounds;
-    ctx.viewRect   = scene.viewRect;
-    ctx.projection = scene.projection;
-
-    for (auto* g : scene.layers) {
-        p->save();
-        p->setClipRect(scene.plotArea);
-        g->drawAllSeries(p, ctx);
-        p->restore();
-    }
-
-    // 图例（B1 overlay，clip 到 plotArea）
-    if (scene.legend && scene.legend->isVisible()) {
-        p->save();
-        p->setClipRect(scene.plotArea);
-        scene.legend->draw(p, scene.plotArea, scene.legendItems);
-        p->restore();
-    }
-}
-
-// ===== 3D 前景子路径（design_3d_axes.md §7.2 v2）：collect → 分桶 → 偏置 → 统一排序 → decor → labels =====
-void QPainterChartRenderer::drawForeground3D(QPainter* p, const QChartScene& scene) {
-    // 1. collect：遍历 3D 图层收集图元（深度已在闭包内算好：-viewZ，越大越远）+ labels 出参
-    QVector<QChartPrimitive> items;
-    QVector<QChartTextLabel> labels;
-    for (auto* layer3D : scene.layers3D) {
-        if (!layer3D) continue;
-        layer3D->collectPrimitives(scene.camera3D, scene.plotArea, items, &labels);
-    }
-
-    // 2. 分桶：depthItems（Grid+Series 统一深度排序）+ decorItems（ForegroundDecor 恒后画）
-    //    Grid 深度偏置（painter 版 polygon offset）：depth += kGridDepthBias →
-    //    同深度处网格视为更远、先画，系列后画覆盖（§10.2 #13 gridTie_seriesWins）
-    QVector<QChartPrimitive> depthItems, decorItems;
-    depthItems.reserve(items.size());
-    for (const QChartPrimitive& prim : items) {
-        if (prim.layer == QChartPrimitive::Layer::ForegroundDecor) {
-            decorItems.append(prim);
-        } else {
-            QChartPrimitive copy = prim;
-            if (copy.layer == QChartPrimitive::Layer::Grid)
-                copy.depth += kGridDepthBias;
-            depthItems.append(copy);
+        case QChartPrimitive::Type::Line: {
+            QPointF pixelB = cam2d->project(QVector3D(prim.cartB.x(), prim.cartB.y(), 0), plotArea).screen;
+            painter.setBrush(Qt::NoBrush);
+            painter.drawLine(pixelA, pixelB);
+            break;
         }
-    }
-
-    // 3. depthItems 按 depth 降序（远→近）统一排序并绘制（球前网格 depth 大 → 后画 → 遮挡球 ✓）
-    std::sort(depthItems.begin(), depthItems.end(),
-              [](const QChartPrimitive& a, const QChartPrimitive& b) { return a.depth > b.depth; });
-    p->save();
-    p->setClipRect(scene.plotArea);
-    drawPrimitives(p, depthItems);
-
-    // 4. decorItems（顺序）：盒 12 边、spine、刻度点——恒可见，不被系列/网格遮挡（§7.1）
-    drawPrimitives(p, decorItems);
-    p->restore();
-
-    // 5. labels（billboard 文本）最上层
-    drawLabels(p, scene, labels);
-
-    // 6. 2D overlay（图例等）后画，不参与深度（D-3D-9）
-    if (scene.legend && scene.legend->isVisible()) {
-        p->save();
-        p->setClipRect(scene.plotArea);
-        scene.legend->draw(p, scene.plotArea, scene.legendItems);
-        p->restore();
-    }
-}
-
-// ===== 逐图元绘制 =====
-void QPainterChartRenderer::drawPrimitives(QPainter* p, const QVector<QChartPrimitive>& items) {
-    for (const QChartPrimitive& prim : items) {
-        p->setPen(QPen(prim.color, prim.penWidth));
-        if (prim.type == QChartPrimitive::Type::Point) {
-            p->setBrush(prim.color);
-            const qreal r = prim.markerSize * 0.5;
-            p->drawEllipse(prim.a, r, r);
-        } else {
-            p->setBrush(Qt::NoBrush);
-            p->drawLine(prim.a, prim.b);
+        case QChartPrimitive::Type::Rect: {
+            QPointF pixelBR = cam2d->project(QVector3D(prim.cartRect.right(), prim.cartRect.bottom(), 0), plotArea).screen;
+            QRectF pixelRect(pixelA, pixelBR);
+            painter.setBrush(prim.fillColor);
+            painter.drawRect(pixelRect);
+            break;
+        }
+        case QChartPrimitive::Type::Ellipse: {
+            QPointF pixelBR = cam2d->project(QVector3D(prim.cartRect.right(), prim.cartRect.bottom(), 0), plotArea).screen;
+            QRectF pixelRect(pixelA, pixelBR);
+            painter.setBrush(prim.fillColor);
+            painter.drawEllipse(pixelRect);
+            break;
+        }
+        case QChartPrimitive::Type::Polygon: {
+            if (prim.cartVerts.isEmpty()) break;
+            QPolygonF poly;
+            poly.reserve(prim.cartVerts.size());
+            for (const QVector3D& v : prim.cartVerts) {
+                poly.append(cam2d->project(v, plotArea).screen);
+            }
+            painter.setBrush(prim.fillColor);
+            painter.drawPolygon(poly);
+            break;
+        }
+        case QChartPrimitive::Type::Path: {
+            if (prim.cartVerts.isEmpty()) break;
+            QPolygonF poly;
+            poly.reserve(prim.cartVerts.size());
+            for (const QVector3D& v : prim.cartVerts) {
+                poly.append(cam2d->project(v, plotArea).screen);
+            }
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolyline(poly);
+            break;
+        }
+        case QChartPrimitive::Type::TriangleMesh:
+        case QChartPrimitive::Type::TriangleFan:
+        case QChartPrimitive::Type::TriangleStrip: {
+            if (prim.cartVerts.isEmpty()) break;
+            painter.setBrush(prim.fillColor);
+            // 简单实现：按三角形绘制
+            const auto& verts = prim.cartVerts;
+            if (prim.type == QChartPrimitive::Type::TriangleMesh && !prim.cartIndices.isEmpty()) {
+                for (int j = 0; j < prim.cartIndices.size(); j += 3) {
+                    if (j + 2 >= prim.cartIndices.size()) break;
+                    QPolygonF tri;
+                    tri.append(cam2d->project(QVector3D(verts[prim.cartIndices[j]].x(), verts[prim.cartIndices[j]].y(), 0), plotArea).screen);
+                    tri.append(cam2d->project(QVector3D(verts[prim.cartIndices[j+1]].x(), verts[prim.cartIndices[j+1]].y(), 0), plotArea).screen);
+                    tri.append(cam2d->project(QVector3D(verts[prim.cartIndices[j+2]].x(), verts[prim.cartIndices[j+2]].y(), 0), plotArea).screen);
+                    painter.drawPolygon(tri);
+                }
+            } else {
+                // TriangleFan / TriangleStrip: 每3个连续顶点构成一个三角形
+                for (int j = 0; j < verts.size() - 2; ++j) {
+                    QPolygonF tri;
+                    tri.append(cam2d->project(QVector3D(verts[j].x(),   verts[j].y(), 0), plotArea).screen);
+                    tri.append(cam2d->project(QVector3D(verts[j+1].x(), verts[j+1].y(), 0), plotArea).screen);
+                    tri.append(cam2d->project(QVector3D(verts[j+2].x(), verts[j+2].y(), 0), plotArea).screen);
+                    painter.drawPolygon(tri);
+                }
+            }
+            break;
+        }
         }
     }
 }
 
-// ===== billboard 文本（A6：drawText 即 billboard，QPainter 无真 3D 文本）=====
-void QPainterChartRenderer::drawLabels(QPainter* p, const QChartScene& scene,
-                                       const QVector<QChartTextLabel>& labels) {
-    if (labels.isEmpty()) return;
-    p->save();
-    p->setClipRect(scene.plotArea);
-    QFont f = p->font();
-    for (const QChartTextLabel& lbl : labels) {
-        f.setPointSizeF(lbl.fontSize);
-        f.setBold(lbl.isTitle);
-        p->setFont(f);
-        p->setPen(lbl.color);
-        // 对齐锚定 screenPos（零矩形 + TextDontClip 防裁剪）
-        const int flags = int(lbl.anchor) | Qt::TextDontClip;
-        p->drawText(QRectF(lbl.screenPos, QSizeF(0, 0)), flags, lbl.text);
+void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
+                                             const QChartScene& scene,
+                                             const QChartCamera3D* cam3d) {
+    const QRectF& plotArea = scene.plotArea;
+    auto& visibility = m_visibilityCache;
+
+    for (int i = 0; i < scene.primitives.size(); ++i) {
+        if (!visibility[i]) continue;
+        const QChartPrimitive& prim = scene.primitives[i];
+
+        QChartProjectedPoint ppA = cam3d->project(prim.cartA, plotArea);
+        if (!std::isfinite(ppA.screen.x()) || !std::isfinite(ppA.screen.y())) continue;
+
+        painter.setPen(QPen(prim.color, prim.penWidth));
+
+        switch (prim.type) {
+        case QChartPrimitive::Type::Point: {
+            painter.setBrush(prim.color);
+            qreal r = prim.markerSize * 0.5;
+            painter.drawEllipse(ppA.screen, r, r);
+            break;
+        }
+        case QChartPrimitive::Type::Line: {
+            QChartProjectedPoint ppB = cam3d->project(prim.cartB, plotArea);
+            if (!std::isfinite(ppB.screen.x()) || !std::isfinite(ppB.screen.y())) break;
+            painter.setBrush(Qt::NoBrush);
+            painter.drawLine(ppA.screen, ppB.screen);
+
+            break;
+        }
+        case QChartPrimitive::Type::Rect: {
+            QPointF tl = cam3d->project(QVector3D(prim.cartRect.left(), prim.cartRect.top(), 0), plotArea).screen;
+            QPointF br = cam3d->project(QVector3D(prim.cartRect.right(), prim.cartRect.bottom(), 0), plotArea).screen;
+            painter.setBrush(prim.fillColor);
+            painter.drawRect(QRectF(tl, br));
+            break;
+        }
+        case QChartPrimitive::Type::Ellipse: {
+            QPointF tl = cam3d->project(QVector3D(prim.cartRect.left(), prim.cartRect.top(), 0), plotArea).screen;
+            QPointF br = cam3d->project(QVector3D(prim.cartRect.right(), prim.cartRect.bottom(), 0), plotArea).screen;
+            painter.setBrush(prim.fillColor);
+            painter.drawEllipse(QRectF(tl, br));
+            break;
+        }
+        case QChartPrimitive::Type::Polygon: {
+            if (prim.cartVerts.isEmpty()) break;
+            QPolygonF poly;
+            poly.reserve(prim.cartVerts.size());
+            for (const QVector3D& v : prim.cartVerts) {
+                QPointF p = cam3d->project(v, plotArea).screen;
+                if (std::isfinite(p.x()) && std::isfinite(p.y()))
+                    poly.append(p);
+            }
+            if (poly.size() >= 3) {
+                painter.setBrush(prim.fillColor);
+                painter.drawPolygon(poly);
+            }
+            break;
+        }
+        case QChartPrimitive::Type::Path: {
+            if (prim.cartVerts.isEmpty()) break;
+            QPolygonF poly;
+            poly.reserve(prim.cartVerts.size());
+            for (const QVector3D& v : prim.cartVerts) {
+                QPointF p = cam3d->project(v, plotArea).screen;
+                if (std::isfinite(p.x()) && std::isfinite(p.y()))
+                    poly.append(p);
+            }
+            if (poly.size() >= 2) {
+                painter.setBrush(Qt::NoBrush);
+                painter.drawPolyline(poly);
+            }
+            break;
+        }
+        case QChartPrimitive::Type::TriangleMesh:
+        case QChartPrimitive::Type::TriangleFan:
+        case QChartPrimitive::Type::TriangleStrip: {
+            if (prim.cartVerts.isEmpty()) break;
+            painter.setBrush(prim.fillColor);
+            const auto& verts = prim.cartVerts;
+            auto project = [&](const QVector3D& v) -> QPointF {
+                return cam3d->project(v, plotArea).screen;
+            };
+            if (prim.type == QChartPrimitive::Type::TriangleMesh && !prim.cartIndices.isEmpty()) {
+                for (int j = 0; j < prim.cartIndices.size(); j += 3) {
+                    if (j + 2 >= prim.cartIndices.size()) break;
+                    QPolygonF tri;
+                    tri.append(project(verts[prim.cartIndices[j]]));
+                    tri.append(project(verts[prim.cartIndices[j+1]]));
+                    tri.append(project(verts[prim.cartIndices[j+2]]));
+                    painter.drawPolygon(tri);
+                }
+            } else {
+                for (int j = 0; j < verts.size() - 2; ++j) {
+                    QPolygonF tri;
+                    tri.append(project(verts[j]));
+                    tri.append(project(verts[j+1]));
+                    tri.append(project(verts[j+2]));
+                    painter.drawPolygon(tri);
+                }
+            }
+            break;
+        }
+        }
     }
-    p->restore();
+}
+
+// 步骤 4：标签绘制
+
+// 裁剪辅助函数（使用 ViewCube 工具类）
+
+bool QPainterChartRenderer::isPrimitiveVisible(const QChartPrimitive& prim,
+                                                const QChartAbstractCamera* camera) const
+{
+    if (!camera) return true;
+
+    if (const QChartCamera* cam2d = dynamic_cast<const QChartCamera*>(camera)) {
+        return isPrimitiveVisible2D(prim, cam2d->viewRect());
+    }
+    if (const QChartCamera3D* cam3d = dynamic_cast<const QChartCamera3D*>(camera)) {
+        return isPrimitiveVisible3D(prim, cam3d->viewCube());
+    }
+    return true;
+}
+
+bool QPainterChartRenderer::isPrimitiveVisible2D(const QChartPrimitive& prim, const QRectF& viewRect) const
+{
+    switch (prim.type) {
+    case QChartPrimitive::Type::Point:
+        return viewRect.contains(prim.cartA.x(), prim.cartA.y());
+
+    case QChartPrimitive::Type::Line: {
+        const QPointF a(prim.cartA.x(), prim.cartA.y());
+        const QPointF b(prim.cartB.x(), prim.cartB.y());
+        if (viewRect.contains(a) || viewRect.contains(b)) return true;
+        QLineF line(a, b);
+        QRectF rect = viewRect;
+        QLineF edges[4] = {
+            QLineF(rect.topLeft(), rect.topRight()),
+            QLineF(rect.topRight(), rect.bottomRight()),
+            QLineF(rect.bottomRight(), rect.bottomLeft()),
+            QLineF(rect.bottomLeft(), rect.topLeft())
+        };
+        for (const auto& edge : edges) {
+            QPointF inter;
+            if (line.intersects(edge, &inter) == QLineF::BoundedIntersection)
+                return true;
+        }
+        return false;
+    }
+
+    case QChartPrimitive::Type::Rect:
+    case QChartPrimitive::Type::Ellipse:
+        return viewRect.intersects(prim.cartRect);
+
+    case QChartPrimitive::Type::Polygon:
+    case QChartPrimitive::Type::Path:
+    case QChartPrimitive::Type::TriangleMesh:
+    case QChartPrimitive::Type::TriangleFan:
+    case QChartPrimitive::Type::TriangleStrip: {
+        if (prim.cartVerts.isEmpty()) return false;
+        qreal minX = prim.cartVerts[0].x(), maxX = minX;
+        qreal minY = prim.cartVerts[0].y(), maxY = minY;
+        for (const auto& v : prim.cartVerts) {
+            minX = qMin(minX, v.x()); maxX = qMax(maxX, v.x());
+            minY = qMin(minY, v.y()); maxY = qMax(maxY, v.y());
+        }
+        return viewRect.intersects(QRectF(minX, minY, maxX - minX, maxY - minY));
+    }
+    default:
+        return true;
+    }
+}
+
+bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, const ViewCube& viewCube) const
+{
+    // 使用 ViewCube 工具类的 intersects 方法
+    // 先为图元构建一个包围盒
+    switch (prim.type) {
+    case QChartPrimitive::Type::Point:
+        return viewCube.contains(prim.cartA);
+
+    case QChartPrimitive::Type::Line: {
+        // 用线段两端点形成包围盒
+        ViewCube lineCube(prim.cartA, prim.cartB);
+        return viewCube.intersects(lineCube);
+    }
+
+    case QChartPrimitive::Type::Rect:
+    case QChartPrimitive::Type::Ellipse: {
+        qWarning() << "QPainterChartRenderer: isPrimitiveVisible3D: Rect/Ellipse 3D 裁剪未实现，使用包围盒近似";
+        // Rect/Ellipse 在 z=0 平面，构建薄片包围盒
+        QVector3D min(prim.cartRect.left(), prim.cartRect.top(), 0);
+        QVector3D max(prim.cartRect.right(), prim.cartRect.bottom(), 0);
+        ViewCube rectCube(min, max);
+        return viewCube.intersects(rectCube);
+    }
+
+    case QChartPrimitive::Type::Polygon:
+    case QChartPrimitive::Type::Path:
+    case QChartPrimitive::Type::TriangleMesh:
+    case QChartPrimitive::Type::TriangleFan:
+    case QChartPrimitive::Type::TriangleStrip: {
+        if (prim.cartVerts.isEmpty()) return false;
+        // 构建 AABB
+        qreal minX = prim.cartVerts[0].x(), maxX = minX;
+        qreal minY = prim.cartVerts[0].y(), maxY = minY;
+        qreal minZ = prim.cartVerts[0].z(), maxZ = minZ;
+        for (const auto& v : prim.cartVerts) {
+            minX = qMin(minX, v.x()); maxX = qMax(maxX, v.x());
+            minY = qMin(minY, v.y()); maxY = qMax(maxY, v.y());
+            minZ = qMin(minZ, v.z()); maxZ = qMax(maxZ, v.z());
+        }
+        ViewCube aabb(QVector3D(minX, minY, minZ), QVector3D(maxX, maxY, maxZ));
+        return viewCube.intersects(aabb);
+    }
+    default:
+        return true;
+    }
 }

@@ -1,5 +1,5 @@
 // QChartCamera3D.h —— viewCube 主状态相机（R5，用户拍板；D-3D-3 的 Q_PROPERTY 条款随此修订）
-// 状态：viewCube（World 空间轴对齐盒 {min,max}，2D viewRect 的 3D 对标物，与相机无关）
+// 状态：viewCube（cart 空间轴对齐盒 {min,max}，2D viewRect 的 3D 对标物，与相机无关）
 //      + orientation（yaw/pitch，绕盒中心）+ fovY（固定用户参数，默认 45°）。
 // 派生（相机 = 纯映射器）：lookAt=盒中心；d=radius/tan(fovY/2)（radius=半对角线，保守拟合）；
 //      forward/up = R(yaw,pitch)·(0,0,−1)/(0,1,0)；position = lookAt − forward·d；
@@ -10,8 +10,8 @@
 #ifndef QCHARTCAMERA3D_H
 #define QCHARTCAMERA3D_H
 
-#include "QChartCamera.h"
-#include "QChartProjection3D.h"  // QChartWorldBox（t5 定义于此，禁止重复定义）
+#include "QChartAbstractCamera.h"
+#include "QChartProjection3D.h"  // ViewCube（t5 定义于此，禁止重复定义）
 #include "QChartMath.h"          // clipToScreen / viewDepth / perspectiveMatrix / orthographicMatrix
 #include <QVector3D>
 #include <QMatrix4x4>
@@ -19,15 +19,7 @@
 #include <QPointF>
 #include <QQuaternion>
 
-/// 投影结果：屏幕点 + 深度（排序键）；w<=0 时 screen 为 NaN。
-/// ★ Phase 3 GL（t42）：world 携带 World 点（A5：VBO 顶点源；GL 路径图元由此打包 16B 顶点）。
-struct QChartProjectedPoint {
-    QPointF screen;
-    qreal depth;
-    QVector3D world{0, 0, 0};   // 输入 World 点原样回传（默认零值 → 既有 2 元初始化零改动）
-};
-
-class QChartCamera3D : public QChartCamera {
+class QChartCamera3D : public QChartAbstractCamera {
     Q_OBJECT
     Q_PROPERTY(QVector3D viewCubeCenter READ viewCubeCenter WRITE setViewCubeCenter NOTIFY viewChanged)
     Q_PROPERTY(QVector3D viewCubeSize READ viewCubeSize WRITE setViewCubeSize NOTIFY viewChanged)
@@ -37,9 +29,9 @@ class QChartCamera3D : public QChartCamera {
 public:
     explicit QChartCamera3D(QObject* parent = nullptr);
 
-    // ===== 主状态：viewCube（World 轴对齐盒；默认 {0,0,0}-{10,10,10}）=====
-    QChartWorldBox viewCube() const { return m_viewCube; }
-    void setViewCube(const QChartWorldBox& box);
+    // ===== 主状态：viewCube（cart 轴对齐盒；默认 {0,0,0}-{10,10,10}）=====
+    ViewCube viewCube() const { return m_viewCube; }
+    void setViewCube(const ViewCube& box);
     QVector3D viewCubeCenter() const { return (m_viewCube.min + m_viewCube.max) * 0.5f; }
     void setViewCubeCenter(const QVector3D& c);   // 平移（pan）
     QVector3D viewCubeSize() const { return m_viewCube.max - m_viewCube.min; }
@@ -68,9 +60,9 @@ public:
     void setProjectionMode(ProjectionMode m);
 
     // ===== 矩阵（纯映射；Phase 3 预留：直接产出合并矩阵，D-3D-10）=====
-    QMatrix4x4 viewMatrix() const;                    // QMatrix4x4::lookAt(position, lookAt, up)
-    QMatrix4x4 projectionMatrix(qreal aspect) const;  // 透视 perspective(fovY,aspect,near,far) / 正交 ortho(±盒半尺寸)
-    QMatrix4x4 viewProjectionMatrix(qreal aspect) const;  // World→Clip 合并
+    QMatrix4x4 viewMatrix() const override;                    // QMatrix4x4::lookAt(position, lookAt, up)
+    QMatrix4x4 projectionMatrix(qreal aspect) const override;  // 透视 perspective(fovY,aspect,near,far) / 正交 ortho(±盒半尺寸)
+    QMatrix4x4 viewProjectionMatrix(qreal aspect) const override;  // cart→Clip 合并
 
     // ===== 交互几何运算（Widget 事件层调用；操作 viewCube 状态；Camera 不碰事件，D-3D-4）=====
     /// orbit：绕盒中心旋转 orientation（yaw 绕世界 up、pitch 绕右轴；pitch clamp ±89°；
@@ -78,17 +70,18 @@ public:
     void orbit(qreal deltaYawDeg, qreal deltaPitchDeg);
     /// dolly：缩放 viewCube（factor<1 = 盒缩小 = 内容放大；距离随盒尺寸重派生 → 内容 zoom，2D zoom 同构）
     void dolly(qreal factor);
-    /// pan：平移 viewCube（dx/dy World 单位；lookAt/position 跟随；仅 API/动画驱动，R6 无鼠标手势）
-    void panViewCube(qreal dxWorld, qreal dyWorld);
+    /// pan：平移 viewCube（dx/dy cart 单位；lookAt/position 跟随；仅 API/动画驱动，R6 无鼠标手势）
+    void panViewCube(qreal dxcart, qreal dycart);
 
     // ===== fit：初始取景框（A3 链终点）=====
     /// 设置 viewCube = 目标盒（中心=盒中心），orientation/fovY 保持
-    void setViewCubeToFit(const QChartWorldBox& box);
+    void setViewCubeToFit(const ViewCube& box);
 
     // ===== 投影（供 Layer3D 组装闭包 / Renderer）=====
-    /// = viewProjectionMatrix(aspect)*world → clipToScreen + viewDepth
-    QChartProjectedPoint project(const QVector3D& world, const QRectF& plotArea) const;
+    /// = viewProjectionMatrix(aspect)*cart → clipToScreen + viewDepth
+    QChartProjectedPoint project(const QVector3D& cart, const QRectF& plotArea) const override;
 
+    Ray unproject(const QPointF& pixel, const QRectF& plotArea) const override;  
 private:
     // ===== 派生辅助 =====
     /// 半对角线（radius）；零尺寸 → 0
@@ -102,7 +95,7 @@ private:
     /// 派生帧：forward/up = R(yaw,pitch)·(0,0,−1)/(0,1,0)；right = normalize(cross(forward, up))
     void frame(QVector3D& outForward, QVector3D& outUp, QVector3D& outRight) const;
 
-    QChartWorldBox m_viewCube{ QVector3D(0, 0, 0), QVector3D(10, 10, 10) };
+    ViewCube m_viewCube{ QVector3D(0, 0, 0), QVector3D(10, 10, 10) };
     qreal m_yaw = 45.0, m_pitch = 30.0;
     qreal m_fovY = 45.0;
     ProjectionMode m_projectionMode = ProjectionMode::Perspective;
