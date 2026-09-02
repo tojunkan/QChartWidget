@@ -13,7 +13,6 @@ struct QChartTextLabel
     // ---- 定位与归属 ----
     int sourceId = -1;          // 归属（Axis 或 Series 的 ID）
     int refPrimitiveId = -1;    // ★ 绑定的图元 ID（-1 表示自由标签）
-    int dataIndex = -1;         // 辅助（拾取或特殊排序用）
 
     // ---- 双空间锚点 ----
     QVector3D numericAnchor{0, 0, 0};   // 收集时填入

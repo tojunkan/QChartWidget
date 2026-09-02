@@ -234,15 +234,18 @@ void QChartAxis::drawAtEdge(QPainter* painter,
 }
 
 // ===== drawAtPosition：数据主脊 =====
-void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
+unsigned int QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,
                                 QVector<QChartPrimitive>& outPrims,
-                                QVector<QChartTextLabel>& outLabels) const
+                                QVector<QChartTextLabel>& outLabels,
+                                int segments = 72,
+                                bool drawLabels = true) const
 {
     if (!m_visible) return;
     if (dimMin > dimMax) std::swap(dimMin, dimMax);
 
+    unsigned int cnt = 0;
     // 1. 获取刻度
     QVector<qreal> ticks = tickValues(dimMin, dimMax);
     QStringList labels = tickLabels(ticks);
@@ -263,7 +266,6 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
     axisLine.type = QChartPrimitive::Type::Path;
     axisLine.color = axisColor;
     axisLine.penWidth = 1.0;
-    int segments = 72;
     for (int i = 0; i <= segments; ++i) {
         qreal t = static_cast<qreal>(i) / segments;
         qreal val = dimMin + t * (dimMax - dimMin);
@@ -274,6 +276,7 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         }
     }
     outPrims.append(axisLine);
+    cnt++;
 
     // 4. 对每个主刻度生成 7 个点 + 1 个标签
     for (int i = 0; i < ticks.size(); ++i) {
@@ -292,18 +295,22 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         center.color = axisColor;
         center.markerSize = 2.0;
         outPrims.append(center);
+        cnt++;
+
+        qreal tickLen = (dimMax - dimMin) * TICK_LENGTH;
 
         for (const QVector3D& d : dirs) {
             QChartPrimitive point;
             point.type = QChartPrimitive::Type::Point;
-            point.numA = pos + d * TICK_LENGTH;
+            point.numA = pos + d * tickLen;
             point.color = axisColor;
             point.markerSize = 2.0;
             outPrims.append(point);
+            cnt++;
         }
 
         // 4c. 标签（锚点指向刻度位置，方向由 Renderer 决定）
-        if (i < labels.size() && !labels[i].isEmpty()) {
+        if (drawLabels && i < labels.size() && !labels[i].isEmpty()) {
             QChartTextLabel label;
             label.text = labels[i];
             label.color = axisColor;
@@ -316,5 +323,5 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         }
     }
 
-    // 5. 不画次刻度（旧版 drawAtPosition 也不画）
+    return cnt;
 }

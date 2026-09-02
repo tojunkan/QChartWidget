@@ -1,23 +1,26 @@
-// QChartCamera3D.h —— viewCube 主状态相机（R5，用户拍板；D-3D-3 的 Q_PROPERTY 条款随此修订）
-// 状态：viewCube（cart 空间轴对齐盒 {min,max}，2D viewRect 的 3D 对标物，与相机无关）
-//      + orientation（yaw/pitch，绕盒中心）+ fovY（固定用户参数，默认 45°）。
-// 派生（相机 = 纯映射器）：lookAt=盒中心；d=radius/tan(fovY/2)（radius=半对角线，保守拟合）；
-//      forward/up = R(yaw,pitch)·(0,0,−1)/(0,1,0)；position = lookAt − forward·d；
-//      near = max(0.01, d − 1.5·radius)、far = d + 1.5·radius；
-//      viewProjectionMatrix = perspective(fovY,aspect,near,far) · lookAt(position,lookAt,up)。
-// ⚠ R5：删除 orthographicBox 独立状态——正交模式 viewCube 即投影盒（D-3D-2 直接成立，§2.3）。
-// ⚠ R6 硬约束：orbit 只旋转 orientation（viewCube 不动）；平移无鼠标手势（panViewCube 仅 API）。
+// QChartCamera3D.h
 #ifndef QCHARTCAMERA3D_H
 #define QCHARTCAMERA3D_H
 
 #include "QChartAbstractCamera.h"
-#include "QChartProjection3D.h"  // ViewCube（t5 定义于此，禁止重复定义）
-#include "QChartMath.h"          // clipToScreen / viewDepth / perspectiveMatrix / orthographicMatrix
+#include "QChartProjection3D.h"
+#include "QChartMath.h"
 #include <QVector3D>
 #include <QMatrix4x4>
 #include <QRectF>
 #include <QPointF>
 #include <QQuaternion>
+#include <QFlags>
+
+// 约束掩码：指定哪些参数在 fit 中被视为固定（不可变）
+enum class FitConstraint {
+    None      = 0,
+    FixedFov  = 1 << 0,   // 固定 fov，调整 distance
+    FixedDist = 1 << 1,   // 固定 distance，调整 fov
+    FixedNear = 1 << 2,   // 固定 near，调整 far
+    FixedFar  = 1 << 3    // 固定 far，调整 near
+};
+Q_DECLARE_FLAGS(FitConstraints, FitConstraint)
 
 class QChartCamera3D : public QChartAbstractCamera {
     Q_OBJECT
@@ -25,80 +28,101 @@ class QChartCamera3D : public QChartAbstractCamera {
     Q_PROPERTY(QVector3D viewCubeSize READ viewCubeSize WRITE setViewCubeSize NOTIFY viewChanged)
     Q_PROPERTY(qreal yaw READ yaw WRITE setYaw NOTIFY viewChanged)
     Q_PROPERTY(qreal pitch READ pitch WRITE setPitch NOTIFY viewChanged)
-    Q_PROPERTY(qreal fovY READ fovY WRITE setFovY NOTIFY viewChanged)
+    Q_PROPERTY(qreal roll READ roll WRITE setRoll NOTIFY viewChanged)
+    Q_PROPERTY(qreal fov READ fov WRITE setFov NOTIFY viewChanged)
+    Q_PROPERTY(qreal distance READ distance WRITE setDistance NOTIFY viewChanged)
+    Q_PROPERTY(qreal nearPlane READ nearPlane WRITE setNearPlane NOTIFY viewChanged)
+    Q_PROPERTY(qreal farPlane READ farPlane WRITE setFarPlane NOTIFY viewChanged)
+
 public:
     explicit QChartCamera3D(QObject* parent = nullptr);
 
-    // ===== 主状态：viewCube（cart 轴对齐盒；默认 {0,0,0}-{10,10,10}）=====
+    // ---- 数据锚点 (ViewCube) ----
     ViewCube viewCube() const { return m_viewCube; }
     void setViewCube(const ViewCube& box);
     QVector3D viewCubeCenter() const { return (m_viewCube.min + m_viewCube.max) * 0.5f; }
-    void setViewCubeCenter(const QVector3D& c);   // 平移（pan）
+    void setViewCubeCenter(const QVector3D& c);
     QVector3D viewCubeSize() const { return m_viewCube.max - m_viewCube.min; }
-    void setViewCubeSize(const QVector3D& s);     // 缩放（dolly）
+    void setViewCubeSize(const QVector3D& s);
 
-    // ===== 主状态：orientation（绕盒中心；默认 yaw 45°/pitch 30° 3/4 视角）=====
+    // ---- 姿态 (Yaw/Pitch/Roll) ----
     qreal yaw() const { return m_yaw; }
-    void setYaw(qreal deg);                       // 绕世界 up 轴
+    void setYaw(qreal deg);
     qreal pitch() const { return m_pitch; }
-    void setPitch(qreal deg);                     // 绕右轴；clamp ±89°（防万向锁）
+    void setPitch(qreal deg);
+    qreal roll() const { return m_roll; }
+    void setRoll(qreal deg);          // 新增
 
-    // ===== 主状态：镜头参数 =====
-    qreal fovY() const { return m_fovY; }
-    void setFovY(qreal deg);                      // (1, 179]，默认 45°
+    // ---- 镜头参数 ----
+    qreal fov() const { return m_fov; }          // 主视野角（垂直方向基准）
+    void setFov(qreal deg);                      // (1°, 179°]
+    qreal distance() const { return m_distance; }
+    void setDistance(qreal d);                   // 直接设置站位距离
 
-    // ===== 派生（只读；setter 移除，R5）=====
-    QVector3D position() const;   // = lookAt − forward·d
-    QVector3D lookAt() const { return viewCubeCenter(); }   // = viewCube 中心
-    QVector3D up() const;         // = R(yaw,pitch)·(0,1,0)
-    qreal nearPlane() const;      // = max(0.01, d − 1.5·radius)
-    qreal farPlane() const;       // = d + 1.5·radius
+    // ---- 近/远裁面（用户可覆盖） ----
+    qreal nearPlane() const { return m_near; }
+    void setNearPlane(qreal val);
+    qreal farPlane() const { return m_far; }
+    void setFarPlane(qreal val);
+    void resetNearFar();                         // 恢复为自动内切值 (distance ± radius)
 
-    // ===== 投影模式 =====
+    // ---- 投影模式 ----
     enum class ProjectionMode { Perspective, Orthographic };
     ProjectionMode projectionMode() const { return m_projectionMode; }
     void setProjectionMode(ProjectionMode m);
 
-    // ===== 矩阵（纯映射；Phase 3 预留：直接产出合并矩阵，D-3D-10）=====
-    QMatrix4x4 viewMatrix() const override;                    // QMatrix4x4::lookAt(position, lookAt, up)
-    QMatrix4x4 projectionMatrix(qreal aspect) const override;  // 透视 perspective(fovY,aspect,near,far) / 正交 ortho(±盒半尺寸)
-    QMatrix4x4 viewProjectionMatrix(qreal aspect) const override;  // cart→Clip 合并
+    // ---- 自动适配开关 ----
+    bool autoFit() const { return m_autoFit; }
+    void setAutoFit(bool on) { m_autoFit = on; }
 
-    // ===== 交互几何运算（Widget 事件层调用；操作 viewCube 状态；Camera 不碰事件，D-3D-4）=====
-    /// orbit：绕盒中心旋转 orientation（yaw 绕世界 up、pitch 绕右轴；pitch clamp ±89°；
-    /// viewCube 不动——R6 硬约束）；viewCube 零尺寸 → no-op（防除零）
-    void orbit(qreal deltaYawDeg, qreal deltaPitchDeg);
-    /// dolly：缩放 viewCube（factor<1 = 盒缩小 = 内容放大；距离随盒尺寸重派生 → 内容 zoom，2D zoom 同构）
-    void dolly(qreal factor);
-    /// pan：平移 viewCube（dx/dy cart 单位；lookAt/position 跟随；仅 API/动画驱动，R6 无鼠标手势）
-    void panViewCube(qreal dxcart, qreal dycart);
-
-    // ===== fit：初始取景框（A3 链终点）=====
-    /// 设置 viewCube = 目标盒（中心=盒中心），orientation/fovY 保持
-    void setViewCubeToFit(const ViewCube& box);
-
-    // ===== 投影（供 Layer3D 组装闭包 / Renderer）=====
-    /// = viewProjectionMatrix(aspect)*cart → clipToScreen + viewDepth
+    // ---- 基类接口实现 ----
+    QMatrix4x4 viewMatrix() const override;
+    QMatrix4x4 projectionMatrix(qreal aspect) const override;
+    QMatrix4x4 viewProjectionMatrix(qreal aspect) const override;
     QChartProjectedPoint project(const QVector3D& cart, const QRectF& plotArea) const override;
+    Ray unproject(const QPointF& pixel, const QRectF& plotArea) const override;
 
-    Ray unproject(const QPointF& pixel, const QRectF& plotArea) const override;  
+    // ---- Fit 到绘图区（支持约束掩码） ----
+    bool fitToPlotArea(const QRectF& plotArea) override { return fitCameraConfig(plotArea, FitConstraint::FixedFov); }
+
+    bool fitCameraConfig(const QRectF& plotArea, FitConstraints constraints = FitConstraint::None);
+
+    // ---- 交互快捷操作 ----
+    void orbit(qreal deltaYawDeg, qreal deltaPitchDeg);   // 旋转视角
+    void dolly(qreal factor);                             // 缩放（保持 viewCube 中心）
+    void panViewCube(qreal dxcart, qreal dycart);         // 平移
+
+    // ---- 辅助：获取当前位置/up/forward等（派生） ----
+    QVector3D position() const;   // = lookAt - forward * distance
+    QVector3D lookAt() const { return viewCubeCenter(); }
+    QVector3D up() const;         // 由姿态派生
+
 private:
-    // ===== 派生辅助 =====
-    /// 半对角线（radius）；零尺寸 → 0
-    qreal radius() const;
-    /// 保守拟合距离 d = radius / tan(fovY/2)
-    // 精确拟合（备将来实现，当前不做）：
-    //   d = max(hx / tan(fovX/2), hy / tan(fovY/2)) − hz
-    //   其中 hx/hy/hz = 盒半尺寸（x/y/z），fovX = fovY·aspect；考虑盒最近点（−hz 面）到相机距离，
-    //   使盒恰好填满视口且最近角点贴近近平面；保守拟合已保证盒整体在视锥内，工程够用。
-    qreal distance() const;
-    /// 派生帧：forward/up = R(yaw,pitch)·(0,0,−1)/(0,1,0)；right = normalize(cross(forward, up))
+    // ---- 内部辅助 ----
+    qreal radius() const { return m_radius; }          // 缓存值
+    void updateCachedRadius();                         // viewCube 变化时调用
     void frame(QVector3D& outForward, QVector3D& outUp, QVector3D& outRight) const;
+    bool isNearFarOverridden() const { return m_nearFarOverride; }
 
-    ViewCube m_viewCube{ QVector3D(0, 0, 0), QVector3D(10, 10, 10) };
-    qreal m_yaw = 45.0, m_pitch = 30.0;
-    qreal m_fovY = 45.0;
+    // ---- 核心状态 ----
+    ViewCube m_viewCube{ QVector3D(0,0,0), QVector3D(10,10,10) };
+    qreal m_yaw = 45.0;
+    qreal m_pitch = 30.0;
+    qreal m_roll = 0.0;
+    qreal m_distance = 24.14;     // 默认 45° fov 下的保守距离（将被构造函数重算）
+    qreal m_fov = 45.0;           // 主视野角（垂直方向基准）
+    qreal m_near = 0.01;
+    qreal m_far = 100.0;
+    bool m_nearFarOverride = false;
     ProjectionMode m_projectionMode = ProjectionMode::Perspective;
+
+    // ---- 缓存 ----
+    qreal m_radius = 5.0;         // viewCube 半对角线
+
+    // ---- 策略 ----
+    bool m_autoFit = true;
 };
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(FitConstraints)
 
 #endif // QCHARTCAMERA3D_H

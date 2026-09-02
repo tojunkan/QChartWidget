@@ -74,11 +74,13 @@ public:
     /// offset0/offset1: 另外两维的固定值
     /// dimIndex: 0/1/2，表示本轴沿哪个维度变化
     /// 二维情况下，offset1表示z轴，恒为0，且dimIndex只能是0或1
-    virtual void drawAtPosition(qreal dimMin, qreal dimMax,
+    virtual unsigned int drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,
                                 QVector<QChartPrimitive>& outPrims,
-                                QVector<QChartTextLabel>& outLabels) const;
+                                QVector<QChartTextLabel>& outLabels,
+                                int segments = 72,
+                                bool drawLabels = true) const;
 
     /// 边框轴占用空间估算；数据主脊返回 {0, 0}
     virtual QSizeF sizeHint(const QFont& font) const;
@@ -165,7 +167,7 @@ protected:
 
     // ── 常量 ──
     static constexpr qreal AXIS_MARGIN = 8.0;   // 轴线到文字外侧的总边距
-    static constexpr qreal TICK_LENGTH = 4.0;   // 主刻度线长度
+    static constexpr qreal TICK_LENGTH = 0.015;   // 主刻度线长度（占轴长的比例）
     static constexpr qreal SUB_TICK_LENGTH = 2.0; // 次刻度线长度
     static constexpr qreal TEXT_PADDING = 3.0;   // 文字周围的微小呼吸空间
 };

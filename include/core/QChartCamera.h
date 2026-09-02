@@ -49,7 +49,7 @@ public:
     void zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY);
 
     // ---- fit 相关 ----
-    bool fitViewRectToPlotArea(const QRectF& plotArea);
+    bool fitToPlotArea(const QRectF& plotArea) override;
     void setFitMode(ViewRectFitMode mode) { m_fitMode = mode; }
     ViewRectFitMode fitMode() const { return m_fitMode; }
     void setFitStrategy(FitStrategy strategy) { m_fitStrategy = strategy; }

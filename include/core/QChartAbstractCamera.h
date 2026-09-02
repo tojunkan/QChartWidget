@@ -36,6 +36,9 @@ public:
     virtual QChartProjectedPoint project(const QVector3D& cart, const QRectF& plotArea) const = 0;
     /// 屏幕像素 → 世界空间射线（2D 下退化：原点在 z=0 平面，方向为 z轴正方向）
     virtual Ray unproject(const QPointF& pixel, const QRectF& plotArea) const = 0;
+
+    // --- 根据plotArea调整相机 ----
+    virtual bool fitToPlotArea(const QRectF& plotArea) = 0;  // 调整相机使视图完全覆盖绘图区
 signals:
     void viewChanged();   // 任何视图状态变化均发射
 };

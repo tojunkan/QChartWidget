@@ -21,7 +21,8 @@ struct QChartPrimitive
     // ---- 标识 ----
     int id = -1;                // ★ 全局唯一 ID（收集时赋值为向量下标）
     int sourceId = -1;          // 归属（Axis 或 Series 的 ID）
-    int dataIndex = -1;         // 数据点索引（拾取用）
+    // int PrimitiveId = -1;       // 数据点索引（拾取用）
+    // Scene实际上是一个巨大的数组，下标就可以当索引了
 
     // ---- 样式 ----
     QColor color;               // 主色（线条/边框/点色）

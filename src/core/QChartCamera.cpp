@@ -50,7 +50,7 @@ void QChartCamera::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal fa
 }
 
 // ===== fit 几何（内部使用 m_fitStrategy） =====
-bool QChartCamera::fitViewRectToPlotArea(const QRectF& plotArea) {
+bool QChartCamera::fitToPlotArea(const QRectF& plotArea) {
     if (m_fitMode == ViewRectFitMode::Stretch) return false;
     if (plotArea.width() <= 0.0 || plotArea.height() <= 0.0) return false;
 
