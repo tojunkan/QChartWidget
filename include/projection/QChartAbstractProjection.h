@@ -13,8 +13,8 @@
 #include <cmath>
 
 class QChartAbstractProjection {
+    Q_OBJECT
 public:
-    
     // 坐标系类型枚举
     enum class CoordinateSystem {
         Cartesian,
@@ -30,6 +30,9 @@ public:
         : m_dimNames(dimNames) {}
 
     virtual ~QChartAbstractProjection() = default;
+
+    
+    virtual CoordinateSystem type() const = 0;
 
     // ===== 核心映射（纯虚，所有子类必须实现） =====
     /// Numeric 空间 → Cartesian 空间（正向）

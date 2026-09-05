@@ -11,6 +11,7 @@
 #include <QDebug>
 
 class QFunctionalProjection3D : public QChartProjection3D {
+    Q_OBJECT
 public:
     /// forward: Numeric (n0,n1,n2) → World，必传
     /// backward: World → Numeric；nullptr → fromWorld 返回 NaN
@@ -21,7 +22,7 @@ public:
         std::function<QVector3D(qreal x, qreal y, qreal z)> backward = nullptr,
         QVector3D defaultDataMin = QVector3D(0, 0, 0),
         QVector3D defaultDataMax = QVector3D(1, 1, 1),
-        std::function<ViewCube(const QVector3D&, const QVector3D&)> boundsFn = nullptr,
+        std::function<QCube(const QVector3D&, const QVector3D&)> boundsFn = nullptr,
         QString name0 = "u", QString name1 = "v", QString name2 = "w")
         : QChartProjection3D(std::move(name0), std::move(name1), std::move(name2))
         , m_forward(std::move(forward))
@@ -30,6 +31,8 @@ public:
         , m_defaultDataMax(defaultDataMax)
         , m_boundsFn(std::move(boundsFn))
     {}
+
+    CoordinateSystem type() const override { return CoordinateSystem::Functional3D; }
 
     // ── Numeric → World ──
     QVector3D toCartesian(qreal n0, qreal n1, qreal n2 = 0.0) const override {
@@ -50,7 +53,7 @@ public:
     }
 
     // ── 包围盒：自定义优先，否则基类采样 ──
-    ViewCube computeViewCube(const QVector3D& dataMin,
+    QCube computeViewCube(const QVector3D& dataMin,
                                       const QVector3D& dataMax) const override {
         if (m_boundsFn)
             return m_boundsFn(dataMin, dataMax);
@@ -67,5 +70,5 @@ private:
     std::function<QVector3D(qreal x, qreal y, qreal z)> m_backward;
     QVector3D m_defaultDataMin;
     QVector3D m_defaultDataMax;
-    std::function<ViewCube(const QVector3D&, const QVector3D&)> m_boundsFn;
+    std::function<QCube(const QVector3D&, const QVector3D&)> m_boundsFn;
 };

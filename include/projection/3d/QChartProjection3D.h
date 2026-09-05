@@ -4,11 +4,12 @@
 #pragma once
 
 #include "QChartAbstractProjection.h"
-#include "ViewCube.h"
+#include "QCube.h"
 #include <QVector3D>
 #include <utility>
 
 class QChartProjection3D : public QChartAbstractProjection {
+    Q_OBJECT
 public:
     QChartProjection3D(QString name0 = "x", QString name1 = "y", QString name2 = "z")
         : QChartAbstractProjection({name0, name1, name2}) {}
@@ -21,7 +22,7 @@ public:
     virtual QVector3D fromCartesian(const QVector3D& w) const = 0;
 
     // ===== 3D 包围盒（采样法，默认 16×16×16） =====
-    virtual ViewCube computeViewCube(const QVector3D& dataMin,
+    virtual QCube computeViewCube(const QVector3D& dataMin,
                                                const QVector3D& dataMax) const;
 
     virtual std::pair<QVector3D, QVector3D> defaultDataBounds() const {
@@ -115,8 +116,8 @@ public:
 };
 
 // ===== computeViewRect 的默认实现（采样法，可被子类覆盖） =====
-inline ViewCube QChartProjection3D::computeViewCube(const QVector3D& dataMin,
-                                                              const QVector3D& dataMax) const
+inline QCube QChartProjection3D::computeViewCube(const QVector3D& dataMin,
+                                                 const QVector3D& dataMax) const
 {
     const int grid = 16;
     qreal minX = qInf(), maxX = -qInf();
@@ -141,7 +142,7 @@ inline ViewCube QChartProjection3D::computeViewCube(const QVector3D& dataMin,
 
     // 全 NaN 回退到 Numeric 盒
     if (!std::isfinite(minX)) {
-        return ViewCube{ dataMin, dataMax };
+        return QCube{ dataMin, dataMax };
     }
-    return ViewCube{ QVector3D(minX, minY, minZ), QVector3D(maxX, maxY, maxZ) };
+    return QCube{ QVector3D(minX, minY, minZ), QVector3D(maxX, maxY, maxZ) };
 }

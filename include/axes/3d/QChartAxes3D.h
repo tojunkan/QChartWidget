@@ -3,6 +3,7 @@
 #ifndef QCHARTAXES3D_H
 #define QCHARTAXES3D_H
 
+#include "QCube.h"
 #include <QVector3D>
 #include <QVector>
 #include <QPair>
@@ -23,6 +24,8 @@ public:
         bool axisTitleVisible = true;
         QString axisTitle;
     };
+
+    QCube dataBounds;
 
     AxisConfig& axis(int dim) { return m_cfg[dim]; }
     const AxisConfig& axis(int dim) const { return m_cfg[dim]; }

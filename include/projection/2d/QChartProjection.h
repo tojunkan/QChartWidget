@@ -8,6 +8,7 @@
 #include <QRectF>
 
 class QChartProjection : public QChartAbstractProjection {
+    Q_OBJECT
 public:
     // 构造：2D 只有两个维度名称
     QChartProjection(QString name0 = "x", QString name1 = "y")
@@ -15,8 +16,6 @@ public:
 
     virtual ~QChartProjection() = default;
 
-    // ===== 身份标识（2D 特有） =====
-    virtual CoordinateSystem type() const = 0;
 
     // ===== 2D 核心映射（保留原有纯虚接口，供子类实现） =====
     /// 双精度标量版本（子类必须实现）

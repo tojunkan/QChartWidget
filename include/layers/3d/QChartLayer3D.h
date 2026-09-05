@@ -44,27 +44,24 @@ public:
     GridMode gridMode() const { return m_gridMode; }
 
     // 轴/网格数据盒
-    void setAxesDataBox(const QVector3D& dataMin, const QVector3D& dataMax);
-    bool hasValidAxesDataBox() const;
+    void setDataBounds(const QVector3D& dataMin, const QVector3D& dataMax);
+    bool hasValidDataBounds() const;
 
     // 图元收集（纯 Numeric，无投影）
-    void collectPrimitives(QChartScene& scene) const;
-
-    // 组装 ProjectFn3D（供系列使用，保留）
-    ProjectFn3D makeProjectFn(const QChartCamera3D* cam, const QRectF& plotArea) const;
+    void collectPrimitives();
 
 protected:
     // 系列脏标记挂钩
-    void hookSeriesDirty(QChartSeries3D* s);
-    void unhookSeriesDirty(QChartSeries3D* s);
 
     QChartAxis* m_axisZ = nullptr;
     QList<QChartSeries3D*> m_series3D;
     const QChartProjection3D* m_projection3D = nullptr;
+    QChartCamera3D m_camera3D;
+    QChartScene m_scene3D;  // 3D 场景快照（由 collectPrimitives 填充）
+
     std::unique_ptr<QChartAxes3D> m_axes3D;
-    GridMode m_gridMode = GridMode::Box;
-    QVector3D m_axesDataMin{0,0,0}, m_axesDataMax{0,0,0};
-    mutable bool m_worldCacheDirty = true;
+    GridMode m_gridMode = GridMode::Lattice;
+    QVector3D m_axesDataMin, m_axesDataMax;
 };
 
 #endif // QCHARTLAYER3D_H

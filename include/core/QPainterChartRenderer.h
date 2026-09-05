@@ -39,7 +39,7 @@ private:
     bool isPrimitiveVisible2D(const QChartPrimitive& prim, const QRectF& viewRect) const;
 
     /// 3D 裁剪：图元与 ViewCube 相交测试
-    bool isPrimitiveVisible3D(const QChartPrimitive& prim, const ViewCube& viewCube) const;
+    bool isPrimitiveVisible3D(const QChartPrimitive& prim, const QCube& viewCube) const;
 
     // ===== 绘制辅助（拆分 2D/3D） =====
 

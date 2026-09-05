@@ -1,5 +1,5 @@
 // QChartLayer.h —— 图层基类
-// 持有 axisX/axisY 和 Series 列表，组装坐标转换链 (Data→toNumeric→toCartesian→cartesianToPixel)
+// 持有 axisX/axisY 和 Series 列表，从Widget接收plotArea/dataBounds，负责 drawGrid 和 drawAllSeries
 // 负责 drawGrid 和 drawAllSeries
 #ifndef QCHARTLAYER_H
 #define QCHARTLAYER_H
@@ -23,12 +23,9 @@ class QChartLayer : public QObject
     Q_PROPERTY(QColor gridColor READ gridColor WRITE setGridColor NOTIFY gridChanged)
 public:
     explicit QChartLayer(QObject* parent = nullptr);
+    QChartLayer(QChartAbstractProjection* projection, QRectF plotArea, QObject* parent = nullptr);
+    
     ~QChartLayer() override;
-
-    /// 坐标系类型——由 Widget 在 setProjection / addLayer 时同步更新
-    /// 默认 Cartesian。子类初始构造时可预设，Widget 随后覆盖
-    CoordinateSystem coordinateSystem() const { return m_coordSys; }
-    void setCoordinateSystem(CoordinateSystem cs) { m_coordSys = cs; }
 
     // ===== 轴绑定 =====
     QChartAxis* axisX() const { return m_axisX; }
@@ -44,16 +41,20 @@ public:
     void clearSeries();
 
     // ===== 绘制（由 QChartWidget 调用）=====
-    /// 遍历系列，组装 toPixel，调用 series->draw
-    void drawAllSeries(QPainter* p, const DrawContext& ctx);
 
     /// 画网格：用 axisX/axisY 的 tickValues 作为 offset，画数据主脊（只画轴线，无标签刻度）
-    void drawGrid(QPainter* p, const DrawContext& ctx) const;
+    void drawGrid(QChartScene& scene);
+    void drawAllSeries(QChartScene& scene);
+    void collectPrimitives();
+    void invalidateData() { m_dataDirty = true; }
 
     // ===== 命中检测 =====
     /// 统一 HitResult（Phase 3 任务 0：定义提升到 QChartHitTester，本类保留别名，调用方零改动）
     using HitResult = QChartHitTester::HitResult;
     HitResult hitTest(const QPointF& pixel, const DrawContext& ctx) const;
+
+    // ===== 交互 =====
+    virtual void recomputeDataBounds() = 0;
 
 signals:
     void seriesAdded(QChartSeries*);
@@ -80,14 +81,17 @@ public:
     std::optional<QColor> gridColorOverride() const { return m_gridColorOverride; }
 
 protected:
-    /// 组装 toPixel(lambda): Data(QVariant,QVariant) → Pixel(px,py)
-    /// 同时注入 toNumeric0/toNumeric1 到 ctx（Series 画曲线边用）
-    std::function<QPointF(QVariant,QVariant)> makeToPixel(DrawContext& ctx) const;
+
+    void hookSeriesDirty(QChartSeries* s);
+    void unhookSeriesDirty(QChartSeries* s);
 
     QChartAxis *m_axisX = nullptr;
     QChartAxis *m_axisY = nullptr;
+
+    QRectF m_dataBounds; // 通过 axisX/axisY 的 min/m_max 计算得出，供 drawGrid/collectPrimitives 使用
+    QChartScene m_scene;  // 当前场景快照（由 buildScene 填充）
+    bool m_dataDirty = true;
     QList<QChartSeries*> m_series;
-    CoordinateSystem m_coordSys = CoordinateSystem::Cartesian;
     bool m_gridVisible = true;
     std::optional<QColor> m_gridColorOverride;           // 用户显式设过（setGridColor）
     QColor m_themeGridColor = QColor(220, 220, 220);     // 主题注入默认（setThemeGridColor）

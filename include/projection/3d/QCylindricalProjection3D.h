@@ -8,8 +8,11 @@
 #include <QtMath>
 
 class QCylindricalProjection3D : public QChartProjection3D {
+    Q_OBJECT
 public:
     QCylindricalProjection3D() : QChartProjection3D("r", "θ", "z") {}
+
+    CoordinateSystem type() const override { return CoordinateSystem::Cylindrical; }
 
     // ── Numeric → World ──
     QVector3D toCartesian(qreal n0, qreal n1, qreal n2 = 0.0) const override {

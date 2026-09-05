@@ -5,8 +5,7 @@
 #ifndef QCHARTAXIS_H
 #define QCHARTAXIS_H
 
-#include "QChartPrimitive.h"
-#include "QChartTextLabel.h"
+#include "QChartScene.h"
 #include "QChartProjection.h"
 #include "QChartCamera.h" // View↔Pixel 线性映射的唯一实现（去重 1.5-3）
 #include <QObject>
@@ -74,11 +73,10 @@ public:
     /// offset0/offset1: 另外两维的固定值
     /// dimIndex: 0/1/2，表示本轴沿哪个维度变化
     /// 二维情况下，offset1表示z轴，恒为0，且dimIndex只能是0或1
-    virtual unsigned int drawAtPosition(qreal dimMin, qreal dimMax,
+    virtual void drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,
-                                QVector<QChartPrimitive>& outPrims,
-                                QVector<QChartTextLabel>& outLabels,
+                                QChartScene& scene,
                                 int segments = 72,
                                 bool drawLabels = true) const;
 

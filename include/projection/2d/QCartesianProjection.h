@@ -5,6 +5,7 @@
 #include "QChartProjection.h"
 
 class QCartesianProjection : public QChartProjection {
+    Q_OBJECT
 public:
 
 	QCartesianProjection() : QChartProjection("x", "y") {}

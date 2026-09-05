@@ -10,6 +10,8 @@ QChartLayer3D::QChartLayer3D(QObject* parent)
     : QChartLayer(parent)
 {
     m_axes3D = std::make_unique<QChartAxes3D>();
+    m_axes3D->dataBounds = m_projection3D ? QCube(m_projection3D->defaultDataBounds().first, m_projection3D->defaultDataBounds().second)
+                                          : QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10));
     m_axes3D->axis(0).axis = m_axisX;
     m_axes3D->axis(1).axis = m_axisY;
     m_axes3D->axis(2).axis = m_axisZ;
@@ -19,52 +21,22 @@ QChartLayer3D::QChartLayer3D(QObject* parent)
 void QChartLayer3D::setAxisX(QChartAxis* a) {
     QChartLayer::setAxisX(a);
     if (m_axes3D) m_axes3D->axis(0).axis = a;
-    m_worldCacheDirty = true;
 }
 void QChartLayer3D::setAxisY(QChartAxis* a) {
     QChartLayer::setAxisY(a);
     if (m_axes3D) m_axes3D->axis(1).axis = a;
-    m_worldCacheDirty = true;
 }
 void QChartLayer3D::setAxisZ(QChartAxis* a) {
     m_axisZ = a;
     if (m_axes3D) m_axes3D->axis(2).axis = a;
-    m_worldCacheDirty = true;
-}
-
-// ===== 系列管理 =====
-void QChartLayer3D::addSeries3D(QChartSeries3D* s) {
-    if (!s || m_series3D.contains(s)) return;
-    m_series3D.append(s);
-    addSeries(s);
-    hookSeriesDirty(s);
-    m_worldCacheDirty = true;
-}
-void QChartLayer3D::removeSeries3D(QChartSeries3D* s) {
-    if (!s) return;
-    m_series3D.removeOne(s);
-    removeSeries(s);
-    unhookSeriesDirty(s);
-    m_worldCacheDirty = true;
-}
-void QChartLayer3D::hookSeriesDirty(QChartSeries3D* s) {
-    QObject::connect(s, &QChartSeries3D::dataChanged, this, [this]() { m_worldCacheDirty = true; });
-}
-void QChartLayer3D::unhookSeriesDirty(QChartSeries3D* s) {
-    QObject::disconnect(s, &QChartSeries3D::dataChanged, this, nullptr);
 }
 
 // ===== 数据盒 =====
-void QChartLayer3D::setAxesDataBox(const QVector3D& dataMin, const QVector3D& dataMax) {
-    m_axesDataMin = dataMin;
-    m_axesDataMax = dataMax;
+void QChartLayer3D::setDataBounds(const QVector3D& dataMin, const QVector3D& dataMax) {
+    m_axes3D->dataBounds = QCube(dataMin, dataMax);
 }
-bool QChartLayer3D::hasValidAxesDataBox() const {
-    if (m_axesDataMin.x() > m_axesDataMax.x() ||
-        m_axesDataMin.y() > m_axesDataMax.y() ||
-        m_axesDataMin.z() > m_axesDataMax.z())
-        return false;
-    return !(m_axesDataMin == m_axesDataMax);
+bool QChartLayer3D::hasValidDataBounds() const {
+    return m_axes3D->dataBounds.isValid();
 }
 
 // // ===== ProjectFn3D（供系列使用，保留）=====
@@ -83,9 +55,8 @@ bool QChartLayer3D::hasValidAxesDataBox() const {
 // }
 
 // ===== collectPrimitives —— 纯 Numeric 图元组装 =====
-void QChartLayer3D::collectPrimitives(QChartScene& scene) const {
+void QChartLayer3D::collectPrimitives() {
     // 0. 轴配置重同步
-    unsigned int cnt = 0;
     if (m_axes3D) {
         m_axes3D->axis(0).axis = m_axisX;
         m_axes3D->axis(1).axis = m_axisY;
@@ -125,7 +96,7 @@ void QChartLayer3D::collectPrimitives(QChartScene& scene) const {
     // }
 
     // 2. 轴/网格/盒边框（全部通过 drawAtPosition 生成 Numeric 图元）
-    const bool axesValid = m_axes3D && m_axes3D->visible() && hasValidAxesDataBox();
+    const bool axesValid = m_axes3D && m_axes3D->visible() && hasValidDataBounds();
     if (axesValid) {
         const QVector3D& mn = m_axesDataMin;
         const QVector3D& mx = m_axesDataMax;
@@ -158,20 +129,20 @@ void QChartLayer3D::collectPrimitives(QChartScene& scene) const {
 
         // ----- 辅助 lambda：添加一条线段（调用 drawAtPosition，generateTicks=false）-----
         auto addLine = [&](QChartAxis* axis, int dimIndex, qreal dimMin, qreal dimMax,
-                           qreal off0, qreal off1, const QColor& color, qreal penWidth, QChartScene& out) {
+                           qreal off0, qreal off1, bool drawLabels, const QColor& color, qreal penWidth) {
             if (!axis) return;
-            int segments = m_projection3D ? m_projection3D->samplingSegmentsHint() : 72;
-            int cnt = out.primitives.size();
+            // int segments = m_projection3D ? m_projection3D->samplingSegmentsHint() : 72;
+            int cnt = m_scene3D.primitives.size();
+            m_scene3D.maxSourceId++;
             axis->drawAtPosition(dimMin, dimMax, off0, off1, dimIndex,
-                                 out.primitives, out.labels, segments, false);
-            for (int i = cnt; i < out.primitives.size(); ++i) {
-                auto& prim = out.primitives[i];
+                                 m_scene3D, segments, drawLabels);
+            for (int i = cnt; i < m_scene3D.primitives.size(); ++i) {
+                auto& prim = m_scene3D.primitives[i];
                 prim.color = color;
                 prim.penWidth = penWidth;
-                prim.sourceId = -1;
+                prim.sourceId = m_scene3D.maxSourceId;
             }
-            out.maxSourceId++;
-            out.PrimitiveIdPrefixSum.push_back(out.primitives.size());
+            m_scene3D.PrimitiveIdPrefixSum.push_back(m_scene3D.primitives.size());
         };
 
         // ===== 主轴（Spine）：带刻度点和标签 =====
@@ -189,26 +160,8 @@ void QChartLayer3D::collectPrimitives(QChartScene& scene) const {
                 default: continue;
             }
 
-            QVector<QChartPrimitive> tempPrims;
-            QVector<QChartTextLabel> tempLabels;
-            axis->drawAtPosition(dimMin, dimMax, off0, off1, d,
-                                 tempPrims, tempLabels, segments, true);
-
-            // 直接添加图元（Numeric 坐标）
-            for (auto& prim : tempPrims) {
-                prim.sourceId = -1;
-                prim.layer = QChartPrimitive::Layer::ForegroundDecor;
-                out.append(prim);
-            }
-
-            // 标签：只保留绑定标签（refPrimitiveId >= 0），自由标签丢弃
-            if (labels) {
-                for (const auto& lbl : tempLabels) {
-                    if (lbl.refPrimitiveId >= 0) {
-                        labels->append(lbl);
-                    }
-                }
-            }
+            addLine(axis, d, dimMin, dimMax, off0, off1, true,
+                    spineCol[d], 2.0);
         }
 
         // ===== 网格线 =====
@@ -216,28 +169,28 @@ void QChartLayer3D::collectPrimitives(QChartScene& scene) const {
             // 底面 z = zMin：沿 X 方向（Y 为刻度值）和 Y 方向（X 为刻度值）
             for (qreal v : t1) {
                 addLine(m_axes3D->axis(0).axis, 0, mn.x(), mx.x(), v, mn.z(),
-                        gridCol, 1.0, QChartPrimitive::Layer::Grid);
+                        false, gridCol, 1.0);
             }
             for (qreal u : t0) {
                 addLine(m_axes3D->axis(1).axis, 1, mn.y(), mx.y(), u, mn.z(),
-                        gridCol, 1.0, QChartPrimitive::Layer::Grid);
+                        false, gridCol, 1.0);
             }
         } else { // Lattice 模式
             // 族 U：固定 (v, w) 沿 X
             for (qreal v : t1)
                 for (qreal w : t2)
                     addLine(m_axes3D->axis(0).axis, 0, mn.x(), mx.x(), v, w,
-                            gridCol, 1.0, QChartPrimitive::Layer::Grid);
+                            false, gridCol, 1.0);
             // 族 V：固定 (u, w) 沿 Y
             for (qreal u : t0)
                 for (qreal w : t2)
                     addLine(m_axes3D->axis(1).axis, 1, mn.y(), mx.y(), u, w,
-                            gridCol, 1.0, QChartPrimitive::Layer::Grid);
+                            false, gridCol, 1.0);
             // 族 W：固定 (u, v) 沿 Z
             for (qreal u : t0)
                 for (qreal v : t1)
                     addLine(m_axes3D->axis(2).axis, 2, mn.z(), mx.z(), u, v,
-                            gridCol, 1.0, QChartPrimitive::Layer::Grid);
+                            false, gridCol, 1.0);
         }
 
         // ===== 盒边框（12 条边）=====
@@ -265,53 +218,53 @@ void QChartLayer3D::collectPrimitives(QChartScene& scene) const {
             }
 
             addLine(axis, dimIndex, dimMin, dimMax, off0, off1,
+                    false,
                     isSpine ? spineCol[dim] : boxCol,
-                    isSpine ? 2.0 : 1.0,
-                    QChartPrimitive::Layer::ForegroundDecor);
+                    isSpine ? 2.0 : 1.0);
         }
 
         // ===== 轴标题（保留，仅用主轴端点）=====
-        if (labels) {
-            for (int d = 0; d < 3; ++d) {
-                const auto& cfg = m_axes3D->axis(d);
-                if (!cfg.visible) continue;
-                QChartAxis* axis = cfg.axis;
-                if (!axis) continue;
+        // if (labels) {
+        //     for (int d = 0; d < 3; ++d) {
+        //         const auto& cfg = m_axes3D->axis(d);
+        //         if (!cfg.visible) continue;
+        //         QChartAxis* axis = cfg.axis;
+        //         if (!axis) continue;
 
-                QVector3D maxAnchor = mn;
-                if (d == 0) maxAnchor.setX(mx.x());
-                else if (d == 1) maxAnchor.setY(mx.y());
-                else maxAnchor.setZ(mx.z());
+        //         QVector3D maxAnchor = mn;
+        //         if (d == 0) maxAnchor.setX(mx.x());
+        //         else if (d == 1) maxAnchor.setY(mx.y());
+        //         else maxAnchor.setZ(mx.z());
 
-                QString title = cfg.axisTitle;
-                if (title.isEmpty() && axis) title = axis->title();
-                if (title.isEmpty() && m_projection3D) title = m_projection3D->dimensionName(d);
-                if (!title.isEmpty()) {
-                    QChartTextLabel lbl;
-                    lbl.text = title;
-                    lbl.numericAnchor = maxAnchor;
-                    lbl.color = spineCol[d];
-                    lbl.isTitle = true;
-                    lbl.fontSize = 12.0f;
-                    lbl.refPrimitiveId = -1; // 自由标签，由渲染器处理
-                    labels->append(lbl);
-                }
-            }
-        }
+        //         QString title = cfg.axisTitle;
+        //         if (title.isEmpty() && axis) title = axis->title();
+        //         if (title.isEmpty() && m_projection3D) title = m_projection3D->dimensionName(d);
+        //         if (!title.isEmpty()) {
+        //             QChartTextLabel lbl;
+        //             lbl.text = title;
+        //             lbl.numericAnchor = maxAnchor;
+        //             lbl.color = spineCol[d];
+        //             lbl.isTitle = true;
+        //             lbl.fontSize = 12.0f;
+        //             lbl.refPrimitiveId = -1; // 自由标签，由渲染器处理
+        //             labels->append(lbl);
+        //         }
+        //     }
+        // }
     }
 
     // 3. 系列图元（保留，使用 ProjectFn3D）
-    const ProjectFn3D fn = makeProjectFn(nullptr, QRectF()); // cam/plotArea 在 series 内部使用
-    for (QChartSeries3D* s : m_series3D) {
-        if (!s || !s->isVisible()) continue;
-        // 注意：series 的 collectPrimitives 需要 ProjectFn3D，它内部会调用相机投影
-        // 但我们暂时不传入 cam/plotArea，因为 series 自己会用到闭包。
-        // 这里我们传一个 dummy，但实际 series 会使用 makeProjectFn 传入的闭包。
-        // 为了兼容，我们让 series 使用自己的投影逻辑，暂不修改。
-        // 但原代码中 s->collectPrimitives(fn, out) 需要 fn，所以我们保留原样。
-        // 由于我们不再需要 cam/plotArea，所以这里直接传递默认构造的 fn。
-        // 但原 series 实现依赖 fn，我们保持原样。
-        s->collectPrimitives(fn, out);
-    }
+    // const ProjectFn3D fn = makeProjectFn(nullptr, QRectF()); // cam/plotArea 在 series 内部使用
+    // for (QChartSeries3D* s : m_series3D) {
+    //     if (!s || !s->isVisible()) continue;
+    //     // 注意：series 的 collectPrimitives 需要 ProjectFn3D，它内部会调用相机投影
+    //     // 但我们暂时不传入 cam/plotArea，因为 series 自己会用到闭包。
+    //     // 这里我们传一个 dummy，但实际 series 会使用 makeProjectFn 传入的闭包。
+    //     // 为了兼容，我们让 series 使用自己的投影逻辑，暂不修改。
+    //     // 但原代码中 s->collectPrimitives(fn, out) 需要 fn，所以我们保留原样。
+    //     // 由于我们不再需要 cam/plotArea，所以这里直接传递默认构造的 fn。
+    //     // 但原 series 实现依赖 fn，我们保持原样。
+    //     s->collectPrimitives(fn, out);
+    // }
 }
 

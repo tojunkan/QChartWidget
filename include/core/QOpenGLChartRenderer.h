@@ -33,7 +33,7 @@ struct GLBatch {
 class QOpenGLChartRenderer : public QChartRenderer
 {
 public:
-    explicit QOpenGLChartRenderer(QOpenGLWidget* host);
+    explicit QOpenGLChartRenderer() = default;
     ~QOpenGLChartRenderer() override;
 
     // ===== 基类虚函数实现 =====
@@ -45,11 +45,8 @@ public:
     void drawLabels(QChartScene& scene,
                     QPaintDevice* device) override;
 
-    // ===== GL 生命周期（由 GlHost 调用） =====
-    void initializeGL();
-    void paintGL(const QChartScene& scene);
-    void resizeGL(int w, int h);
-    bool isReady() const { return m_glReady; }
+    // renderer不负责管理OpenGL上下文的生命周期，外部保证在绘制时有有效的OpenGL上下文
+    void clearBatches();
 
 private:
     // ---- 批次构建 ----
@@ -61,13 +58,8 @@ private:
 
     // ---- 辅助 ----
     QOpenGLFunctions_3_3_Core* glFuncs() const;
-    void clearBatches();
 
-    QOpenGLWidget* m_host = nullptr;
     QVector<GLBatch> m_batches;
-    bool m_glReady = false;
-    bool m_initAttempted = false;
-    QSize m_viewportSize;
 };
 
 #endif

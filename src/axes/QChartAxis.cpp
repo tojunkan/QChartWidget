@@ -234,18 +234,18 @@ void QChartAxis::drawAtEdge(QPainter* painter,
 }
 
 // ===== drawAtPosition：数据主脊 =====
-unsigned int QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
+void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,
-                                QVector<QChartPrimitive>& outPrims,
-                                QVector<QChartTextLabel>& outLabels,
+                                QChartScene& scene,
                                 int segments = 72,
                                 bool drawLabels = true) const
 {
     if (!m_visible) return;
     if (dimMin > dimMax) std::swap(dimMin, dimMax);
+    auto outPrims = &scene.primitives;
+    auto outLabels = &scene.labels;
 
-    unsigned int cnt = 0;
     // 1. 获取刻度
     QVector<qreal> ticks = tickValues(dimMin, dimMax);
     QStringList labels = tickLabels(ticks);
@@ -275,8 +275,7 @@ unsigned int QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         case 2: axisLine.numVerts.append(QVector3D(offset0, offset1, val)); break;
         }
     }
-    outPrims.append(axisLine);
-    cnt++;
+    outPrims->append(axisLine);
 
     // 4. 对每个主刻度生成 7 个点 + 1 个标签
     for (int i = 0; i < ticks.size(); ++i) {
@@ -294,8 +293,7 @@ unsigned int QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         center.numA = pos;
         center.color = axisColor;
         center.markerSize = 2.0;
-        outPrims.append(center);
-        cnt++;
+        outPrims->append(center);
 
         qreal tickLen = (dimMax - dimMin) * TICK_LENGTH;
 
@@ -305,8 +303,7 @@ unsigned int QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
             point.numA = pos + d * tickLen;
             point.color = axisColor;
             point.markerSize = 2.0;
-            outPrims.append(point);
-            cnt++;
+            outPrims->append(point);
         }
 
         // 4c. 标签（锚点指向刻度位置，方向由 Renderer 决定）
@@ -319,9 +316,7 @@ unsigned int QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
             label.numericAnchor = pos;
             label.sourceId = -1;
             label.refPrimitiveId = -1;
-            outLabels.append(label);
+            outLabels->append(label);
         }
     }
-
-    return cnt;
 }

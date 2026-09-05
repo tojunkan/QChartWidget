@@ -5,9 +5,14 @@
 #include "QChartProjection3D.h"
 
 class QCartesianProjection3D : public QChartProjection3D {
+    Q_OBJECT
 public:
     QCartesianProjection3D() : QChartProjection3D("x", "y", "z") {}
 
+    CoordinateSystem type() const override {
+        return CoordinateSystem::Cartesian3D;
+    }
+    
     // ── Numeric ↔ World：恒等 ──
     QVector3D toCartesian(qreal n0, qreal n1, qreal n2 = 0.0) const override {
         return QVector3D(n0, n1, n2);

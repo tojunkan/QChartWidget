@@ -5,6 +5,7 @@
 #include "QChartProjection.h"
 
 class QInterpolatedProjection : public QChartProjection {
+    Q_OBJECT
 public:
     /// a/b 非持有（a 由 Widget 持有，b 由调用者/动画持有）
     QInterpolatedProjection(QChartProjection* a, QChartProjection* b);

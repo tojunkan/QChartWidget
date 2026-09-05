@@ -16,24 +16,25 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Svg OpenGL OpenGLWidge
 
 # ---- 库源码（保持不变） ----
 set(QCHART_SOURCES
-    src/core/QChartCamera.cpp
-    src/core/QChartCamera3D.cpp
     src/series/3d/QChartSeries3D.cpp
     src/series/3d/QChartScatterSeries3D.cpp
     src/series/3d/QChartLineSeries3D.cpp
     src/series/3d/QChartSurfaceSeries.cpp
     src/layers/3d/QChartLayer3D.cpp
-    src/core/QChartWidget3D.cpp
     src/axes/3d/QChartAxes3D.cpp
+    src/core/QChartWidget3D.cpp
+    src/core/QChartCamera.cpp
+    src/core/QChartCamera3D.cpp
     src/core/QChartHitTester.cpp
     src/core/QChartGL.cpp
     src/core/QOpenGLChartRenderer.cpp
     src/core/QChartRenderer.cpp
     src/core/QPainterChartRenderer.cpp
+    src/core/QChartWidget.cpp
+    src/core/QChartAbstractWidget.cpp
     src/axes/QChartAxis.cpp
     src/layers/QChartLayer.cpp
     src/series/QChartSeries.cpp
-    src/core/QChartWidget.cpp
     src/axes/2d/QValueAxis.cpp
     src/axes/2d/QLogAxis.cpp
     src/axes/2d/QDateTimeAxis.cpp
@@ -99,6 +100,7 @@ set(QCHART_HEADERS
     include/utils/QDataPoint.h
     include/utils/QDataPoint3D.h
     include/utils/QDataRect.h
+    include/utils/QCube.h
     include/projection/QInterpolatedProjection.h
     include/projection/QChartProjectionFactory.h
     include/projection/QChartAbstractProjection.h
@@ -114,7 +116,8 @@ set(QCHART_HEADERS
 )
 
 add_library(QChartWidget STATIC ${QCHART_SOURCES} ${QCHART_HEADERS}
-    include/core/QChartAbstractCamera.h)
+    include/core/QChartAbstractCamera.h
+    include/core/QChartAbstractWidget.h)
 add_library(QChartWidget::QChartWidget ALIAS QChartWidget)
 
 target_include_directories(QChartWidget PUBLIC

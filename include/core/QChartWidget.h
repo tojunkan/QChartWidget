@@ -23,7 +23,7 @@ class QChartSeries;
 // 导出范围（C3：默认全 widget；「仅 plotArea」可选，会丢刻度标签/轴标题）
 enum class QChartExportScope { WholeWidget, PlotArea };
 
-class QChartWidget : public QWidget {
+class QChartWidget : public QChartAbstractWidget {
     Q_OBJECT
     Q_PROPERTY(bool panEnabled  READ isPanEnabled  WRITE setPanEnabled)
     Q_PROPERTY(bool zoomEnabled READ isZoomEnabled WRITE setZoomEnabled)

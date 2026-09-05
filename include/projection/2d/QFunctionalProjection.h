@@ -8,6 +8,7 @@
 #include <QDebug>
 
 class QFunctionalProjection : public QChartProjection {
+    Q_OBJECT
 public:
     /// <summary>
     /// 构造函数

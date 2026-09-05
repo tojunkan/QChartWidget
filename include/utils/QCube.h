@@ -5,11 +5,11 @@
 #include <limits>
 #include <cmath>
 
-struct ViewCube
+struct QCube
 {
 public:
     // 默认构造：生成一个无效立方体（min = +inf, max = -inf）
-    ViewCube()
+    QCube()
         : min( std::numeric_limits<float>::infinity(),
                std::numeric_limits<float>::infinity(),
                std::numeric_limits<float>::infinity() ),
@@ -19,12 +19,12 @@ public:
     {}
 
     // 显式复制构造函数（也可用 = default，但这里显式写出来）
-    ViewCube(const ViewCube &other)
+    QCube(const QCube &other)
         : min(other.min), max(other.max)
     {}
 
     // 从两个角点构造（自动归一化）
-    ViewCube(const QVector3D &p1, const QVector3D &p2)
+    QCube(const QVector3D &p1, const QVector3D &p2)
     {
         min.setX(std::min(p1.x(), p2.x()));
         min.setY(std::min(p1.y(), p2.y()));
@@ -34,12 +34,31 @@ public:
         max.setZ(std::max(p1.z(), p2.z()));
     }
 
-    // 从中心和尺寸构造（尺寸取绝对值）
-    ViewCube(const QVector3D &center, const QVector3D &size)
+    // // 从中心和尺寸构造（尺寸取绝对值）
+    // QCube(const QVector3D &center, const QVector3D &size)
+    // {
+    //     QVector3D half = QVector3D(std::abs(size.x()), std::abs(size.y()), std::abs(size.z())) * 0.5f;
+    //     min = center - half;
+    //     max = center + half;
+    // }
+
+    QCube(const QVector<QVector3D> &points)
     {
-        QVector3D half = QVector3D(std::abs(size.x()), std::abs(size.y()), std::abs(size.z())) * 0.5f;
-        min = center - half;
-        max = center + half;
+        if (points.size() <= 1) {
+            *this = QCube(); // 无效立方体
+            qWarning() << "QCube: points.size() <= 1, returning invalid cube.";
+            return;
+        }
+        min = points[0];
+        max = points[0];
+        for (const auto &p : points) {
+            min.setX(std::min(min.x(), p.x()));
+            min.setY(std::min(min.y(), p.y()));
+            min.setZ(std::min(min.z(), p.z()));
+            max.setX(std::max(max.x(), p.x()));
+            max.setY(std::max(max.y(), p.y()));
+            max.setZ(std::max(max.z(), p.z()));
+        }
     }
 
     // 有效性：所有轴方向 min <= max
@@ -70,10 +89,10 @@ public:
     qreal depth()  const { return max.z() - min.z(); }
 
     // 返回归一化后的副本（确保 min <= max）
-    ViewCube normalized() const {
+    QCube normalized() const {
         if (isValid())
             return *this;
-        ViewCube c;
+        QCube c;
         c.min.setX(std::min(min.x(), max.x()));
         c.min.setY(std::min(min.y(), max.y()));
         c.min.setZ(std::min(min.z(), max.z()));
@@ -90,8 +109,8 @@ public:
     }
 
     // 平移（返回新对象）
-    ViewCube translated(const QVector3D &offset) const {
-        ViewCube c = *this;
+    QCube translated(const QVector3D &offset) const {
+        QCube c = *this;
         c.translate(offset);
         return c;
     }
@@ -129,22 +148,22 @@ public:
     }
 
     // 包含另一个立方体
-    bool contains(const ViewCube &other) const {
+    bool contains(const QCube &other) const {
         return contains(other.min) && contains(other.max);
     }
 
     // 是否相交（包括边界接触也算相交）
-    bool intersects(const ViewCube &other) const {
+    bool intersects(const QCube &other) const {
         return !(min.x() > other.max.x() || max.x() < other.min.x() ||
                  min.y() > other.max.y() || max.y() < other.min.y() ||
                  min.z() > other.max.z() || max.z() < other.min.z());
     }
 
     // 交集（若不相交则返回无效立方体）
-    ViewCube intersected(const ViewCube &other) const {
+    QCube intersected(const QCube &other) const {
         if (!intersects(other))
-            return ViewCube(); // 无效
-        ViewCube result;
+            return QCube(); // 无效
+        QCube result;
         result.min.setX(std::max(min.x(), other.min.x()));
         result.min.setY(std::max(min.y(), other.min.y()));
         result.min.setZ(std::max(min.z(), other.min.z()));
@@ -155,8 +174,8 @@ public:
     }
 
     // 并集（包含两者的最小包围盒）
-    ViewCube united(const ViewCube &other) const {
-        ViewCube result;
+    QCube united(const QCube &other) const {
+        QCube result;
         result.min.setX(std::min(min.x(), other.min.x()));
         result.min.setY(std::min(min.y(), other.min.y()));
         result.min.setZ(std::min(min.z(), other.min.z()));
@@ -167,7 +186,7 @@ public:
     }
 
     // 赋值运算符（默认即可，但为了完整性显式写出）
-    ViewCube &operator=(const ViewCube &other) {
+    QCube &operator=(const QCube &other) {
         if (this != &other) {
             min = other.min;
             max = other.max;
@@ -176,11 +195,11 @@ public:
     }
 
     // 比较运算符
-    bool operator==(const ViewCube &other) const {
+    bool operator==(const QCube &other) const {
         return min == other.min && max == other.max;
     }
 
-    bool operator!=(const ViewCube &other) const {
+    bool operator!=(const QCube &other) const {
         return !(*this == other);
     }
 
@@ -190,8 +209,8 @@ public:
 };
 
 // 流输出调试
-inline QDebug operator<<(QDebug debug, const ViewCube &cube) {
+inline QDebug operator<<(QDebug debug, const QCube &cube) {
     QDebugStateSaver saver(debug);
-    debug.nospace() << "ViewCube(min=" << cube.min << ", max=" << cube.max << ')';
+    debug.nospace() << "QCube(min=" << cube.min << ", max=" << cube.max << ')';
     return debug;
 }

@@ -16,22 +16,14 @@ Q_LOGGING_CATEGORY(logGLRender, "chart.render.gl")
 
 // 构造 / 析构
 
-
-QOpenGLChartRenderer::QOpenGLChartRenderer(QOpenGLWidget* host)
-    : m_host(host)
-{
-    QChartGL::registerHost();
-}
-
 QOpenGLChartRenderer::~QOpenGLChartRenderer()
 {
-    clearBatches();
-    QChartGL::unregisterHost();
+    if(m_batches.size() > 0) {
+        qWarning(logGLRender) << "QOpenGLChartRenderer destroyed with non-empty batches!";
+    }
 }
 
-
 // 基类虚函数实现
-
 
 void QOpenGLChartRenderer::transformNumericToCartesian(QChartScene& /*scene*/)
 {
@@ -64,21 +56,14 @@ void QOpenGLChartRenderer::drawPrimitives(QChartScene& scene,
                                           QPaintDevice* device,
                                           const QVector<bool>& /*visibility*/)
 {
-    if (device != m_host) {
-        qWarning() << "QOpenGLChartRenderer::drawPrimitives: device 必须是 GlHost";
+    if (!QOpenGLContext::currentContext()) {
+        qWarning() << "No current OpenGL context!";
         return;
     }
 
-    if (!m_glReady) {
-        initializeGL();
-        if (!m_glReady) return;
-    }
-
-    // 用基类的 m_viewDirty 触发批次重建
-    if (m_viewDirty) {
-        buildBatches(scene);
-        m_viewDirty = false;
-    }
+    // 进入这个函数说明viewDirty确实是脏的。但是这些逻辑在基类的render函数里已经实现过了。
+    // 可以直接调用buildBatches
+    buildBatches(scene);
 
     // 执行绘制
     drawPass(scene, ShaderKind::Triangle);
@@ -88,7 +73,7 @@ void QOpenGLChartRenderer::drawPrimitives(QChartScene& scene,
 
 void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
 {
-    if (!device || device != m_host) return;
+    if (!device) return;
 
     const QChartAbstractCamera* camera = scene.camera;
     if (!camera) return;
@@ -119,57 +104,7 @@ void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
     }
 }
 
-
-// GL 生命周期
-
-
-void QOpenGLChartRenderer::initializeGL()
-{
-    if (m_glReady || m_initAttempted) return;
-    m_initAttempted = true;
-
-    if (!m_host) {
-        qWarning() << "QOpenGLChartRenderer::initializeGL: 无宿主";
-        return;
-    }
-
-    QOpenGLContext* ctx = m_host->context();
-    if (!ctx || !ctx->isValid()) {
-        qWarning() << "QOpenGLChartRenderer::initializeGL: GL 上下文无效";
-        return;
-    }
-
-    if (QOpenGLFunctions_3_3_Core* f = glFuncs()) {
-        f->glEnable(GL_PROGRAM_POINT_SIZE);
-        f->glEnable(GL_DEPTH_TEST);
-        f->glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-        qInfo() << "QOpenGLChartRenderer: GL 就绪";
-    } else {
-        qWarning() << "QOpenGLChartRenderer::initializeGL: 无法获取 GL 3.3 Core 函数";
-        return;
-    }
-
-    m_glReady = true;
-}
-
-void QOpenGLChartRenderer::paintGL(const QChartScene& scene)
-{
-    // ★ 调用基类 render，它会走 transformNumericToCartesian →
-    //   cullAndResolveLabels → drawPrimitives → drawLabels
-    QChartRenderer::render(const_cast<QChartScene&>(scene), m_host);
-}
-
-void QOpenGLChartRenderer::resizeGL(int w, int h)
-{
-    m_viewportSize = QSize(w, h);
-    if (QOpenGLFunctions_3_3_Core* f = glFuncs()) {
-        f->glViewport(0, 0, w, h);
-    }
-}
-
-
 // 批次构建
-
 
 void QOpenGLChartRenderer::buildBatches(const QChartScene& scene)
 {
@@ -482,6 +417,7 @@ void QOpenGLChartRenderer::clearBatches()
 {
     QOpenGLFunctions_3_3_Core* f = glFuncs();
     if (!f) {
+        qWarning() << "clearBatches: no current context, GPU resources leaked!";
         m_batches.clear();
         return;
     }

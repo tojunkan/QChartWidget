@@ -25,7 +25,7 @@ QChartCamera3D::QChartCamera3D(QObject* parent)
 }
 
 // ---- viewCube 操作 ----
-void QChartCamera3D::setViewCube(const ViewCube& box) {
+void QChartCamera3D::setViewCube(const QCube& box) {
     if (m_viewCube.min == box.min && m_viewCube.max == box.max)
         return;
     m_viewCube = box;
@@ -49,7 +49,7 @@ void QChartCamera3D::setViewCubeSize(const QVector3D& s) {
     }
     const QVector3D center = viewCubeCenter();
     const QVector3D half = s * 0.5f;
-    const ViewCube box{ center - half, center + half };
+    const QCube box{ center - half, center + half };
     if (box.min == m_viewCube.min && box.max == m_viewCube.max)
         return;
     m_viewCube = box;
@@ -249,11 +249,6 @@ Ray QChartCamera3D::unproject(const QPointF& pixel, const QRectF& plotArea) cons
                                    worldFar.z() / worldFar.w());
     QVector3D direction = (farPoint - origin).normalized();
     return Ray{ origin, direction };
-}
-
-// ---- Fit 到绘图区（基类虚函数实现） ----
-bool QChartCamera3D::fitToPlotArea(const QRectF& plotArea) {
-    return fitCameraConfig(plotArea, FitConstraint::FixedFov);
 }
 
 // ---- fitCameraConfig（核心求解器） ----

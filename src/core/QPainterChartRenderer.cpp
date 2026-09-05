@@ -3,7 +3,7 @@
 #include "QChartAbstractProjection.h"
 #include "QChartCamera.h"
 #include "QChartCamera3D.h"
-#include "ViewCube.h"
+#include "QCube.h"
 #include <QPainter>
 #include <QLoggingCategory>
 
@@ -242,7 +242,49 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
     const QRectF& plotArea = scene.plotArea;
     auto& visibility = m_visibilityCache;
 
+        // 1. 收集可见图元的索引
+    QVector<int> sortedIndices(scene.primitives.size());
+    int cnt = 0;
     for (int i = 0; i < scene.primitives.size(); ++i) {
+        if (m_visibilityCache[i]) sortedIndices[cnt++] = i;
+    }
+    sortedIndices.resize(cnt);
+
+    for (auto i : sortedIndices) {
+        QChartPrimitive& prim = scene.primitives[i];
+        qreal depth;
+        switch (prim.type) {
+        case QChartPrimitive::Type::Point:
+            depth = cam3d->project(prim.cartA, plotArea).depth;
+            break;
+        case QChartPrimitive::Type::Line:
+            depth = cam3d->project((prim.cartA + prim.cartB) * 0.5, plotArea).depth;
+            break;
+        case QChartPrimitive::Type::Rect:
+        case QChartPrimitive::Type::Ellipse:
+            break;
+        case QChartPrimitive::Type::Polygon:
+        case QChartPrimitive::Type::Path:
+            depth = cam3d->project(QCube(prim.cartVerts).center(), plotArea).depth;
+            break;
+        case QChartPrimitive::Type::TriangleMesh:
+        case QChartPrimitive::Type::TriangleFan:
+        case QChartPrimitive::Type::TriangleStrip:
+            depth = cam3d->project(QCube(prim.cartVerts).center(), plotArea).depth;
+            break;
+        }
+        prim.depth = depth;
+    }
+
+    // 2. 按 depth 降序排序（远→近）
+    std::sort(sortedIndices.begin(), sortedIndices.end(),
+        [&](int a, int b) {
+            // 注意：这里的 depth 应该是相机空间下的视图深度（-viewZ）
+            // 你可以从 prim.cartA 实时计算，或使用预先算好的 prim.depth
+            return scene.primitives[a].depth > scene.primitives[b].depth;
+        });
+
+    for (auto i : sortedIndices) {
         if (!visibility[i]) continue;
         const QChartPrimitive& prim = scene.primitives[i];
 
@@ -345,7 +387,7 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
 
 // 步骤 4：标签绘制
 
-// 裁剪辅助函数（使用 ViewCube 工具类）
+// 裁剪辅助函数（使用 QCube 工具类）
 
 bool QPainterChartRenderer::isPrimitiveVisible(const QChartPrimitive& prim,
                                                 const QChartAbstractCamera* camera) const
@@ -410,9 +452,9 @@ bool QPainterChartRenderer::isPrimitiveVisible2D(const QChartPrimitive& prim, co
     }
 }
 
-bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, const ViewCube& viewCube) const
+bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, const QCube& viewCube) const
 {
-    // 使用 ViewCube 工具类的 intersects 方法
+    // 使用 QCube 工具类的 intersects 方法
     // 先为图元构建一个包围盒
     switch (prim.type) {
     case QChartPrimitive::Type::Point:
@@ -420,7 +462,7 @@ bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, co
 
     case QChartPrimitive::Type::Line: {
         // 用线段两端点形成包围盒
-        ViewCube lineCube(prim.cartA, prim.cartB);
+        QCube lineCube(prim.cartA, prim.cartB);
         return viewCube.intersects(lineCube);
     }
 
@@ -430,7 +472,7 @@ bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, co
         // Rect/Ellipse 在 z=0 平面，构建薄片包围盒
         QVector3D min(prim.cartRect.left(), prim.cartRect.top(), 0);
         QVector3D max(prim.cartRect.right(), prim.cartRect.bottom(), 0);
-        ViewCube rectCube(min, max);
+        QCube rectCube(min, max);
         return viewCube.intersects(rectCube);
     }
 
@@ -449,7 +491,7 @@ bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, co
             minY = qMin(minY, v.y()); maxY = qMax(maxY, v.y());
             minZ = qMin(minZ, v.z()); maxZ = qMax(maxZ, v.z());
         }
-        ViewCube aabb(QVector3D(minX, minY, minZ), QVector3D(maxX, maxY, maxZ));
+        QCube aabb(QVector3D(minX, minY, minZ), QVector3D(maxX, maxY, maxZ));
         return viewCube.intersects(aabb);
     }
     default:

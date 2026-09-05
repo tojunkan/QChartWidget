@@ -38,8 +38,8 @@ public:
     explicit QChartCamera3D(QObject* parent = nullptr);
 
     // ---- 数据锚点 (ViewCube) ----
-    ViewCube viewCube() const { return m_viewCube; }
-    void setViewCube(const ViewCube& box);
+    QCube viewCube() const { return m_viewCube; }
+    void setViewCube(const QCube& box);
     QVector3D viewCubeCenter() const { return (m_viewCube.min + m_viewCube.max) * 0.5f; }
     void setViewCubeCenter(const QVector3D& c);
     QVector3D viewCubeSize() const { return m_viewCube.max - m_viewCube.min; }
@@ -105,7 +105,7 @@ private:
     bool isNearFarOverridden() const { return m_nearFarOverride; }
 
     // ---- 核心状态 ----
-    ViewCube m_viewCube{ QVector3D(0,0,0), QVector3D(10,10,10) };
+    QCube m_viewCube{ QVector3D(0,0,0), QVector3D(10,10,10) };
     qreal m_yaw = 45.0;
     qreal m_pitch = 30.0;
     qreal m_roll = 0.0;
