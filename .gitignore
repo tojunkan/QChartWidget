@@ -46,3 +46,6 @@ scripts/config.local.bat
 
 # QtMsBuild
 QtMsBuild/
+
+# testing temporary files
+Testing/

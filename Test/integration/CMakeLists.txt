@@ -25,6 +25,12 @@ target_include_directories(QChartIntegrationTests PRIVATE
 target_link_libraries(QChartIntegrationTests PRIVATE QChartWidget::QChartWidget Qt6::Test)
 
 add_test(NAME QChartIntegrationTests COMMAND QChartIntegrationTests)
-if(NOT WIN32)
-    set_tests_properties(QChartIntegrationTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+if(WIN32)
+    set_tests_properties(QChartIntegrationTests PROPERTIES
+        ENVIRONMENT "PATH=${CMAKE_PREFIX_PATH}/bin;$ENV{PATH}"
+    )
+else()
+    set_tests_properties(QChartIntegrationTests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
 endif()
