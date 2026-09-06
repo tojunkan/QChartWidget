@@ -12,7 +12,6 @@
 #include <algorithm>
 
 class QPolarProjection : public QChartProjection {
-    Q_OBJECT
 public:
 
 	QPolarProjection() : QChartProjection("θ", "r") {}

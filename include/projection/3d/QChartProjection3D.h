@@ -9,7 +9,6 @@
 #include <utility>
 
 class QChartProjection3D : public QChartAbstractProjection {
-    Q_OBJECT
 public:
     QChartProjection3D(QString name0 = "x", QString name1 = "y", QString name2 = "z")
         : QChartAbstractProjection({name0, name1, name2}) {}

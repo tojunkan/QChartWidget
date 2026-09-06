@@ -34,31 +34,31 @@ public:
     void setAxisY(QChartAxis* a);
     virtual bool validateAxes() const;
 
-    // ===== Series 管理 =====
-    void addSeries(QChartSeries* s);
-    void removeSeries(QChartSeries* s);
-    QList<QChartSeries*> seriesList() const { return m_series; }
-    void clearSeries();
+    // ===== Series 管理（待 Series 阶段随 QChartSeries.cpp 一起恢复）=====
+    // void addSeries(QChartSeries* s);
+    // void removeSeries(QChartSeries* s);
+    // QList<QChartSeries*> seriesList() const { return m_series; }
+    // void clearSeries();
 
     // ===== 绘制（由 QChartWidget 调用）=====
 
     /// 画网格：用 axisX/axisY 的 tickValues 作为 offset，画数据主脊（只画轴线，无标签刻度）
     void drawGrid(QChartScene& scene);
-    void drawAllSeries(QChartScene& scene);
     void collectPrimitives();
     void invalidateData() { m_dataDirty = true; }
+    // void drawAllSeries(QChartScene& scene);   // 待 Series 阶段恢复
 
-    // ===== 命中检测 =====
-    /// 统一 HitResult（Phase 3 任务 0：定义提升到 QChartHitTester，本类保留别名，调用方零改动）
+    // ===== 命中检测（Phase 3 任务 0：定义提升到 QChartHitTester）=====
     using HitResult = QChartHitTester::HitResult;
-    HitResult hitTest(const QPointF& pixel, const DrawContext& ctx) const;
+    // HitResult hitTest(const QPointF& pixel, const DrawContext& ctx) const;
+    // ↑ S0：拾取整体后置。旧实现依赖已删除的 makeToPixel/旧 DrawContext 字段，
+    //   待拾取（hitTest）随后续阶段恢复时与 QChartHitTester 一起重新接入。
 
     // ===== 交互 =====
     virtual void recomputeDataBounds() = 0;
 
 signals:
-    void seriesAdded(QChartSeries*);
-    void seriesRemoved(QChartSeries*);
+    // seriesAdded(QChartSeries*)/seriesRemoved(QChartSeries*) 待 Series 阶段恢复
     void gridChanged();
 
 public:
@@ -82,8 +82,7 @@ public:
 
 protected:
 
-    void hookSeriesDirty(QChartSeries* s);
-    void unhookSeriesDirty(QChartSeries* s);
+    // hookSeriesDirty/unhookSeriesDirty 待 Series 阶段随 QChartSeries.cpp 恢复
 
     QChartAxis *m_axisX = nullptr;
     QChartAxis *m_axisY = nullptr;
@@ -91,7 +90,7 @@ protected:
     QRectF m_dataBounds; // 通过 axisX/axisY 的 min/m_max 计算得出，供 drawGrid/collectPrimitives 使用
     QChartScene m_scene;  // 当前场景快照（由 buildScene 填充）
     bool m_dataDirty = true;
-    QList<QChartSeries*> m_series;
+    // QList<QChartSeries*> m_series;   // 待 Series 阶段恢复
     bool m_gridVisible = true;
     std::optional<QColor> m_gridColorOverride;           // 用户显式设过（setGridColor）
     QColor m_themeGridColor = QColor(220, 220, 220);     // 主题注入默认（setThemeGridColor）

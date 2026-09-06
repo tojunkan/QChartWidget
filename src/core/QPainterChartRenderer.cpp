@@ -2,8 +2,6 @@
 #include "QPainterChartRenderer.h"
 #include "QChartAbstractProjection.h"
 #include "QChartCamera.h"
-#include "QChartCamera3D.h"
-#include "QCube.h"
 #include <QPainter>
 #include <QLoggingCategory>
 
@@ -87,7 +85,10 @@ void QPainterChartRenderer::cullAndResolveLabels(QChartScene& scene)
         bool visible = isPrimitiveVisible(prim, camera);
         visibility[i] = visible;
         if (visible) {
-            lastVisibleIndex[prim.sourceId] = i;
+            // F1(S0 修复)：sourceId 可为 -1（直接 drawAtPosition 装配的图元），
+            // 未守卫时 lastVisibleIndex[-1]=i 是整型负下标越界写；仅记录合法 sourceId。
+            if (prim.sourceId >= 0 && prim.sourceId < lastVisibleIndex.size())
+                lastVisibleIndex[prim.sourceId] = i;
         }
     }
 
@@ -131,13 +132,11 @@ void QPainterChartRenderer::drawPrimitives(QChartScene& scene,
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setClipRect(scene.plotArea);
 
-    // 根据相机类型选择映射方式
+    // 根据相机类型选择映射方式（S0 子集仅含 2D；3D 相机随 3D 阶段恢复）
     if (const QChartCamera* cam2d = dynamic_cast<const QChartCamera*>(camera)) {
         drawPrimitives2D(painter, scene, cam2d);
-    } else if (const QChartCamera3D* cam3d = dynamic_cast<const QChartCamera3D*>(camera)) {
-        drawPrimitives3D(painter, scene, cam3d);
     } else {
-        qWarning() << "QPainterChartRenderer: 未知相机类型";
+        qWarning() << "QPainterChartRenderer: 非 2D 相机（3D 路径随 3D 阶段恢复）";
     }
 }
 
@@ -236,8 +235,9 @@ void QPainterChartRenderer::drawPrimitives2D(QPainter& painter,
     }
 }
 
+#if 0 // S0：3D 路径随 3D 阶段恢复（QChartCamera3D 未入 S0 子集，其 typeinfo/moc 未链接）
 void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
-                                             const QChartScene& scene,
+                                             QChartScene& scene,
                                              const QChartCamera3D* cam3d) {
     const QRectF& plotArea = scene.plotArea;
     auto& visibility = m_visibilityCache;
@@ -384,10 +384,67 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
         }
     }
 }
+#endif // 3D drawPrimitives3D（S0 暂禁）
 
 // 步骤 4：标签绘制
 
-// 裁剪辅助函数（使用 QCube 工具类）
+void QPainterChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
+{
+    if (!device) return;
+
+    const QChartAbstractCamera* camera = scene.camera;
+    if (!camera) return;
+
+    QPainter painter(device);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setClipRect(scene.plotArea);
+
+    // 根据相机类型选择映射方式（与 drawPrimitives 同构；S0 仅 2D）
+    if (const QChartCamera* cam2d = dynamic_cast<const QChartCamera*>(camera)) {
+        drawLabels2D(painter, scene, cam2d);
+    } else {
+        qWarning() << "QPainterChartRenderer: 非 2D 相机（3D 标签随 3D 阶段恢复）";
+    }
+}
+
+void QPainterChartRenderer::drawLabels2D(QPainter& painter,
+                                         const QChartScene& scene,
+                                         const QChartCamera* cam2d)
+{
+    const QRectF& plotArea = scene.plotArea;
+
+    for (const QChartTextLabel& label : scene.labels) {
+        if (!label.visible) continue;
+
+        QChartProjectedPoint pp = cam2d->project(label.cartesianAnchor, plotArea);
+        if (!plotArea.contains(pp.screen)) continue;
+
+        drawLabel(painter, plotArea, pp.screen, label.text, label.color,
+                  label.fontSize, label.alignment);
+    }
+}
+
+#if 0 // S0：3D 标签随 3D 阶段恢复
+void QPainterChartRenderer::drawLabels3D(QPainter& painter,
+                                         const QChartScene& scene,
+                                         const QChartCamera3D* cam3d)
+{
+    const QRectF& plotArea = scene.plotArea;
+
+    for (const QChartTextLabel& label : scene.labels) {
+        if (!label.visible) continue;
+
+        QChartProjectedPoint pp = cam3d->project(label.cartesianAnchor, plotArea);
+        if (!std::isfinite(pp.screen.x()) || !std::isfinite(pp.screen.y())) continue;
+        if (!plotArea.contains(pp.screen)) continue;
+
+        drawLabel(painter, plotArea, pp.screen, label.text, label.color,
+                  label.fontSize, label.alignment);
+    }
+}
+#endif // 3D drawLabels3D（S0 暂禁）
+
+// 裁剪辅助函数
 
 bool QPainterChartRenderer::isPrimitiveVisible(const QChartPrimitive& prim,
                                                 const QChartAbstractCamera* camera) const
@@ -397,9 +454,7 @@ bool QPainterChartRenderer::isPrimitiveVisible(const QChartPrimitive& prim,
     if (const QChartCamera* cam2d = dynamic_cast<const QChartCamera*>(camera)) {
         return isPrimitiveVisible2D(prim, cam2d->viewRect());
     }
-    if (const QChartCamera3D* cam3d = dynamic_cast<const QChartCamera3D*>(camera)) {
-        return isPrimitiveVisible3D(prim, cam3d->viewCube());
-    }
+    // 3D（viewCube 裁剪）随 3D 阶段恢复
     return true;
 }
 
@@ -445,13 +500,19 @@ bool QPainterChartRenderer::isPrimitiveVisible2D(const QChartPrimitive& prim, co
             minX = qMin(minX, v.x()); maxX = qMax(maxX, v.x());
             minY = qMin(minY, v.y()); maxY = qMax(maxY, v.y());
         }
-        return viewRect.intersects(QRectF(minX, minY, maxX - minX, maxY - minY));
+        // 退化盒（水平/垂直轴线，宽或高为 0）：QRectF::intersects 对零面积盒返回 false，
+        // 会误裁掉轴脊/网格线 → 微扩 1e-6 后判定（纯裁剪修正，不改几何）。
+        QRectF bbox(minX, minY, maxX - minX, maxY - minY);
+        if (bbox.width() <= 0.0 || bbox.height() <= 0.0)
+            bbox.adjust(-1e-6, -1e-6, 1e-6, 1e-6);
+        return viewRect.intersects(bbox);
     }
     default:
         return true;
     }
 }
 
+#if 0 // S0：3D 裁剪随 3D 阶段恢复
 bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, const QCube& viewCube) const
 {
     // 使用 QCube 工具类的 intersects 方法
@@ -498,3 +559,4 @@ bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, co
         return true;
     }
 }
+#endif // 3D isPrimitiveVisible3D（S0 暂禁）

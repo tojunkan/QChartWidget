@@ -38,26 +38,17 @@ private:
     /// 2D 裁剪：图元与 QRectF 相交测试
     bool isPrimitiveVisible2D(const QChartPrimitive& prim, const QRectF& viewRect) const;
 
-    /// 3D 裁剪：图元与 ViewCube 相交测试
-    bool isPrimitiveVisible3D(const QChartPrimitive& prim, const QCube& viewCube) const;
-
-    // ===== 绘制辅助（拆分 2D/3D） =====
+    // ===== 绘制辅助 =====
+    // S0：CPU 渲染器只含 2D 路径（QChartCamera3D 未入 S0 子集）；
+    //     3D 的 drawPrimitives3D/drawLabels3D/isPrimitiveVisible3D 随 3D 阶段恢复。
 
     void drawPrimitives2D(QPainter& painter,
                           const QChartScene& scene,
                           const QChartCamera* cam2d);
 
-    void drawPrimitives3D(QPainter& painter,
-                          const QChartScene& scene,
-                          const QChartCamera3D* cam3d);
-
     void drawLabels2D(QPainter& painter,
                       const QChartScene& scene,
                       const QChartCamera* cam2d);
-
-    void drawLabels3D(QPainter& painter,
-                      const QChartScene& scene,
-                      const QChartCamera3D* cam3d);
 };
 
 #endif // QPAINTERCHARTRENDERER_H

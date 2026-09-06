@@ -13,7 +13,6 @@
 #include <cmath>
 
 class QChartAbstractProjection {
-    Q_OBJECT
 public:
     // 坐标系类型枚举
     enum class CoordinateSystem {

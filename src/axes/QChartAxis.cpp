@@ -238,8 +238,8 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,
                                 QChartScene& scene,
-                                int segments = 72,
-                                bool drawLabels = true) const
+                                int segments,
+                                bool drawLabels) const
 {
     if (!m_visible) return;
     if (dimMin > dimMax) std::swap(dimMin, dimMax);
@@ -288,6 +288,7 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         }
 
         // 4b. 7 个点图元（中心 + 6 个方向）
+        const int centerIdx = outPrims->size();   // 中心点将落在此下标（先于 6 个方向点）
         QChartPrimitive center;
         center.type = QChartPrimitive::Type::Point;
         center.numA = pos;
@@ -307,6 +308,8 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         }
 
         // 4c. 标签（锚点指向刻度位置，方向由 Renderer 决定）
+        // 绑定到本刻度中心点图元：cullAndResolveLabels 经 refPrimitiveId
+        // 得到 cartesianAnchor 与可见性（sourceId=-1 的自由标签路径会隐藏标签，故用绑定路线）。
         if (drawLabels && i < labels.size() && !labels[i].isEmpty()) {
             QChartTextLabel label;
             label.text = labels[i];
@@ -315,7 +318,7 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
             label.alignment = Qt::AlignCenter;
             label.numericAnchor = pos;
             label.sourceId = -1;
-            label.refPrimitiveId = -1;
+            label.refPrimitiveId = centerIdx;
             outLabels->append(label);
         }
     }

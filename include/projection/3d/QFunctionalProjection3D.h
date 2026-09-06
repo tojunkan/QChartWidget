@@ -11,7 +11,6 @@
 #include <QDebug>
 
 class QFunctionalProjection3D : public QChartProjection3D {
-    Q_OBJECT
 public:
     /// forward: Numeric (n0,n1,n2) → World，必传
     /// backward: World → Numeric；nullptr → fromWorld 返回 NaN

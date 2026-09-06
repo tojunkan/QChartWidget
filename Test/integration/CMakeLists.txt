@@ -1,18 +1,27 @@
-# Test/integration/CMakeLists.txt
-set(INTEGRATION_TEST_HEADERS
-    tests/test_initialization_flow.h
+# Test/integration —— 分期集成测试（S0 起逐步扩充）
+# 旧版 CMakeLists_OLD.txt / main_OLD.cpp / test_initialization_flow 保留参考。
+# 阶梯约定：每阶段在此追加集成测试类（多类搭配、覆盖不同组合）。
+find_package(Qt6 6.2 REQUIRED COMPONENTS Test)
+
+set(QCHART_INTEGRATION_HEADERS
+    # S0：在此追加集成测试头
+    tests/test_axis_matrix.h
 )
 
-set(INTEGRATION_TEST_SOURCES
+set(QCHART_INTEGRATION_SOURCES
     main.cpp
-    tests/test_initialization_flow.cpp
+    # S0：在此追加集成测试源
+    tests/test_axis_matrix.cpp
 )
 
-qt6_wrap_cpp(INTEGRATION_TEST_MOCS ${INTEGRATION_TEST_HEADERS})
+qt6_wrap_cpp(QCHART_INTEGRATION_MOCS ${QCHART_INTEGRATION_HEADERS})
 
-add_executable(QChartIntegrationTests ${INTEGRATION_TEST_SOURCES} ${INTEGRATION_TEST_MOCS})
+add_executable(QChartIntegrationTests ${QCHART_INTEGRATION_SOURCES} ${QCHART_INTEGRATION_MOCS})
 set_target_properties(QChartIntegrationTests PROPERTIES AUTOMOC OFF)
-target_include_directories(QChartIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(QChartIntegrationTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/Test/integration/tests
+)
 target_link_libraries(QChartIntegrationTests PRIVATE QChartWidget::QChartWidget Qt6::Test)
 
 add_test(NAME QChartIntegrationTests COMMAND QChartIntegrationTests)

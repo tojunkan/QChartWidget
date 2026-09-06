@@ -31,16 +31,17 @@ namespace {
     static QString buildVertexShader(ShaderKind kind,
                                      const QChartAbstractProjection* proj)
     {
-        // 1. 获取投影变换 GLSL 代码
+        // 1. 获取投影变换 GLSL 表达式（投影族统一契约：glslToCartesian() 返回
+        //    以 vec3 num 为输入的 Cartesian 表达式；着色器在此拼装 num 与赋值。）
         QString transformCode;
         if (proj) {
             transformCode = proj->glslToCartesian();
             if (transformCode.isEmpty()) {
-                // 如果投影没有提供 GLSL 变换，使用恒等
-                transformCode = "vec3 cart = a_pos;";
+                // 投影未提供 GLSL 变换 → 恒等
+                transformCode = "num";
             }
         } else {
-            transformCode = "vec3 cart = a_pos;";
+            transformCode = "num";
         }
 
         // 2. 确定是否需要 gl_PointSize
@@ -72,8 +73,9 @@ flat out int v_primId;
 
 void main() {
     // ★ 投影变换注入点（Numeric → Cartesian）★
-    // 期望输出：vec3 cart
-    %1
+    // glslToCartesian() 返回表达式（以 num 为输入、值为 Cartesian 坐标）
+    vec3 num = a_pos;
+    vec3 cart = %1;
 
     // 应用视图投影矩阵
     vec4 clip = u_viewProj * vec4(cart, 1.0);

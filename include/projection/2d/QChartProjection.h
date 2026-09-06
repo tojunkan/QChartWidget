@@ -8,7 +8,6 @@
 #include <QRectF>
 
 class QChartProjection : public QChartAbstractProjection {
-    Q_OBJECT
 public:
     // 构造：2D 只有两个维度名称
     QChartProjection(QString name0 = "x", QString name1 = "y")

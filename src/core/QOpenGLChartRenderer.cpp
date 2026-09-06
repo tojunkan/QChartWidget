@@ -2,7 +2,6 @@
 #include "QOpenGLChartRenderer.h"
 #include "QChartAbstractProjection.h"
 #include "QInterpolatedProjection.h"
-#include "QChartCamera3D.h"
 #include "QChartCamera.h"
 #include <QOpenGLContext>
 #include <QOpenGLVersionFunctionsFactory>
@@ -60,6 +59,12 @@ void QOpenGLChartRenderer::drawPrimitives(QChartScene& scene,
         qWarning() << "No current OpenGL context!";
         return;
     }
+    QOpenGLFunctions_3_3_Core* f = glFuncs();
+    if (!f) return;
+
+    // F2(S0 修复)：GL_PROGRAM_POINT_SIZE 未开启时，Core Profile 顶点着色器写的
+    // gl_PointSize 被忽略（llvmpipe 实测刻度点完全不光栅化）；绘制前开启、绘制后恢复默认。
+    f->glEnable(GL_PROGRAM_POINT_SIZE);
 
     // 进入这个函数说明viewDirty确实是脏的。但是这些逻辑在基类的render函数里已经实现过了。
     // 可以直接调用buildBatches
@@ -69,6 +74,8 @@ void QOpenGLChartRenderer::drawPrimitives(QChartScene& scene,
     drawPass(scene, ShaderKind::Triangle);
     drawPass(scene, ShaderKind::Line);
     drawPass(scene, ShaderKind::Point);
+
+    f->glDisable(GL_PROGRAM_POINT_SIZE);
 }
 
 void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
@@ -84,8 +91,6 @@ void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setClipRect(plotArea);
 
-    QFont font = painter.font();
-
     for (const QChartTextLabel& label : scene.labels) {
         if (!label.visible) continue;
 
@@ -95,12 +100,9 @@ void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
 
         if (!plotArea.contains(pixelPos)) continue;
 
-        font.setPointSizeF(label.fontSize);
-        painter.setFont(font);
-        painter.setPen(label.color);
-
-        const int flags = int(label.alignment) | Qt::TextDontClip;
-        painter.drawText(QRectF(pixelPos, QSizeF(0, 0)), flags, label.text);
+        // 与 CPU 后端共用同一标签排版逻辑（对齐/避让/钳制）
+        drawLabel(painter, plotArea, pixelPos, label.text, label.color,
+                  label.fontSize, label.alignment);
     }
 }
 
@@ -273,8 +275,8 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
                     float a1 = 2 * M_PI * i / segs;
                     float a2 = 2 * M_PI * (i+1) / segs;
                     verts.append({cx, cy, 0, rCol, gCol, bCol, aCol});  // 中心
-                    verts.append({cx + rx * cos(a1), cy + ry * sin(a1), 0, rCol, gCol, bCol, aCol});
-                    verts.append({cx + rx * cos(a2), cy + ry * sin(a2), 0, rCol, gCol, bCol, aCol});
+                    verts.append({float(cx + rx * cos(a1)), float(cy + ry * sin(a1)), 0, rCol, gCol, bCol, aCol});
+                    verts.append({float(cx + rx * cos(a2)), float(cy + ry * sin(a2)), 0, rCol, gCol, bCol, aCol});
                 }
                 break;
             }

@@ -10,7 +10,6 @@
 #include <QtMath>
 
 class QSphericalProjection3D : public QChartProjection3D {
-    Q_OBJECT
 public:
     QSphericalProjection3D() : QChartProjection3D("r", "θ", "φ") {}
 

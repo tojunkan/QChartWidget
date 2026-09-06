@@ -8,7 +8,7 @@
 #ifndef QCHARTHITTESTER_H
 #define QCHARTHITTESTER_H
 
-#include "QChartRenderer.h"   // QChartPrimitive（PickRecord::layer 需完整类型；§8.1）
+#include "QChartRenderer.h"   // QChartPrimitive（PickRecord 图元记录用；S0 已注释 layer 字段）
 #include <QPointF>
 #include <QList>
 #include <QVector>
@@ -53,7 +53,7 @@ public:
     struct PickRecord {
         QChartSeries* series = nullptr;   // 系列（series 层）；轴/网格装饰 = nullptr
         int dataIndex = -1;               // 数据索引（同 2D HitResult.dataIndex 语义）
-        QChartPrimitive::Layer layer;     // 备用（调试/断言）
+        // QChartPrimitive::Layer layer;  // 备用（调试/断言）——S0 已删除（新 QChartPrimitive 无 Layer 枚举）；拾取整体后置，需时随拾取设计一并恢复
     };
 
     // ===== GPU 拾取解码（design_phase3.md §8.1，t46 落地）=====

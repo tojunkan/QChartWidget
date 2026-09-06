@@ -4,6 +4,11 @@
 #include <QDebug>
 #include <cmath>
 
+// S0：logProjection 类别定义自 src/core/QChartWidget.cpp 临时迁来（该 cpp 未纳入 S0 子集，
+// 但 QPolarProjection 等 2D 投影 header 内 qCDebug(logProjection) 需要其定义才能链接）；
+// Widget 阶段把 QChartWidget.cpp 加回时，删除此处定义、恢复其在原文件的定义。
+Q_LOGGING_CATEGORY(logProjection, "chart.projection")
+
 QInterpolatedProjection::QInterpolatedProjection(QChartProjection* a, QChartProjection* b)
     : m_a(a), m_b(b) {}
 

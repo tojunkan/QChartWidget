@@ -1,35 +1,18 @@
 // QChartLayer.cpp —— 图层基类实现
 #include "QChartLayer.h"
-#include "QChartAbstractWidget.h"
 #include "QChartCamera.h"
-#include "QChartSeries.h"
 #include <QDebug>
 #include <QLoggingCategory>
 
 Q_LOGGING_CATEGORY(logLayer, "chart.layer")
 
 QChartLayer::QChartLayer(QObject* parent) : QObject(parent) {
-    connect(this, &QChartLayer::gridChanged, this, invalidateData);
-    connect(this, &QChartLayer::seriesAdded, this, invalidateData);
-    connect(this, &QChartLayer::seriesRemoved, this, invalidateData);
-
-    if(qobject_cast<QChartAbstractWidget*>(parent)) {
-        // 如果父对象是 QChartAbstractWidget，则自动注入 plotArea
-        QChartAbstractWidget* widget = qobject_cast<QChartAbstractWidget*>(parent);
-        m_scene.plotArea = widget->plotArea();
-        connect(widget, &QChartAbstractWidget::plotAreaChanged, this, [this](const QRectF& newPlotArea) {
-            m_scene.plotArea = newPlotArea;
-            invalidateData();
-        });
-        m_scene.projection = widget->projection();
-        connect(widget, &QChartAbstractWidget::projectionChanged, this, [this](const QChartAbstractProjection* newProjection) {
-            m_scene.projection = newProjection;
-            invalidateData();
-        });
-
-    }
+    connect(this, &QChartLayer::gridChanged, this, &QChartLayer::invalidateData);
+    // S0：QChartWidget/QChartAbstractWidget 尚未纳入本阶段子集，原「父对象为
+    // QChartAbstractWidget 时自动注入 plotArea/projection」分支随 Widget 阶段一并恢复；
+    // series 信号连接待 Series 阶段随 QChartSeries.cpp 恢复。
 }
-QChartLayer::~QChartLayer() { qDeleteAll(m_series); }
+QChartLayer::~QChartLayer() = default;
 
 // ===== 轴绑定 =====
 void QChartLayer::setAxisX(QChartAxis* a) {
@@ -114,10 +97,8 @@ void QChartLayer::setGridColor(const QColor& c) {
 // QChartLayer.cpp —— drawGrid 修改后
 
 void QChartLayer::collectPrimitives() {
-    // ---- 绘制网格 ----
+    // ---- 绘制网格（S0：Series 阶段前只收集网格；drawAllSeries 届时恢复）----
     drawGrid(m_scene);
-
-    drawAllSeries(m_scene);
 }
 
 void QChartLayer::drawGrid(QChartScene& scene) {
@@ -147,11 +128,9 @@ void QChartLayer::drawGrid(QChartScene& scene) {
 
     // ── 画 dim0 方向的网格线（垂直数据主脊）：dim0=扫, dim1=tick ──
     QVector<qreal> ticksY = m_axisY->tickValues(m_dataBounds.bottom(), m_dataBounds.top());
-    QStringList labelsY = m_axisY->tickLabels(ticksY);  // 提前获取完整标签列表
 
     for (int i = 0; i < ticksY.size(); ++i) {
         qreal tickVal = ticksY[i];
-        QString label = labelsY.value(i);               // 直接取对应标签
         addLine(m_axisX, 0, m_dataBounds.left(), m_dataBounds.right(),
                 tickVal, tickVal, /*drawLabels=*/true,
                 gridColor(), 1.0, scene);
@@ -159,46 +138,21 @@ void QChartLayer::drawGrid(QChartScene& scene) {
 
     // ── 画 dim1 方向的网格线（水平数据主脊）：dim1=扫, dim0=tick ──
     QVector<qreal> ticksX = m_axisX->tickValues(m_dataBounds.left(), m_dataBounds.right());
-    QStringList labelsX = m_axisX->tickLabels(ticksX);  // 提前获取完整标签列表
 
     for (int i = 0; i < ticksX.size(); ++i) {
         qreal tickVal = ticksX[i];
-        QString label = labelsX.value(i);
         addLine(m_axisY, 1, m_dataBounds.bottom(), m_dataBounds.top(),
                 tickVal, tickVal, /*drawLabels=*/true,
                 gridColor(), 1.0, scene);
     }
 }
 
-// ===== Series 管理 =====
-void QChartLayer::addSeries(QChartSeries* s) {
-    if (!s) return;
-    s->setParent(this);
-    m_series.append(s);
-    hookSeriesDirty(s);
-    emit seriesAdded(s);
-}
-
-void QChartLayer::removeSeries(QChartSeries* s) {
-    if (m_series.removeAll(s)) {
-        unhookSeriesDirty(s);
-        s->setParent(nullptr);
-        emit seriesRemoved(s);
-        delete s;
-    }
-}
-
-void QChartLayer::clearSeries() {
-    qDeleteAll(m_series);
-    m_series.clear();
-}
-
-void QChartLayer::hookSeriesDirty(QChartSeries* s) {
-    QObject::connect(s, &QChartSeries::dataChanged, this, &QChartLayer::invalidateData);
-}
-void QChartLayer::unhookSeriesDirty(QChartSeries* s) {
-    QObject::disconnect(s, &QChartSeries::dataChanged, this, &QChartLayer::invalidateData);
-}
+// ===== Series 管理（S0：随 QChartSeries.cpp 一起在 Series 阶段恢复）=====
+// void QChartLayer::addSeries(QChartSeries* s) { ... }
+// void QChartLayer::removeSeries(QChartSeries* s) { ... }
+// void QChartLayer::clearSeries() { ... }
+// void QChartLayer::hookSeriesDirty(QChartSeries* s) { ... }
+// void QChartLayer::unhookSeriesDirty(QChartSeries* s) { ... }
 
 // ===== drawAllSeries =====
 // void QChartLayer::drawAllSeries(QPainter* painter, const DrawContext& ctx) {
@@ -222,9 +176,11 @@ void QChartLayer::recomputeDataBounds() {
     
 }
 
-// ===== 命中检测（Phase 3 任务 0：逻辑委托 QChartHitTester，行为零变化）=====
-QChartLayer::HitResult QChartLayer::hitTest(const QPointF& pixel,
-                                                   const DrawContext& ctx) const {
-    auto toPixel = makeToPixel(const_cast<DrawContext&>(ctx));
-    return QChartHitTester::hitTest(pixel, m_series, toPixel, &ctx);
-}
+// ===== 命中检测（Phase 3 任务 0：拾取整体后置）=====
+// QChartLayer::HitResult QChartLayer::hitTest(const QPointF& pixel,
+//                                                    const DrawContext& ctx) const {
+//     // S0：旧实现调用已删除的 makeToPixel（依赖旧 DrawContext/QChartCamera2D 静态接口）。
+//     // 拾取后置；恢复时经 QChartHitTester::hitTest + 现行 projection/camera 重新接入。
+//     Q_UNUSED(pixel); Q_UNUSED(ctx);
+//     return {};
+// }

@@ -11,7 +11,7 @@
 #include <QRectF>
 #include <QString>
 #include <QVector3D>
-#include <QpainterPath>
+#include <QPainterPath>
 #include <Qt>
 #include "QChartAbstractProjection.h"   // ViewCube（QChartScene::viewCube 按值）
 #include "QChartCamera.h"

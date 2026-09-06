@@ -8,7 +8,6 @@
 #include <QtMath>
 
 class QCylindricalProjection3D : public QChartProjection3D {
-    Q_OBJECT
 public:
     QCylindricalProjection3D() : QChartProjection3D("r", "θ", "z") {}
 
