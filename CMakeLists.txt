@@ -34,12 +34,14 @@ set(QCHART_SOURCES
     src/axes/2d/QLogAxis.cpp
     src/axes/2d/QDateTimeAxis.cpp
     src/axes/2d/QBarCategoryAxis.cpp
-    # core：2D 相机 + 双后端渲染器 + GL 资源池
+    # core：2D 相机 + 双后端渲染器 + GL 资源池 + widget 容器层（批次 A 加入）
     src/core/QChartCamera.cpp
     src/core/QChartRenderer.cpp
     src/core/QPainterChartRenderer.cpp
     src/core/QOpenGLChartRenderer.cpp
     src/core/QChartGL.cpp
+    src/core/QChartAbstractWidget.cpp
+    src/core/QChartWidget.cpp
     # layers：2D 图层（3D 图层待后续阶段）
     src/layers/QChartLayer.cpp
     # projection：2D 投影族（3D 投影族为 header-only，随头文件引入即可；插值投影有 .cpp）
@@ -62,6 +64,8 @@ set(QCHART_HEADERS
     include/core/QPainterChartRenderer.h
     include/core/QOpenGLChartRenderer.h
     include/core/QChartGL.h
+    include/core/QChartAbstractWidget.h
+    include/core/QChartWidget.h
     include/layers/QChartLayer.h
     include/projection/QChartAbstractProjection.h
     include/projection/2d/QChartProjection.h

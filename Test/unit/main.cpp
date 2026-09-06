@@ -5,6 +5,8 @@
 
 // S0：在此 include 新测试头
 #include "test_axis_pipeline.h"
+// 批次 A：widget 容器冒烟
+#include "test_widget_smoke.h"
 
 int main(int argc, char* argv[])
 {
@@ -13,6 +15,7 @@ int main(int argc, char* argv[])
     int rc = 0;
     // S0：在此追加 QTest::qExec(new TestXxx, argc, argv)
     rc |= QTest::qExec(new TestAxisPipeline, argc, argv);
+    rc |= QTest::qExec(new TestWidgetSmoke, argc, argv);
 
     return rc;
 }

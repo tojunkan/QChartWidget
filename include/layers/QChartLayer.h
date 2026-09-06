@@ -23,9 +23,24 @@ class QChartLayer : public QObject
     Q_PROPERTY(QColor gridColor READ gridColor WRITE setGridColor NOTIFY gridChanged)
 public:
     explicit QChartLayer(QObject* parent = nullptr);
-    QChartLayer(QChartAbstractProjection* projection, QRectF plotArea, QObject* parent = nullptr);
-    
+    // QChartLayer(QChartAbstractProjection* projection, QRectF plotArea, QObject* parent = nullptr);
+    // ↑ 待 Widget 阶段恢复完整实现（当前仅旧声明保留，未编译引用）
+
     ~QChartLayer() override;
+
+    // ===== 相机（批次 A：相机归 layer——值成员自持，scene.camera 指向它）=====
+    QChartCamera* camera() { return &m_camera; }
+    const QChartCamera* camera() const { return &m_camera; }
+    /// 注入场景上下文（widget 渲染前调用）
+    void setSceneProjection(const QChartAbstractProjection* p) { m_scene.projection = p; }
+    void setScenePlotArea(const QRectF& plotArea) { m_scene.plotArea = plotArea; }
+    void setSceneBackground(const QColor& c) { m_scene.backgroundColor = c; }
+    /// 设置 Numeric 数据范围（legacy 取向：left/right=dim0 极值、bottom/top=dim1 极值）
+    /// 并同步到已绑定的 axisX/axisY 语法糖范围（widget viewRect→dataBounds 驱动链末端）
+    void setNumericBounds(const QRectF& bounds);
+    /// 收集结果快照（collectPrimitives 之后使用；scene.camera 恒指向本层 &m_camera）
+    const QChartScene& scene() const { return m_scene; }
+    QChartScene& scene() { return m_scene; }
 
     // ===== 轴绑定 =====
     QChartAxis* axisX() const { return m_axisX; }
@@ -55,7 +70,8 @@ public:
     //   待拾取（hitTest）随后续阶段恢复时与 QChartHitTester 一起重新接入。
 
     // ===== 交互 =====
-    virtual void recomputeDataBounds() = 0;
+    // 批次 A：默认空实现（.cpp 已有空体）；交互/数据链阶段可视需要恢复纯虚
+    virtual void recomputeDataBounds();
 
 signals:
     // seriesAdded(QChartSeries*)/seriesRemoved(QChartSeries*) 待 Series 阶段恢复
@@ -88,7 +104,8 @@ protected:
     QChartAxis *m_axisY = nullptr;
 
     QRectF m_dataBounds; // 通过 axisX/axisY 的 min/m_max 计算得出，供 drawGrid/collectPrimitives 使用
-    QChartScene m_scene;  // 当前场景快照（由 buildScene 填充）
+    QChartCamera m_camera;  // ★ 相机值成员（批次 A：相机归 layer；scene.camera=&m_camera 于构造注入）
+    QChartScene m_scene;  // 当前场景快照（collectPrimitives 填充；渲染上下文由 widget 注入）
     bool m_dataDirty = true;
     // QList<QChartSeries*> m_series;   // 待 Series 阶段恢复
     bool m_gridVisible = true;

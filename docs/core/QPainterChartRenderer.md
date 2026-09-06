@@ -1,46 +1,35 @@
 # QPainterChartRenderer Documentation
 
 ## Brief Introduction:
-QPainter 后端渲染器（D2 第一层）：持有 bg/fg 两张 QPixmap 缓存 + 脏标记，收编原 QChartWidget 的 drawBackground/drawForeground 绘制编排（轴、网格、系列、调试黄框、图例、3D 前景子路径）。缓存启用：背景脏→重建背景缓存、前景脏→重建前景缓存，再 blit 到目标 device；缓存禁用：直接绘制。3D 子路径（design_3d_axes §7.2）：collect → 分桶（Grid+Series / ForegroundDecor）→ Grid 深度偏置 → 深度降序 → decor 顺序 → labels → 2D overlay 后画。统一后端 CPU 侧实现（D26：渲染+拾取同后端）。
+QPainterChartRenderer 是 **CPU/QPainter 后端渲染器**（继承 QChartRenderer，S0 主渲染路径）。步骤 2 在 CPU 完成：`transformNumericToCartesian` 逐图元按类型调 `projection->toCartesian`（Rect/Ellipse 恒等投影直算 cartRect，否则**退化转换**为 4 顶点 Polygon 再变换）；`cullAndResolveLabels` 精确裁剪（点=viewRect.contains、线=端点/边相交、盒=相交、顶点类=包围盒相交，**零面积盒微扩 1e-6 判交**——R6 修复）并解析绑定/自由标签。步骤 3/4 经 `dynamic_cast<const QChartCamera*>` 走 **2D 分支**（drawPrimitives2D/drawLabels2D）：图元逐顶点 `camera->project` → QPainter 绘制；标签走共享 `drawLabel` 排版。**3D 路径（drawPrimitives3D/drawLabels3D/isPrimitiveVisible3D 等 #if 0 块）随 3D 阶段恢复**——3D 相机 typeinfo/moc 未入 S0，非 2D 相机时仅 qWarning 后跳过。
 
 ## Constant Variables:
-None.（继承 QChartRenderer 的 kGridDepthBias）
+None.
 
 ## Member Variables:
-
-| Type | Name | Description | Available Value | Default Value | Related Classes |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| `QPixmap` | `m_bgCache` | 背景缓存（轴/网格层；脏则重建）。 | `QPixmap` | 空 | `QChartScene` |
-| `QPixmap` | `m_fgCache` | 前景缓存（系列/图例/调试黄框；脏则重建）。 | `QPixmap` | 空 | `QChartScene` |
-| `bool` | `m_bgDirty` | 背景脏标记。 | `true` <br> `false` | `true` | — |
-| `bool` | `m_fgDirty` | 前景脏标记。 | `true` <br> `false` | `true` | — |
-| `bool` | `m_cachingEnabled` | 缓存开关（禁用=直接绘制）。 | `true` <br> `false` | `true` | — |
+None.（private 无成员；复用基类 m_viewDirty/m_visibilityCache）
 
 ## Member Functions (signals and overrided Qt events are not included):
 
 | Return Value Type | Name | Description | Parameters | Declared Field | Available Value | Called By | Related Classes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| — | `QPainterChartRenderer` | 构造函数（default）。 | — | public | — | QChartWidget 构造（m_renderer） | — |
-| — | `~QPainterChartRenderer` | 析构（default）。 | — | public | — | — | — |
-| `void` | `render` | 缓存路径：脏→重建对应缓存→blit 到 device（背景 → 前景 → 调试黄框逻辑内）；调用 `drawDirect`（缓存禁用时）。 | `const QChartScene& scene` <br> `QPaintDevice* device` | public override | — | `QChartWidget::paintEvent` | `QChartScene` |
-| `void` | `renderUncached` | 无缓存直绘（drawDirect）：导出专用（PNG/SVG/PDF 真矢量，不污染屏显缓存，D13）。 | `const QChartScene& scene` <br> `QPaintDevice* device` | public override | — | `QChartWidget::saveAsPng/Svg/Pdf` | `QChartScene` |
-| `void` | `invalidateBackground` | `m_bgDirty=true`。 | 无 | public override | — | `QChartWidget::invalidateBackground` | — |
-| `void` | `invalidateForeground` | `m_fgDirty=true`。 | 无 | public override | — | `QChartWidget::invalidateForeground` | — |
-| `void` | `setCachingEnabled` | 置缓存开关（关闭时清缓存）。 | `bool enabled` | public override | — | `QChartWidget::setCachingEnabled` | — |
-| `bool` | `isCachingEnabled` | 缓存状态访问器（内联）。 | 无 | public override | `true`/`false` | 测试 | — |
-| `void` | `drawBackground` | 背景绘制：背景色填充 + 各 layer 轴/网格（axes 遍历 drawAtEdge/drawAtPosition + layer drawGrid）。 | `QPainter* p` <br> `const QChartScene& scene` | private | — | `render`（背景缓存重建）/`drawDirect` | `QChartAxis` <br> `QChartLayer` |
-| `void` | `drawForeground` | 前景绘制：各 layer `drawAllSeries`（toPixel 闭包）+ 图例 + 调试黄框（exportMode 跳过）+ 3D 前景子路径（scene.is3D()）。 | `QPainter* p` <br> `const QChartScene& scene` | private | — | `render`（前景缓存重建）/`drawDirect` | `QChartLayer` <br> `QChartLegend` |
-| `void` | `drawForeground3D` | 3D 子路径：collect（Layer3D collectPrimitives 图元 + labels）→ 分桶（depthItems=Grid+Series / decor=ForegroundDecor）→ Grid 深度偏置（kGridDepthBias）→ depthItems 降序（远→近）→ decor 顺序 → labels → 2D overlay 后画。 | `QPainter* p` <br> `const QChartScene& scene` | private | — | `drawForeground`（scene.is3D()） | `QChartLayer3D` <br> `QChartPrimitive` |
-| `void` | `drawPrimitives` | 逐图元绘制：Point=drawEllipse（markerSize）、LineSegment=drawLine（pen=color+penWidth）。 | `QPainter* p` <br> `const QVector<QChartPrimitive>& items` | private | — | `drawForeground3D` | `QChartPrimitive` |
-| `void` | `drawLabels` | billboard 文本（drawText，裁剪 plotArea；isTitle 加大加粗）。 | `QPainter* p` <br> `const QChartScene& scene` <br> `const QVector<QChartTextLabel>& labels` | private | — | `drawForeground3D` | `QChartTextLabel` |
-| `void` | `drawDirect` | 无缓存直接绘制（drawBackground + drawForeground）。 | `QPainter* p` <br> `const QChartScene& scene` | private | — | `renderUncached`/`render`（缓存禁用） | — |
+| — | `QPainterChartRenderer` | 构造（default） | 无 | public | — | 测试（栈对象 `QPainterChartRenderer renderer; renderer.render(...)`） | — |
+| — | `~QPainterChartRenderer` | 析构（default override） | 无 | public | — | — | — |
+| `void` | `transformNumericToCartesian` | 覆写：proj 空返回；逐图元按 Type——Point/Line 变换端点；Rect/Ellipse：isIdentityMapping → 对角点变换成 cartRect，否则改写 type=Polygon + numVerts 4 角 + cartVerts 变换；Polygon/Path/三角族：cartVerts.resize 逐点变换 + cartIndices=numIndices | `QChartScene& scene` | protected | — | `QChartRenderer::render`（m_viewDirty 时） | `QChartAbstractProjection` |
+| `void` | `cullAndResolveLabels` | 覆写：visibility.resize(N)；逐图元 `isPrimitiveVisible(prim, camera)`；可见图元回填 `lastVisibleIndex[sourceId]`（**F1 守卫：仅 0≤sourceId<size 写入**——防直接装配图元 sourceId=-1 越界）；绑定标签：锚=图元 cartA、visible=该图元可见性；自由标签：sourceId 组最后可见图元锚定，无则不可见 | `QChartScene& scene` | protected | — | `QChartRenderer::render` | `QChartScene` |
+| `void` | `drawPrimitives` | 覆写：device/camera 空返回；建 QPainter（抗锯齿 + clipRect(plotArea)）；`dynamic_cast` 2D → drawPrimitives2D；否则 qWarning（3D 阶段恢复） | `QChartScene& scene, QPaintDevice* device, const QVector<bool>& visibility` | protected | — | `QChartRenderer::render` | `QChartCamera` |
+| `void` | `drawLabels` | 覆写：同 drawPrimitives 分派（2D → drawLabels2D；非 2D 相机 qWarning） | `QChartScene& scene, QPaintDevice* device` | protected | — | `QChartRenderer::render` | `QChartCamera` |
+| `bool` | `isPrimitiveVisible` | （private）camera 空 → true；2D → `isPrimitiveVisible2D(prim, cam2d->viewRect())`；非 2D → true（3D viewCube 裁剪随 3D 恢复） | `const QChartPrimitive& prim, const QChartAbstractCamera* camera` | private | `true`/`false` | `cullAndResolveLabels` 内部 | `QChartCamera` |
+| `bool` | `isPrimitiveVisible2D` | （private）2D 精确裁剪：Point=viewRect 含点；Line=端点含或与四边 BoundedIntersection；Rect/Ellipse=viewRect.intersects(cartRect)；Polygon/Path/三角族=顶点 AABB 与 viewRect 相交（**宽或高≤0 的退化盒 adjust ±1e-6 后判交**——R6，防水平/垂直轴脊被误裁）；空顶点 false | `const QChartPrimitive& prim, const QRectF& viewRect` | private | `true`/`false` | `isPrimitiveVisible` 内部 | — |
+| `void` | `drawPrimitives2D` | （private）按 m_visibilityCache 循环：Point → brush 画圆（半径=markerSize×0.5）；Line → 两点投影连线；Rect/Ellipse → 对角投影画矩形/椭圆（fill）；Polygon → 顶点序列投影 drawPolygon(fill)；Path → drawPolyline（NoBrush）；三角族：Mesh 有索引按 3 索引一组、Fan/Strip 连续 3 顶点一组 drawPolygon | `QPainter& painter, const QChartScene& scene, const QChartCamera* cam2d` | private | — | `drawPrimitives` 内部 | `QChartCamera` |
+| `void` | `drawLabels2D` | （private）循环 scene.labels：visible 才处理；`cam2d->project(cartesianAnchor)` 出屏外跳过；共享 `drawLabel` 排版绘制 | `QPainter& painter, const QChartScene& scene, const QChartCamera* cam2d` | private | — | `drawLabels` 内部 | `QChartCamera` |
 
 Notes:
-- 2D 路径逐字节未动红线（Phase 2/3 全程）：3D 段只在 scene.is3D() 时进入 drawForeground3D；2D 场景字段保持默认值零行为变化。
-- 深度语义：painter's algorithm（无硬件 z-buffer）——排序在 drawForeground3D 内完成（D16）；GL 后端等价性见 docs/core/deepdive_layerDepth.md。
+- 头注释契约：S0 CPU 渲染器只含 2D 路径；3D 相关私有方法声明已注释（drawPrimitives3D/drawLabels3D/isPrimitiveVisible3D 的 #if 0 定义保留在 .cpp，待 3D 阶段恢复启用，QCube 引用随之恢复）。
+- 像素语义：轴脊/刻度/标签像素断言（unit 6/6、矩阵 CPU 8/8）全部经本后端 offscreen 实测通过。
 
 ## Overrided Qt Events:
-None.（非 QWidget）
+无（非 QWidget）。
 
 ## Signals:
 None.（非 QObject）

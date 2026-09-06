@@ -1,22 +1,33 @@
-// QChartAbstractWidget.h —— 图表抽象基类
+// QChartAbstractWidget.h —— 图表抽象基类（S0+批次 A：容器化首改）
+// 目标架构决策（用户已确认，逐条落实）：
+//   (1) widget 层 = 纯容器：不含相机、不含 buildScene、不含图例/导出/拾取/动画；
+//       invalidateBackground/invalidateForeground 语义已由 dataDirty/viewDirty 取代。
+//   (2) 容器管理：layers 列表、唯一 plotArea（布局计算）、plotAreaChanged/projectionChanged 广播。
+//   (3) 相机归 layer（2D QChartLayer 自带 QChartCamera 值成员）。
+//   (4) GL 宿主为 plotArea 对齐的 QOpenGLWidget 子控件；CPU 后端不建 GL 子控件。
+//   (5) 事件分发钩子保留为空虚钩子（交互行为本阶段不实现）。
+// 旧成员/方法一律注释保留并标注“待 <阶段> 阶段恢复”，不删除代码实体、不编译引用未入阶段源。
 #ifndef QCHARTABSTRACTWIDGET_H
 #define QCHARTABSTRACTWIDGET_H
 
 #include <QWidget>
-#include <QPainter>
 #include <QRectF>
 #include <QColor>
-#include <memory>
 #include <QList>
+#include <memory>
 
-#include "QCube.h"
-#include "QChartScene.h"
-#include "QChartRenderer.h"
-#include "QPainterChartRenderer.h"
-#include "QOpenGLChartRenderer.h"
-#include "QChartCamera.h"
-#include "QChartLegend.h"
-#include "QChartSeries.h"
+class QChartLayer;
+class QChartAbstractProjection;
+class QPainterChartRenderer;
+class QOpenGLChartRenderer;
+class GlPlotWidget;   // 实现细节（QOpenGLWidget 子控件），定义于 .cpp
+
+class QPainter;
+class QPaintDevice;
+class QPaintEvent;
+class QResizeEvent;
+class QMouseEvent;
+class QWheelEvent;
 
 class QChartAbstractWidget : public QWidget
 {
@@ -31,118 +42,103 @@ public:
     explicit QChartAbstractWidget(QWidget* parent = nullptr);
     ~QChartAbstractWidget() override;
 
-    // ---- 渲染后端 ----
+    // ===== 渲染后端 =====
     void setRenderBackend(RenderBackend backend);
     RenderBackend renderBackend() const { return m_renderBackend; }
+    /// GL 宿主控件（plotArea 对齐；OpenGL 后端激活时非空；测试/宿主 FBO 取证用）
+    QWidget* glHostWidget() const { return m_glHostWidgetRaw; }
 
-    // ---- 图例 ----
-    QChartLegend* legend() const { return m_legend; }
+    // ===== 图层管理（容器）=====
+    void addLayer(QChartLayer* layer);
+    void removeLayer(QChartLayer* layer);
+    void clearLayers();
+    QList<QChartLayer*> layers() const { return m_layers; }
 
-    // ---- 数据范围 ----
+    // ===== 布局 / plotArea =====
+    /// 触发 layoutAxes()（重算 plotArea 并广播 plotAreaChanged）
+    void relayout();
     QRectF plotArea() const { return m_plotArea; }
-    QChartAbstractProjection* projection() const { return m_projection.get(); }
 
-    // ---- 导出（强制使用 QPainter） ----
-    bool saveAsPng(const QString& path, const QSize& size = {}, qreal devicePixelRatio = 1.0);
-    bool saveAsSvg(const QString& path, const QSize& size = {});
-    bool saveAsPdf(const QString& path, const QSize& size = {});
-    void setExportTransparentBackground(bool v) { m_exportTransparentBackground = v; }
-    bool exportTransparentBackground() const { return m_exportTransparentBackground; }
+    // ===== 边距（边框轴 sizeHint 占用外边距的基值）=====
+    void setMargins(qreal left, qreal top, qreal right, qreal bottom);
+    qreal marginLeft() const { return m_marginLeft; }
+    qreal marginTop() const { return m_marginTop; }
+    qreal marginRight() const { return m_marginRight; }
+    qreal marginBottom() const { return m_marginBottom; }
 
-    // ---- 缓存控制 ----
-    void invalidateBackground();
-    void invalidateForeground();
-    void invalidateLayout();
+    // 旧 API 注释保留（待对应阶段恢复）：
+    // void invalidateBackground();  —— 语义已被 renderer viewDirty / layer dataDirty 取代（批次 A 起不再提供）
+    // void invalidateForeground();  —— 同上
+    // bool saveAsPng(...); bool saveAsSvg(...); bool saveAsPdf(...);  待导出阶段恢复
+    // QChartLegend* legend() ...;  待 Phase-1（图例）阶段恢复
+    // QChartScene buildScene() ...; 已由「layer 快照 + renderer 管线」取代（见 QChartLayer::snapshotScene）
 
 signals:
     void plotAreaChanged(const QRectF& newPlotArea);
     void projectionChanged(const QChartAbstractProjection* newProjection);
 
+private:
+    friend class GlPlotWidget;   // GL 子控件 paintGL 需要调用渲染编排（renderLayersGL）
+
 protected:
-    
-    // 子类必须实现
-    
-    /// 计算 plotArea（基于当前尺寸和边距，考虑边框轴占用）
+    // ---- 子类必须实现 ----
+    /// 计算像素绘制区（基于 margins 与边框轴 sizeHint 的外边距占用）
     virtual QRectF calculatePlotArea() const = 0;
 
-    /// 从当前相机状态反算 dataBounds（QCube）
+    // ---- 子类可重写 ----
+    /// 绘制 plotArea 外部的内容（边框轴 drawAtEdge/标题；GPU 模式下 plotArea 由 GL 子控件覆盖）
+    virtual void drawExternalContent(QPainter& painter);
+    /// 渲染前钩子（子类用于同步 viewRect/dataBounds 驱动链等）
+    virtual void onBeforePaint() { }
+    /// 容器当前投影（子类持有唯一投影；pushContextToLayers 使用）
+    virtual const QChartAbstractProjection* projection() const { return nullptr; }
+    /// 场景背景色（默认白；主题阶段前由子类/调用方覆盖）
+    virtual QColor sceneBackgroundColor() const { return Qt::white; }
 
-    /// dataBounds 变化时，反算相机状态
-    /// 2D: dataBounds → viewRect（调用 projection->computeViewRect）
-    /// 3D: dataBounds → viewCube（调用相机 setViewCubeToFit）
-
-    /// 组装场景快照（由 paintEvent / paintGL 调用）
-    /// 子类填充 primitives、labels、camera、projection、plotArea、legend 等
-    
-    // 子类可重写
-
-    /// 绘制 plotArea 外部的内容（边框轴、标题等）
-    /// GPU 模式下，plotArea 内部由 GlHost 覆盖，但外部仍由外层绘制
-    virtual void drawExternalContent(QPainter& painter) { Q_UNUSED(painter); }
-
-    /// 交互行为（子类实现具体 pan/zoom/orbit 逻辑）
+    // ---- 事件分发钩子（本阶段为空；交互行为待交互阶段实现）----
     virtual void onMousePress(QMouseEvent* e) { Q_UNUSED(e); }
     virtual void onMouseMove(QMouseEvent* e) { Q_UNUSED(e); }
     virtual void onMouseRelease(QMouseEvent* e) { Q_UNUSED(e); }
     virtual void onWheel(QWheelEvent* e) { Q_UNUSED(e); }
 
-    /// 在 GlHost 的 QPainter 覆盖层中绘制额外内容（数据标签等）
-    virtual void drawOverlay(QPainter& painter, const QChartScene& scene) { Q_UNUSED(painter); Q_UNUSED(scene); }
+    // ---- 渲染管线编排（CPU/GL 共用）----
+    /// 把 layer 内容渲染到 device（每 layer 一次快照渲染；CPU 后端）
+    void renderLayers(QPaintDevice* device);
+    /// GL 后端渲染入口（GlPlotWidget::paintGL 调用；要求当前 GL 上下文）
+    void renderLayersGL(QPaintDevice* device);
+    /// 同步 plotArea/投影上下文到各 layer（渲染前调用）
+    void pushContextToLayers();
 
-    /// 布局入口（子类可重写，但应调用基类）
-    virtual void layoutAxes();
-    
-    // 子类可访问的成员
-    
-    QChartAbstractCamera* camera() const { return m_camera.get(); }
-    QChartRenderer* renderer() const { return m_renderer.get(); }
-    QOpenGLChartRenderer* glRenderer() const { return m_glRenderer; }
-
+    // ===== 成员 =====
+    QList<QChartLayer*> m_layers;    // 非持有（调用方保证生命周期）
     QRectF m_plotArea;
-
-    QList<QChartSeries*> m_legendItems;   // 子类在 buildScene 中填充
-    QChartLegend* m_legend = nullptr;
+    bool m_layoutDirty = true;
 
     qreal m_marginLeft   = 20.0;
     qreal m_marginTop    = 20.0;
     qreal m_marginRight  = 20.0;
     qreal m_marginBottom = 20.0;
 
-    std::unique_ptr<QChartAbstractProjection> m_projection;
+    std::unique_ptr<QPainterChartRenderer> m_cpuRenderer;
+    std::unique_ptr<QOpenGLChartRenderer> m_glRenderer;   // OpenGL 后端激活时创建
+    std::unique_ptr<GlPlotWidget> m_glHost;               // OpenGL 后端激活时创建（plotArea 对齐）
+    QWidget* m_glHostWidgetRaw = nullptr;                 // 宿主裸指针（测试取证；随宿主创建/销毁维护）
+    RenderBackend m_renderBackend = RenderBackend::QPainter;
 
 private:
-    
-    // 事件分发（final，子类不能重写）
-    
+    // ---- 事件分发（final）----
     void paintEvent(QPaintEvent*) override final;
     void resizeEvent(QResizeEvent*) override final;
     void mousePressEvent(QMouseEvent*) override final;
     void mouseMoveEvent(QMouseEvent*) override final;
     void mouseReleaseEvent(QMouseEvent*) override final;
     void wheelEvent(QWheelEvent*) override final;
-    
-    // 内部辅助
 
     void layoutGlHost();
+
+protected:
+    /// 请求重绘（GL 后端 = 宿主 update；CPU = 自身 update）
     void scheduleRepaint();
-    bool handleLegendClick(const QPointF& pos);
-
-    // GlHost（内嵌 QOpenGLWidget，按需创建）
-    
-    class GlHost;
-    std::unique_ptr<GlHost> m_glHost;
-
-    // 渲染器
-
-    // 当前活跃的渲染器（CPU 或 GPU）
-    std::unique_ptr<QChartRenderer> m_renderer;
-
-    // ★ GL 特有指针：供 GlHost 调用 render()（无生命周期管理函数）
-    QOpenGLChartRenderer* m_glRenderer = nullptr;
-
-    RenderBackend m_renderBackend = RenderBackend::QPainter;
-    bool m_layoutDirty = true;
-    bool m_exportTransparentBackground = false;
 };
 
 #endif // QCHARTABSTRACTWIDGET_H

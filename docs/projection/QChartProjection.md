@@ -1,42 +1,36 @@
 # QChartProjection Documentation
 
 ## Brief Introduction:
-2D 坐标投影基类（Phase 0 起）：Numeric 空间 ↔ View Cartesian 空间双向映射 + 视窗包络计算（dataBounds↔viewRect）。五空间链路：`Numeric ─[toCartesian]→ View Cartesian ─[cartesianToPixel]→ Pixel`。关键语义（design_notes §Projection 统一性）：**映射是纯几何、无需 dataBounds**（toCartesian/fromCartesian 不吃范围）；dataBounds 只用于包络互转（computeDataBounds/computeViewRect）。子类：QCartesianProjection/QPolarProjection/QFunctionalProjection（+ 合成 QInterpolatedProjection）。header-only 基类（纯虚接口 + createPath 默认实现），无 Q_OBJECT。
+QChartProjection 是 **2D 坐标投影基类**（继承 QChartAbstractProjection；Numeric 空间维度 2 (x,y)）：在统一 vec3 接口之上保留 2D 双精度标量纯虚接口 `toCartesian(qreal num0, qreal num1)/fromCartesian(qreal x, qreal y)`（子类实现），并以 **final** 包装实现统一基类接口（z=0 折叠）、`dimension()=2`。扩展 2D 独有的**包络转换**（Pan/Zoom 用）：`computeDataBounds(viewRect)`（像素/视图 → Numeric 反算）、`computeViewRect(dataBounds)`（Numeric → View Cartesian 正算）纯虚与 `defaultDataBounds()`（默认 (0,0,10,10)，可覆写）。2D 派生：QCartesianProjection、QPolarProjection、QFunctionalProjection、QInterpolatedProjection（其余 3D 投影族派生 QChartProjection3D）。
 
 ## Constant Variables:
 None.
 
 ## Member Variables:
-
-| Type | Name | Description | Available Value | Default Value | Related Classes |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| `QString` | `m_name0` | dim0 轴名（"x"/"θ"/"u" 等；dimensionName 返回）。 | `QString` | 构造传入（默认 "x"） | — |
-| `QString` | `m_name1` | dim1 轴名。 | `QString` | 构造传入（默认 "y"） | — |
-
-Notes:
-- 本头还定义类型级枚举 `CoordinateSystem{Cartesian, Polar, Functional}`（文件级，非类内——D11 命名规范前遗留；QChartWidget/QChartLayer 使用）。
+None.（无新增成员；继承 m_dimNames）
 
 ## Member Functions (signals and overrided Qt events are not included):
 
 | Return Value Type | Name | Description | Parameters | Declared Field | Available Value | Called By | Related Classes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| — | `QChartProjection` | 构造函数（轴名默认 "x"/"y"）。 | `QString name0="x"` <br> `QString name1="y"` | public | — | 子类构造 | — |
-| `QString` | `dimensionName` | 维度名访问器（越界返回空）。 | `int dim` | public | `QString`/空 | 轴标题/测试 | — |
-| `CoordinateSystem` | `type` | **纯虚**：坐标系类型。 | 无 | public pure virtual | 子类实现 | 测试/Widget 同步坐标系（setProjection → layer setCoordinateSystem） | `QChartLayer` |
-| `QPointF` | `toCartesian` | **纯虚**：Numeric → View Cartesian（纯几何；NaN/Inf 自然传播）。 | `qreal num0, qreal num1` | public pure virtual | 子类实现 | `DrawContext`（QChartAxis.cpp:27/QChartLayer.cpp:74）/createPath | — |
-| `QPointF` | `fromCartesian` | **纯虚**：View Cartesian → Numeric（奇点 NaN 策略由子类定义）。 | `qreal x, qreal y` | public pure virtual | 子类实现 | 交互反向/包络采样 | — |
-| `QRectF` | `computeDataBounds` | **纯虚**：viewRect → dataBounds（Pan/Zoom 后可见数据范围，刻度生成用）。 | `const QRectF& viewRect` | public pure virtual | 子类实现 | `QChartWidget`（fit/反算，QChartWidget.cpp:191/215/227/239） | `QChartWidget` |
-| `QRectF` | `computeViewRect` | **纯虚**：dataBounds → viewRect（setRange 语法糖后）。 | `const QRectF& dataBounds` | public pure virtual | 子类实现 | `QChartWidget`（setProjection/setDataRange，:62） | `QChartWidget` |
-| `QRectF` | `defaultDataBounds` | 默认 Numeric 范围（Widget 首次构造确定初始 viewRect）。 | 无 | public virtual | `QRectF(0,0,10,10)` | `QChartWidget::setProjection`（首次初始化，:61/292） | `QChartWidget` |
-| `QPainterPath` | `createPath` | 采样 `dataCurve(t)→(num0,num1)` 经 toCartesian 连接为 QPainterPath；**NaN/Inf 断开**（moveTo 重开子路径，处理极坐标奇点）。 | `std::function<QPointF(qreal t)> dataCurve` <br> `int segments=64` | public | `QPainterPath` | `DrawContext::toPath`（QChartAxis.h:50）/`QChartAxis::drawAtEdge`（QChartAxis.cpp:400，segments=72） | `DrawContext` <br> `QChartAxis` |
+| — | `QChartProjection` | 构造：传默认维度名 | `QString name0="x", QString name1="y"` | public | — | 派生类构造（QCartesianProjection 传 "x","y"；QPolarProjection 传 "θ","r"） | — |
+| — | `~QChartProjection` | 虚析构（default） | 无 | public | — | — | — |
+| `virtual QPointF` | `toCartesian` | **纯虚**：双精度标量版正向映射 | `qreal num0, qreal num1` | public | `QPointF` | 经 final vec3 包装被 CPU 渲染器调用 | — |
+| `virtual QPointF` | `fromCartesian` | **纯虚**：双精度标量版反向映射 | `qreal x, qreal y` | public | `QPointF` | 经 final vec3 包装（反算/拾取阶段） | — |
+| `virtual QRectF` | `computeDataBounds` | **纯虚**：viewRect → dataBounds（Numeric 范围反算；Polar 网格采样/Functional 采样实现） | `const QRectF& viewRect` | public | `QRectF` | Widget 阶段（dataBounds 反算）；S0 无调用方 | — |
+| `virtual QRectF` | `computeViewRect` | **纯虚**：dataBounds → viewRect（正算；Polar 扇形包围盒等） | `const QRectF& dataBounds` | public | `QRectF` | Widget 阶段（setDataRange）；S0 无调用方 | — |
+| `virtual QRectF` | `defaultDataBounds` | 默认 Numeric 范围（(0,0,10,10)；子类可覆写——Cartesian 同默认、Polar 覆写 (0,0,360,10)） | 无 | public | `QRectF` | Widget 首次初始化 viewRect | — |
+| `QVector3D` | `toCartesian` | **final**：vec3 包装（取 x/y → QPointF 版 → z=0） | `const QVector3D& num` | public | `QVector3D` | CPU 渲染器（经基类指针虚调用） | — |
+| `QVector3D` | `fromCartesian` | **final**：vec3 反向包装（z=0） | `const QVector3D& cart` | public | `QVector3D` | 反算路径 | — |
+| `int` | `dimension` | **final**：返回 2 | 无 | public | `2` | QChartGL 哈希键 | — |
 
 Notes:
-- 本头保留 Phase 0/1 遗留：注释掉的 `//Q_LOGGING_CATEGORY(logProjection, ...)` 死行、`<summary>` XML 注释风格、制表符缩进（见 docs/audit/semantic_vs_implementation_audit.md D1/D2）。
-- createPath 全流程（NaN 断路径语义）：docs/projection/QChartProjection_createPath_flow.md。
-- 无信号/事件（非 QObject）。
+- glslToCartesian/glslFromCartesian 仍为纯虚（继承自 QChartAbstractProjection 未在此实现），由 2D 子类各自提供表达式。
+- final 包装防子类重载 vec3 接口（统一走标量版）；投影族 header-only（唯一例外 QInterpolatedProjection 有 cpp）。
+- S0 测试以 `std::unique_ptr<QChartProjection>`（实际 Cartesian/Polar）经本基类指针装配 scene.projection。
 
 ## Overrided Qt Events:
-None.
+无（非 QObject）。
 
 ## Signals:
-None.
+None.（非 QObject，无信号）

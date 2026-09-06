@@ -1,8 +1,10 @@
 # S0 Stage Record — 轴渲染管线（CPU+GL 双后端）
 
+> ⚠ v1 记录：本文件为轴渲染阶段早期快照，widget 容器化与 3D 轴渲染已并入本阶段（用户决策），阶段记录将在代码落地后由 v2 合并记录取代
+
 > 阶段：S0（架构重构阶梯第一步）
 > 代码基线：`/home/unidu/dsh/QChartWidget`（新根 CMakeLists S0 子集；旧版 `CMakeLists_OLD.txt` 保留）
-> 状态：审查通过（t2 needs_revision → t3 修复 F1/F2 后自验完成）
+> 状态：审查通过（t2 needs_revision → t3 修复 F1/F2 后自验完成；t4 复审查 verdict=pass，含 GL 刻度点出墨硬证据）
 > 文档准则：本目录记录以**当前新架构代码**为准；docs/ 下旧文档若描述重构前架构，已由 S0 每类文档覆盖。
 
 ## 1. 架构决策（S0 落地）
@@ -65,6 +67,7 @@ GL 环境记录：`platform=wayland vendor=Mesa renderer=llvmpipe (LLVM 20.1.2, 
 ## 5. S0 涉及类文档登记（每类一文档，六段范式）
 
 > QCube 为值类型（无 Qt 事件/信号），采用值类型文档形态并在本总括登记。
+> 本表 22 项文档已按当前新架构代码全部就位（QChartAxis.md 亦为新架构版）；表内路径即交付文件。
 
 | # | 类 | 文档 | 形态 |
 | :---: | :--- | :--- | :--- |

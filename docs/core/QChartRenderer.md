@@ -1,41 +1,40 @@
 # QChartRenderer Documentation
 
 ## Brief Introduction:
-渲染器抽象接口 + 场景快照定义（D2 定案）。职责：把「场景快照」画到任意 `QPaintDevice`（QWidget/QImage/QPixmap/打印机等）；`render()` 只依赖快照 + 目标 device，**不反向依赖 QChartWidget**。接口分派：`render`（屏显，可缓存）/ `renderUncached`（导出专用，无缓存直绘，避免矢量 device 栅格化与污染屏显缓存，D13）。本头还定义 3D 图元 `QChartPrimitive`、billboard 标签 `QChartTextLabel`、场景快照 `QChartScene`、网格深度偏置 `kGridDepthBias=1e-3`（跨模块共享类型，见 architecture_overview §8）。Phase 3 的 `QOpenGLChartRenderer` 与本接口并列（统一后端 D26）。
+QChartRenderer 是**渲染器抽象基类**（非 QObject 的纯多态类），职责：把「场景快照 QChartScene」画到任意 QPaintDevice（QWidget/QImage/QPixmap/打印机）——`render()` 只依赖快照 + 目标 device，不反向依赖 QChartWidget。编排**四步流水线**：步骤 1（收集，由 Widget/Layer/测试在调用前完成，scene 已填 Numeric 数据）→ `render()` 内若 `m_viewDirty` 则执行 步骤 2a `transformNumericToCartesian`（纯虚）+ 2b `cullAndResolveLabels`（纯虚）并清脏 → 步骤 3 `drawPrimitives`（纯虚，按 m_visibilityCache）→ 步骤 4 `drawLabels`（纯虚）。共享保护级：静态 `drawLabel`（文字排版/避让/钳制统一实现）、`onRenderBegin/End` 可选钩子（默认空）。**dataDirty 判定归 Widget/buildScene（m_dataDirty 已注释移除）；viewDirty 由本类持有**（`invalidateView()` 置脏；数据变化→重建 scene 时 Renderer 需被通知或场景对象换代）。S0 派生：QPainterChartRenderer、QOpenGLChartRenderer。
 
 ## Constant Variables:
-
-| Type | Name | Description | Available Value | Related Classes |
-| :---: | :---: | :---: | :---: | :---: |
-| `constexpr qreal` | `kGridDepthBias` | 网格深度偏置（painter 版 polygon offset）：Grid 图元 depth −= 1e-3，保证同深度处系列优先（z-fighting 时系列赢；GL 路径 glPolygonOffset 等价语义，D29）。 | `1e-3` | `QChartPrimitive` <br> `QPainterChartRenderer` <br> `QOpenGLChartRenderer` |
-
-Notes:
-- 本类为纯抽象接口：无成员变量、无 Q_OBJECT（非 QObject）。
+None.（头内 `kGridDepthBias` 等 3D 设计注释块已整段注释，非成员）
 
 ## Member Variables:
-None.（抽象接口；具体状态在子类）
+
+| Type | Name | Description | Available Value | Default Value | Related Classes |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| `bool` | `m_viewDirty` | （protected）视图脏标记：true → 下次 render 重算变换+裁剪 | `true`/`false` | `true` | — |
+| `QVector<bool>` | `m_visibilityCache` | （protected）与 scene.primitives 一一对应的可见性缓存（步骤 2b 填充、步骤 3 消费） | `QVector<bool>` | 空 | `QChartScene` |
 
 ## Member Functions (signals and overrided Qt events are not included):
 
 | Return Value Type | Name | Description | Parameters | Declared Field | Available Value | Called By | Related Classes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| — | `~QChartRenderer` | 虚析构（default 实现，src/core/QChartRenderer.cpp）。 | — | public virtual | — | 子类析构 | — |
-| `void` | `render` | 将场景渲染到目标设备（不得假设 device 是 QWidget；可读写缓存）。 | `const QChartScene& scene` <br> `QPaintDevice* device` | public pure virtual | — | `QChartWidget::paintEvent`（m_renderer->render(scene, this)） | `QChartScene` <br> `QPaintDevice` |
-| `void` | `renderUncached` | 直接绘制到 device、不读写内部缓存（导出专用：PNG/SVG/PDF；避免矢量 device 被栅格化 + 不污染屏显缓存，D13）。 | `const QChartScene& scene` <br> `QPaintDevice* device` | public pure virtual | — | `QChartWidget::saveAsPng/Svg/Pdf` | `QChartScene` |
-| `void` | `invalidateBackground` | 置脏背景缓存（下次 render 重建；无缓存后端可为空操作）。 | 无 | public pure virtual | — | `QChartWidget::invalidateBackground`（轴/网格变化链路） | — |
-| `void` | `invalidateForeground` | 置脏前景缓存。 | 无 | public pure virtual | — | `QChartWidget::invalidateForeground`（系列/图例变化链路） | — |
-| `void` | `setCachingEnabled` | 缓存开关。 | `bool enabled` | public pure virtual | — | `QChartWidget::setCachingEnabled` | — |
-| `bool` | `isCachingEnabled` | 缓存状态访问器。 | 无 | public pure virtual | `true`/`false` | `QChartWidget::isCachingEnabled`/测试 | — |
+| — | `~QChartRenderer` | 虚析构（default） | 无 | public | — | — | — |
+| `void` | `render` | 主渲染入口：device/camera/projection 任一空则直接返回；onRenderBegin → （m_viewDirty 时 transformNumericToCartesian + cullAndResolveLabels + 清脏）→ drawPrimitives(scene, device, m_visibilityCache) → drawLabels → onRenderEnd | `QChartScene& scene, QPaintDevice* device` | public | — | 测试 `renderer.render(f.scene, &img)`、Widget 阶段 paint | `QChartScene` |
+| `void` | `invalidateView` | 视图变化（Camera/窗口 resize）→ 下次 render 重算变换与裁剪（内联置 m_viewDirty） | 无 | public | — | Widget/Camera viewChanged 链（S0 测试单帧未调用） | — |
+| `virtual void` | `transformNumericToCartesian` | **纯虚**（protected）：Numeric → Cartesian 变换（CPU 做；GPU 跳过——shader 内完成） | `QChartScene& scene` | protected | — | `render` 内部 | — |
+| `virtual void` | `cullAndResolveLabels` | **纯虚**（protected）：裁剪 + 标签解析（CPU 精确裁；GPU 粗裁/全可见） | `QChartScene& scene` | protected | — | `render` 内部 | — |
+| `virtual void` | `drawPrimitives` | **纯虚**（protected）：绘制所有可见图元（visibility[i]==true） | `QChartScene& scene, QPaintDevice* device, const QVector<bool>& visibility` | protected | — | `render` 内部 | — |
+| `virtual void` | `drawLabels` | **纯虚**（protected）：绘制所有可见标签（label.visible==true）。基类 .cpp 提供一份**纯虚定义**（camera->project + drawLabel 排版，含 plotArea 外剔除）——S0 子类各自实现覆盖，基类版本未被虚调用（限定调用保留为共享参考） | `QChartScene& scene, QPaintDevice* device` | protected | — | — | — |
+| `static void` | `drawLabel` | 共享文字排版：空文本返回；设字号/笔色；测宽高+pad=3；AlignCenter → 选锚点四周最远侧放文字（四方避让），边对齐按位；越界钳制回 plotArea（过度挤压则居中）；`drawText(rect, AlignCenter, text)` | `QPainter& painter, const QRectF& plotArea, const QPointF& pixelAnchor, const QString& text, const QColor& color, qreal fontSize, Qt::Alignment alignment` | protected | — | `QPainterChartRenderer::drawLabels2D`、`QOpenGLChartRenderer::drawLabels` | — |
+| `virtual void` | `onRenderBegin` | 可选钩子：渲染开始（默认空，Q_UNUSED） | `QPaintDevice* device` | protected | — | `render` 内部 | — |
+| `virtual void` | `onRenderEnd` | 可选钩子：渲染结束（默认空） | `QPaintDevice* device` | protected | — | `render` 内部 | — |
 
 Notes:
-- **本头定义的共享类型**（非成员函数，供全库引用）：`QChartPrimitive{Type{Point,LineSegment}, Layer{Grid,Series,ForegroundDecor}, a/b/depth/dataIndex/markerSize/color/penWidth/worldA/worldB}`（depth=−viewZ 越大越远，降序绘制；worldA/B 为 Phase 3 GL 的 VBO 顶点源）；`QChartTextLabel{screenPos,text,anchor,fontSize,color,isTitle}`；`QChartScene{plotArea,dataBounds,viewRect,projection,axes,layers,backgroundColor,legend,legendItems,exportMode,camera3D,layers3D,worldBounds}`（`is3D() = camera3D!=nullptr`；exportMode 导出跳过调试黄框）。
-- 场景组装方 = QChartWidget::buildScreenScene/buildExportScene（3D 子类重写注入 3D 段）。
+- 渲染入口前置条件实测：`render` 需要 scene.camera 与 scene.projection 均非空（S0 测试夹具两者齐备后才出像素）。
+- m_viewDirty 默认 true：首帧 render 必执行步骤 2。
+- 基类 drawLabels 的纯虚定义（QChartRenderer.cpp:110）与 CPU/GL 子类实现同构（project+clip+drawLabel），S0 实际执行路径为子类覆写。
 
 ## Overrided Qt Events:
-None.（非 QWidget）
+无（非 QObject、非 QWidget，无事件覆写）。
 
 ## Signals:
-None.（非 QObject）
-
-Notes:
-- 接口契约：实现方（QPainterChartRenderer/QOpenGLChartRenderer）必须同时实现 render 与 renderUncached（GL 后端 renderUncached 拒绝导出并 qWarning，A4：导出一律走 QPainter 后端）。
+None.（非 QObject，无信号）

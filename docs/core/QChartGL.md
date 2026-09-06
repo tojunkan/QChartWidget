@@ -1,42 +1,32 @@
 # QChartGL Documentation
 
 ## Brief Introduction:
-GL 资源池（design_phase3 §7.3，A2/A3：共享/惰性/引用计数）。职责：`sharedContext()`（共享根，惰性：registerHost 首实例创建 QOffscreenSurface+QOpenGLContext 3.3 Core+depth24，后续 GlHost 经 setShareContext 共享（Qt≥6.5），无存活实例返回 nullptr——零资源 A3）；`program(ShaderKind)`（**程序池按上下文建池**（t44 落实 t43 O2：Qt 6.4.2 无 setShareContext → 多 widget 上下文独立；Qt≥6.5 共享后同一程序多上下文可用，池按上下文冗余=正确性优先）；引用计数随实例增减）；`releasePrograms()`（最后实例析构时）。`ShaderKind{Line, Point, Pick}` 为程序池键。**非 Q_OBJECT**（moc 约定：本类不进）。
+QChartGL 是 **GL 资源池**（全静态工具类，禁止实例化：ctor/dtor/copy/assign 全 delete）：① 共享根上下文管理——`registerHost/unregisterHost`（宿主实例计数；首实例惰性创建共享根 `QOffscreenSurface + QOpenGLContext`（引用计数），末实例注销时释放程序池与根上下文）、`sharedContext()`（无存活实例 → nullptr）；② **Shader 程序池**——按 `(QOpenGLContext*, ShaderKind, projection 类型哈希)` 缓存已编译程序（`s_programs`）；③ 动态拼接 Shader——从 Projection 取 `glslToCartesian()` **表达式**注入顶点着色器（R10 契约定型：注入点包装 `vec3 num = a_pos; vec3 cart = <expr>;`，空投影回退恒等 `num`），Point 种类附加 `u_pointSize`/`gl_PointSize`；Fragment：Line/Triangle 颜色直通、Point 圆形 discard、Pick 输出 RGB24 图元 ID。统一 SurfaceFormat：3.3 Core + depth 24（`surfaceFormat()`）。
 
 ## Constant Variables:
-
-| Type | Name | Description | Available Value | Related Classes |
-| :---: | :---: | :---: | :---: | :---: |
-| `enum class ShaderKind` | `ShaderKind` | 程序池键：Line（折线）/ Point（散点）/ Pick（ID 帧拾取）。 | `Line` <br> `Point` <br> `Pick` | `QOpenGLChartRenderer` <br> `QChartGL` |
+None.（同头文件枚举 `ShaderKind{Line, Point, Triangle, Pick}` 为类型定义非类成员；Pick 注释：ID 帧拾取复用 Line 顶点输出 RGB24 ID，S0 拾取后置未用）
 
 ## Member Variables:
-
-| Type | Name | Description | Available Value | Default Value | Related Classes |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| `QOpenGLContext*` | `s_sharedContext` | （static）共享根上下文（惰性创建；无实例 → nullptr 零资源）。 | `QOpenGLContext*` <br> `nullptr` | `nullptr` | `QOpenGLContext` |
-| `QOffscreenSurface*` | `s_offscreenSurface` | （static）共享根配套 offscreen surface。 | `QOffscreenSurface*` <br> `nullptr` | `nullptr` | `QOffscreenSurface` |
-| `int` | `s_hostCount` | （static）注册实例计数（首实例建/末实例释放）。 | `int` | `0` | — |
-| `QHash<QOpenGLContext*, QHash<int, QOpenGLShaderProgram*>>` | `s_programs` | （static）**按上下文建池**：context → (kind → program)；上下文销毁后条目保留至 releasePrograms（t45 O3 地址复用理论风险，t50 保持观察）。 | `QHash<QOpenGLContext*, QHash<int, QOpenGLShaderProgram*>>` | 空 | `QOpenGLShaderProgram` |
-
-Notes:
-- 头注释「share group 内复用」为 t42 骨架期措辞；实现按上下文建池（t44 修正，见 audit B2/C2）。
-- 头注释「program() 暂返回 nullptr 占位」已过时（t44 已实现程序池），见 audit D3。
+None.（类内无成员；cpp 匿名命名空间文件级状态：`s_instanceCount`、`s_sharedContext`、`s_shareSurface`、`s_programs`（context → (kind, projectionTypeHash) → program）；Shader 构建函数 buildVertexShader/buildFragmentShader/compileProgram/projectionTypeHash 均文件内 static）
 
 ## Member Functions (signals and overrided Qt events are not included):
 
 | Return Value Type | Name | Description | Parameters | Declared Field | Available Value | Called By | Related Classes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `QOpenGLContext*` | `sharedContext` | 共享根（惰性：首实例创建 QOffscreenSurface+QOpenGLContext 3.3 Core+depth24；registerHost 首实例建/末实例释放；无实例 → nullptr）。 | 无 | public static | `QOpenGLContext*`/`nullptr` | `GlHost`（setShareContext）/`initializeGL` | `QOpenGLContext` <br> `GlHost` |
-| `QOpenGLShaderProgram*` | `program` | 程序池取/建：当前上下文（`QOpenGLContext::currentContext`）→ kind 键 → 惰性编译（Line/Point/Pick GLSL 330 字符串，§4；编译需 current context，t43 O2 调用方 ensure current 后使用）。 | `ShaderKind kind` | public static | `QOpenGLShaderProgram*`/`nullptr`（编译失败） | `QOpenGLChartRenderer::initializeGL/drawPass` | `QOpenGLShaderProgram` <br> `ShaderKind` |
-| `void` | `releasePrograms` | 释放全部程序（glDeleteProgram；无 current 上下文时 qDeleteAll——glDeleteProgram no-op 安全，t45 O4 观察）。 | 无 | public static | — | 最后宿主实例析构 | `QOpenGLShaderProgram` |
-| `QSurfaceFormat` | `surfaceFormat` | QSurfaceFormat 统一（3.3 Core、depth 24、vsync 默认，§7.3）。 | 无 | public static | — | `GlHost` 构造 | `QSurfaceFormat` |
+| `static void` | `registerHost` | 宿主注册：计数 +1；首实例时创建共享根（surfaceFormat）QOffscreenSurface + QOpenGLContext；创建失败（无 GL 环境）→ 清理并单次 qWarning（QPainter 路径共存兜底） | 无 | public | — | `QChartAbstractWidget`/`QChartWidget3D`（**未入 S0**）；S0 无调用方 | — |
+| `static void` | `unregisterHost` | 宿主注销：计数 -1；归零时 `releasePrograms()` + 删除共享根上下文/表面 | 无 | public | — | 同上（GlHost 析构） | — |
+| `static QOpenGLContext*` | `sharedContext` | 返回共享根上下文（无存活实例 → nullptr） | 无 | public | 指针/`nullptr` | `QChartAbstractWidget`/`QChartWidget3D`（未入 S0） | — |
+| `static QSurfaceFormat` | `surfaceFormat` | 统一格式：3.3 CoreProfile + depth 24 + samples 0 | 无 | public | `QSurfaceFormat` | TestAxisMatrixGl（`host.setFormat(...)`）、registerHost 内部 | — |
+| `static QOpenGLShaderProgram*` | `program` | 取/编译 Shader 程序：key=(当前上下文, kind, projection 类型哈希)；命中缓存直接返回，否则 compileProgram 并插入（编译失败 → nullptr） | `ShaderKind kind, const QChartAbstractProjection* projection` | public | 指针/`nullptr` | `QOpenGLChartRenderer::drawPass`（每 pass 一次） | `QOpenGLChartRenderer` |
+| `static void` | `releasePrograms` | 显式释放所有已编译程序（qDeleteAll 全清；unregisterHost 末实例自动调用） | 无 | public | — | `unregisterHost` 内部 | — |
 
 Notes:
-- 实例登记（registerHost/unregisterHost 内部静态）：首实例创建共享根、末实例 releasePrograms + 共享根归零（`sharedContext_refcount` 单测：成对安全/格式/归零 nullptr/可重建）。
-- 创建失败：一次性告警降级（A9，GL 不可用时 QPainter 路径共存）。
+- GLSL 注入契约（R10）：`glslToCartesian()` 返回**以 `vec3 num` 为输入的 Cartesian 表达式**；buildVertexShader 在其外包 `vec3 num = a_pos; vec3 cart = <expr>;`，再 `u_viewProj * vec4(cart,1.0)`（clip.z += u_depthBias×clip.w）；gl_PointSize 仅 Point 种类声明。GLSL 内置函数（radians/cos/sin/mix 等）可用；插值投影需 `u_blendAlpha` uniform。
+- projectionTypeHash：`qHash(typeid(*proj).name()) ^ (dimension()<<32)`（0 当 projection 空）；dimensionName(0) 用于编译日志。
+- 程序池按 QOpenGLContext* 键存；上下文销毁后的条目清理随宿主阶段完善（当前释放仅走 unregisterHost→releasePrograms 全清路径）。
 
 ## Overrided Qt Events:
-None.（非 QWidget）
+无（非 QObject）。
 
 ## Signals:
-None.（非 QObject；**非 Q_OBJECT** 类，moc 约定不产 moc）
+None.（非 QObject，无信号）

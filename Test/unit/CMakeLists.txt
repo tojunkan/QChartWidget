@@ -6,12 +6,16 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Test)
 set(QCHART_UNIT_HEADERS
     # S0：在此追加测试头（qt6_wrap_cpp 手动 moc）
     tests/test_axis_pipeline.h
+    # 批次 A：widget 容器冒烟（offscreen CPU）
+    tests/test_widget_smoke.h
 )
 
 set(QCHART_UNIT_SOURCES
     main.cpp
     # S0：在此追加测试源
     tests/test_axis_pipeline.cpp
+    # 批次 A：widget 容器冒烟（offscreen CPU）
+    tests/test_widget_smoke.cpp
 )
 
 qt6_wrap_cpp(QCHART_UNIT_MOCS ${QCHART_UNIT_HEADERS})

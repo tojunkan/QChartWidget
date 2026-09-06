@@ -8,6 +8,9 @@ Q_LOGGING_CATEGORY(logLayer, "chart.layer")
 
 QChartLayer::QChartLayer(QObject* parent) : QObject(parent) {
     connect(this, &QChartLayer::gridChanged, this, &QChartLayer::invalidateData);
+    // ★ 批次 A：相机归 layer——scene.camera 恒指向本层相机值成员
+    //（相机 viewRect 由 widget/viewRect 驱动链或调用方显式设置后再渲染）
+    m_scene.camera = &m_camera;
     // S0：QChartWidget/QChartAbstractWidget 尚未纳入本阶段子集，原「父对象为
     // QChartAbstractWidget 时自动注入 plotArea/projection」分支随 Widget 阶段一并恢复；
     // series 信号连接待 Series 阶段随 QChartSeries.cpp 恢复。
@@ -15,6 +18,16 @@ QChartLayer::QChartLayer(QObject* parent) : QObject(parent) {
 QChartLayer::~QChartLayer() = default;
 
 // ===== 轴绑定 =====
+void QChartLayer::setNumericBounds(const QRectF& bounds) {
+    m_dataBounds = bounds;
+    // 同步语法糖范围（X=dim0: left→right；Y=dim1: bottom→top，数值增序；
+    // legacy 取向 rect 的 top>bottom，故用 bottom<=top 判合法）
+    if (m_axisX && bounds.left() <= bounds.right())
+        m_axisX->setRange(bounds.left(), bounds.right());
+    if (m_axisY && bounds.bottom() <= bounds.top())
+        m_axisY->setRange(bounds.bottom(), bounds.top());
+}
+
 void QChartLayer::setAxisX(QChartAxis* a) {
     m_axisX = a;
     qCDebug(logLayer) << "setAxisX:" << (a ? "set" : "null");
@@ -97,6 +110,12 @@ void QChartLayer::setGridColor(const QColor& c) {
 // QChartLayer.cpp —— drawGrid 修改后
 
 void QChartLayer::collectPrimitives() {
+    // 批次 A：每次收集前复位场景负载（widget 每帧重收集；sourceId 从 0 起重新分配）
+    m_scene.primitives.clear();
+    m_scene.labels.clear();
+    m_scene.maxSourceId = 0;
+    m_scene.PrimitiveIdPrefixSum.clear();
+    m_scene.PrimitiveIdPrefixSum.append(0);
     // ---- 绘制网格（S0：Series 阶段前只收集网格；drawAllSeries 届时恢复）----
     drawGrid(m_scene);
 }

@@ -89,14 +89,19 @@ void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
 
     QPainter painter(device);
     painter.setRenderHint(QPainter::Antialiasing, true);
+    // ★ F1(t8)：GL 标签覆盖层按宿主局部坐标系绘制——device 可能是 plotArea 对齐的
+    // QOpenGLWidget 子控件（原点=plotArea.topLeft()）：整体平移 -topLeft 后，plotArea/
+    // pp.screen 等父系坐标即落 child-local 空间（clip 用同一平移后的 plotArea）。
+    // 全窗/整图设备（plotArea.topLeft()==0）平移为零，行为不变。
+    painter.translate(-plotArea.topLeft());
     painter.setClipRect(plotArea);
 
     for (const QChartTextLabel& label : scene.labels) {
         if (!label.visible) continue;
 
-        // 用 Camera 的 project 将 Cartesian 转成屏幕坐标
+        // 用 Camera 的 project 将 Cartesian 转成屏幕坐标（平移后即 child-local）
         QChartProjectedPoint pp = camera->project(label.cartesianAnchor, plotArea);
-        QPointF pixelPos = pp.screen;
+        const QPointF pixelPos = pp.screen;
 
         if (!plotArea.contains(pixelPos)) continue;
 

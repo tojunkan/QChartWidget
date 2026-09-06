@@ -74,6 +74,6 @@ Notes:
 | :---: | :---: | :---: | :---: | :---: |
 | `rangeChanged` | setRange 语法糖触发（Widget 连接后映射 dataRange） | `qreal min, qreal max` | `setRange` | — |
 | `visibleChanged` | 可见性变化 | 无 | `setVisible` | — |
-| `styleChanged` | 样式变化（颜色/title/range） | 无 | `setColor`/`setThemeColor`(无 override 时)/`clearColor`/`setRange`/`setTitle` | `QChartTheme` |
+| `styleChanged` | 样式变化（颜色/range 等；title 为内联赋值**不发信号**） | 无 | `setColor`/`setThemeColor`(无 override 时)/`clearColor`/`setRange` | `QChartTheme` |
 | `tickCountChanged` | 主刻度数变化 | 无 | `setTickCount` | — |
 | `subTickCountChanged` | 次刻度数变化 | 无 | `setSubTickCount` | — |

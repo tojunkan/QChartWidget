@@ -6,12 +6,16 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Test)
 set(QCHART_INTEGRATION_HEADERS
     # S0：在此追加集成测试头
     tests/test_axis_matrix.h
+    # 批次 A：widget GL 宿主冒烟
+    tests/test_widget_gl.h
 )
 
 set(QCHART_INTEGRATION_SOURCES
     main.cpp
     # S0：在此追加集成测试源
     tests/test_axis_matrix.cpp
+    # 批次 A：widget GL 宿主冒烟
+    tests/test_widget_gl.cpp
 )
 
 qt6_wrap_cpp(QCHART_INTEGRATION_MOCS ${QCHART_INTEGRATION_HEADERS})

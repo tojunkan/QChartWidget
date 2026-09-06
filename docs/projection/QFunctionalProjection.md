@@ -1,40 +1,39 @@
 # QFunctionalProjection Documentation
 
 ## Brief Introduction:
-用户自定义坐标投影（2D，免子类化）：通过 lambda 定义 Numeric ↔ View Cartesian 映射。最简用法只传 `forward` + `backward`；包络转换（`dataToView/viewToData`）不传则 fallback 采样（computeDataBounds 32×32 / computeViewRect 16×16）。`forward` 为 null 时 `toCartesian` 返回 NaN + qWarning；`backward` 为 null 时 `fromCartesian` 返回 NaN + qWarning（反向缺失场景）。header-only，无 Q_OBJECT。工厂入口：`QChartProjectionFactory::createFunctional`。
+QFunctionalProjection 是**用户自定义坐标投影**（2D，header-only，继承 QChartProjection）：以 lambda 定义 Numeric ↔ View Cartesian 映射，无需子类化——最简用法只传 `forward`（+可选 backward）；适用于鱼眼、扭曲 Cartesian 等场景。`backward` 缺省时 fromCartesian 返回 (NaN,NaN) + qWarning；包络 `dataToView/viewToData` 缺省时**回退采样法**：computeDataBounds 32×32 采样 fromCartesian、computeViewRect 16×16 采样 toCartesian（全 NaN → 恒等回退）。NaN/Inf 自然传播（调用方负责跳过）。默认域 (0,0,10,10)。
 
 ## Constant Variables:
-None.（采样常数 grid=32/16 为函数内局部）
+None.
 
 ## Member Variables:
 
 | Type | Name | Description | Available Value | Default Value | Related Classes |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| `std::function<QPointF(qreal,qreal)>` | `m_forward` | Numeric → View 映射（必传）。 | lambda / 空 | 构造传入 | — |
-| `std::function<QPointF(qreal,qreal)>` | `m_backward` | View → Numeric 映射（可选；null → fromCartesian 返回 NaN）。 | lambda / `nullptr` | `nullptr` | — |
-| `QRectF` | `m_defaultBounds` | 默认 Numeric 范围。 | `QRectF` | `QRectF(0,0,10,10)` | — |
-| `std::function<QRectF(const QRectF&)>` | `m_dataToView` | dataBounds → viewRect（可选；null → 采样 fallback）。 | lambda / `nullptr` | `nullptr` | — |
-| `std::function<QRectF(const QRectF&)>` | `m_viewToData` | viewRect → dataBounds（可选；null → 采样 fallback）。 | lambda / `nullptr` | `nullptr` | — |
+| `std::function<QPointF(qreal,qreal)>` | `m_forward` | （private）正向映射（Numeric → Cartesian） | 函数对象/`nullptr` | 构造必传 | — |
+| `std::function<QPointF(qreal,qreal)>` | `m_backward` | （private）反向映射（Cartesian → Numeric） | 函数对象/`nullptr` | `nullptr` | — |
+| `QRectF` | `m_defaultBounds` | （private）默认 Numeric 范围 | `QRectF` | 构造入参默认 (0,0,10,10) | — |
+| `std::function<QRectF(const QRectF&)>` | `m_dataToView` | （private）dataBounds → viewRect 包络 | 函数对象/`nullptr` | `nullptr`（=恒等） | — |
+| `std::function<QRectF(const QRectF&)>` | `m_viewToData` | （private）viewRect → dataBounds 包络 | 函数对象/`nullptr` | `nullptr`（=恒等） | — |
 
 ## Member Functions (signals and overrided Qt events are not included):
 
 | Return Value Type | Name | Description | Parameters | Declared Field | Available Value | Called By | Related Classes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| — | `QFunctionalProjection` | 构造函数（forward 必传；backward/defaultBounds/dataToView/viewToData/name0/name1 可选默认）。 | `forward` <br> `backward=nullptr` <br> `defaultBounds=QRectF(0,0,10,10)` <br> `dataToView=nullptr` <br> `viewToData=nullptr` <br> `name0="x", name1="y"` | public | — | `QChartProjectionFactory::createFunctional`/demo（swirl 等） | `QChartProjectionFactory` |
-| `CoordinateSystem` | `type` | 坐标系类型（内联）。 | 无 | public override | `CoordinateSystem::Functional` | 测试/Widget 同步 | — |
-| `QPointF` | `toCartesian` | 委托 m_forward；forward 空 → NaN + qWarning。 | `qreal num0, qreal num1` | public override | `QPointF` | `DrawContext`（QChartAxis.cpp:27/QChartLayer.cpp:74）/createPath | — |
-| `QPointF` | `fromCartesian` | 委托 m_backward；空 → NaN + qWarning。 | `qreal x, qreal y` | public override | `QPointF` | 交互反向/computeDataBounds 采样 | — |
-| `QRectF` | `computeDataBounds` | `m_viewToData` 优先；否则 32×32 网格采样 fromCartesian 聚合（全 NaN → 回退恒等 viewRect）。 | `const QRectF& viewRect` | public override | `QRectF` | `QChartWidget`（fit/反算） | `QChartWidget` |
-| `QRectF` | `computeViewRect` | `m_dataToView` 优先；否则 dataBounds 边界 16×16 采样 toCartesian 估算包围盒（全 NaN → 回退恒等 dataBounds）。 | `const QRectF& dataBounds` | public override | `QRectF` | `QChartWidget`（setProjection/setDataRange） | `QChartWidget` |
-| `QRectF` | `defaultDataBounds` | 返回 m_defaultBounds。 | 无 | public override | `m_defaultBounds` | `QChartWidget::setProjection` | `QChartWidget` |
+| — | `QFunctionalProjection` | 构造：收 5 个 lambda + 维度名（move 进成员；QChartProjection(name0,name1)） | `std::function<QPointF(qreal,qreal)> forward, std::function<QPointF(qreal,qreal)> backward=nullptr, QRectF defaultBounds=(0,0,10,10), std::function<QRectF(const QRectF&)> dataToView=nullptr, std::function<QRectF(const QRectF&)> viewToData=nullptr, QString name0="x", QString name1="y"` | public | — | 用户（lambda 场景：鱼眼/扭曲等） | — |
+| `CoordinateSystem` | `type` | 覆写（内联）：Functional | 无 | public | `CoordinateSystem::Functional` | — |
+| `QPointF` | `toCartesian` | 覆写：m_forward 空 → qWarning + (NaN,NaN)；否则调 forward（NaN/Inf 自然传播） | `qreal num0, qreal num1` | public | `QPointF` | 经 final vec3 包装被渲染器调用 | — |
+| `QPointF` | `fromCartesian` | 覆写：m_backward 空 → qWarning + (NaN,NaN)；否则调 backward | `qreal x, qreal y` | public | `QPointF` | 反算/包络采样 | — |
+| `QRectF` | `computeDataBounds` | 覆写：m_viewToData 非空 → 直接调用；否则 32×32 采样 fromCartesian 求域（有限点）；全 NaN → 恒等回退 viewRect | `const QRectF& viewRect` | public | `QRectF` | Widget 阶段 | — |
+| `QRectF` | `computeViewRect` | 覆写：m_dataToView 非空 → 直接调用；否则 16×16 采样 toCartesian 求 Cartesian 包围盒；全 NaN → 恒等回退 dataBounds | `const QRectF& dataBounds` | public | `QRectF` | Widget 阶段 | — |
+| `QRectF` | `defaultDataBounds` | 覆写（内联）：返回 m_defaultBounds | 无 | public | `QRectF` | Widget 首次初始化 | — |
 
 Notes:
-- 应用：鱼眼/扭曲 Cartesian 等"显式给映射函数"场景；`ProjectionToolKit`（utils）基于 createFunctional 提供即用投影（恒等/Power2/Exp/Log）。
-- NaN 自然传播（forward 结果 NaN/Inf 由调用方跳过）；全 NaN 采样 → 回退恒等（避免垃圾包围盒）。
-- 无信号/事件（非 QObject）。
+- glslToCartesian/glslFromCartesian 未覆写——基类两纯虚悬空，**本类为抽象类，不可实例化**（S0 亦无实例；如未来 GPU 使用须补 GLSL 表达式覆写，或仅走 CPU 且经子类化补齐）。文档按现行头文件记录。
+- S0 无测试实例；行为由旧 test_qchartprojection 参考。
 
 ## Overrided Qt Events:
-None.
+无（非 QObject）。
 
 ## Signals:
-None.
+None.（非 QObject，无信号）

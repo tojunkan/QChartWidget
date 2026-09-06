@@ -1,218 +1,102 @@
-// QChartWidget.h —— 图表控件
-// 持有唯一 Projection、所有 Axis 和 Layer；viewRect 几何已抽到 QChartCamera2D，
-// 这里保留 m_dataBounds（依赖 projection->computeDataBounds）与交互/绘制编排。
-// 坐标链路：View Cartesian → ViewNorm → Pixel（由 QChartCamera2D 完成）
+// QChartWidget.h —— 2D 图表控件（S0+批次 A：容器化首改）
+// 形态：纯容器（继承 QChartAbstractWidget）——持有唯一 2D Projection（unique_ptr）、
+// 唯一的 plotArea 由基类布局计算；layers/axes 便捷管理；viewRect/dataBounds 驱动链
+// 经广播/转发 API 作用到各 layer 的相机与轴。不含相机成员、buildScene、图例/导出/拾取/动画。
+// 旧成员/方法注释保留并标注“待 <阶段> 阶段恢复”。
 #ifndef QCHARTWIDGET_H
 #define QCHARTWIDGET_H
-#include <QWidget>
 #include <QList>
-#include <QPixmap>
-#include <QPoint>
 #include <QRectF>
 #include <memory>
-#include <optional>
-#include "QChartCamera.h"  // ViewRectFitMode + 相机
+#include "QChartAbstractWidget.h"
 #include "QChartLayer.h"
 #include "QChartProjection.h"
-#include "QChartRenderer.h" // QChartScene + 渲染器接口
-#include "QChartTheme.h"    // QChartTheme + Preset
-#include "QChartLegend.h"   // 图例（内联方法需完整类型）
 
-class QChartSeries;
-
-// 导出范围（C3：默认全 widget；「仅 plotArea」可选，会丢刻度标签/轴标题）
-enum class QChartExportScope { WholeWidget, PlotArea };
+class QChartAxis;
 
 class QChartWidget : public QChartAbstractWidget {
     Q_OBJECT
-    Q_PROPERTY(bool panEnabled  READ isPanEnabled  WRITE setPanEnabled)
-    Q_PROPERTY(bool zoomEnabled READ isZoomEnabled WRITE setZoomEnabled)
-    Q_PROPERTY(bool cachingEnabled READ isCachingEnabled WRITE setCachingEnabled)
 public:
     explicit QChartWidget(QWidget* parent = nullptr);
     ~QChartWidget() override;
 
-    // ===== 组件管理 =====
-    void addLayer(QChartLayer* g);
-    void removeLayer(QChartLayer* g);
-    QList<QChartLayer*> layers() const { return m_layers; }
+    // ===== 图层管理（便捷，转发基类容器）=====
+    void addLayer(QChartLayer* layer);
+    void removeLayer(QChartLayer* layer);
 
+    // ===== 轴管理（便捷：加到首个图层；图层缺失时先挂起，addLayer 时补挂）=====
     void addAxis(QChartAxis* a);
     void removeAxis(QChartAxis* a);
     QList<QChartAxis*> axes() const { return m_axes; }
 
-    // ===== 坐标转换（对所有投影类型通用）=====
-    /// View Cartesian → Pixel：线性映射 viewRect → plotArea
+    // ===== Projection（容器唯一持有；访问器见 protected 基类覆写投影()）=====
+    void setProjection(std::unique_ptr<QChartProjection> proj);
+
+    // ===== 数据范围 / 视窗驱动链（广播到各 layer 相机与轴）=====
+    QRectF dataBounds() const { return m_dataBounds; }
+    void recomputeDataBounds();                 // viewRect(首层相机) → dataBounds → 轴 setRange 广播
+    QRectF viewRect() const;                    // 首层相机 viewRect（无层返回空）
+    void setViewRect(const QRectF& r);          // 广播 setViewRect 到所有层相机 + recomputeDataBounds
+    void panViewCartesian(qreal dx, qreal dy);
+    void zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY);
+
+    // ===== 坐标转换（View Cartesian ↔ Pixel，转发层相机 + 本 widget plotArea）=====
     QPointF cartesianToPixel(qreal cx, qreal cy) const;
-    /// Pixel → View Cartesian：逆线性映射
     QPointF pixelToCartesian(const QPointF& pixel) const;
 
-    // ===== 视窗操作 =====
-    /// 绝对设置 viewRect（动画等），自动重算 dataBounds + fit + invalidate
-    void setViewRect(const QRectF& r);
-    /// 平移 viewRect（dx/dy 在 View Cartesian 空间）
-    void panViewCartesian(qreal dx, qreal dy);
-    /// 以 (cx,cy) 为中心缩放 viewRect。factorX/factorY 独立控制两维
-    /// （禁交互轴所在维度传 1.0 = 不缩放）。factor<1=放大，>1=缩小
-    void zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY);
-    /// 语法糖落地：修改 dataBounds dim0 → 重算 viewRect
-    void setDataRangeDim0(qreal min, qreal max);
-    /// 语法糖落地：修改 dataBounds dim1 → 重算 viewRect
-    void setDataRangeDim1(qreal min, qreal max);
-
-    // ===== Projection 与视窗状态 =====
-    void setProjection(std::unique_ptr<QChartProjection> proj);
-    const QChartProjection* projection() const { return m_projection.get(); }
-    /// 临时投影（动画用）：仅影响渲染路径（DrawContext），不参与管理逻辑。
-    /// 动画结束后必须 clearTemporaryProjection()
-    void setTemporaryProjection(QChartProjection* p) { m_tempProjection = p; invalidateForeground(); }
-    void clearTemporaryProjection() { m_tempProjection = nullptr; invalidateForeground(); }
-    QRectF viewRect() const { return m_camera->viewRect(); }
-    QRectF dataBounds() const { return m_dataBounds; }
-
-    // ===== 布局 =====
-    QRectF plotArea() const { return m_plotArea; }
-    void setMargins(qreal l, qreal t, qreal r, qreal b);
-
-    // ===== viewRect 匹配策略 =====
-    ViewRectFitMode viewRectFitMode() const { return m_camera->fitMode(); }
-    void setViewRectFitMode(ViewRectFitMode mode);
-    qreal scale() const { return m_camera->scale(); }
-    void setScale(qreal ratio);
-
-    // ===== 主题 =====
-    /// 一键切换预设主题（A2）
-    void setTheme(QChartTheme::Preset preset);
-    /// 进阶：自定义主题（同 struct）
-    void setTheme(const QChartTheme& theme);
-    /// 当前应用的主题（base，不含 override）
-    QChartTheme theme() const { return m_theme; }
-
-    // 背景逐项覆盖（override 模式，与轴/网格/系列一致）
-    void setBackgroundColor(const QColor& c);
-    void clearBackgroundColor();
-    QColor backgroundColor() const;
-
-    // 系统深/浅自动跟随（A4：默认关）
-    void setFollowSystemPalette(bool on);
-    bool followSystemPalette() const { return m_followSystemPalette; }
-
-    // ===== 图例（Phase 1 overlay）=====
-    QChartLegend* legend() const { return m_legend; }
-    void setLegendVisible(bool v) { m_legend->setVisible(v); }
-    bool isLegendVisible() const { return m_legend->isVisible(); }
-    void setLegendAlignment(Qt::Alignment a) { m_legend->setAlignment(a); }
-    /// 当前图例条目（汇总所有 layer、跳过空 name、按 add 顺序；供测试/交互）
-    QList<QChartSeries*> legendItems() const { return m_legendItems; }
-
-    // ===== 导出（C1/C3/C4/C5）=====
-    /// 便捷重载（默认 WholeWidget）
-    bool saveAsPng(const QString& path, const QSize& size = {}, qreal devicePixelRatio = 1.0);
-    bool saveAsSvg(const QString& path, const QSize& size = {});
-    bool saveAsPdf(const QString& path, const QSize& size = {});
-    /// 显式范围重载
-    bool saveAsPng(const QString& path, QChartExportScope scope, const QSize& size = {}, qreal devicePixelRatio = 1.0);
-    bool saveAsSvg(const QString& path, QChartExportScope scope, const QSize& size = {});
-    bool saveAsPdf(const QString& path, QChartExportScope scope, const QSize& size = {});
-    /// 透明背景开关（C5：默认 false = 用主题背景填充）
-    void setExportTransparentBackground(bool v) { m_exportTransparentBackground = v; }
-    bool exportTransparentBackground() const { return m_exportTransparentBackground; }
-
-    // ===== 缓存与交互 =====
-    bool isCachingEnabled() const { return m_renderer->isCachingEnabled(); }
-    void setCachingEnabled(bool v) { m_renderer->setCachingEnabled(v); update(); }
-    bool isPanEnabled() const { return m_panEnabled; }
-    void setPanEnabled(bool v) { m_panEnabled = v; }
-    bool isZoomEnabled() const { return m_zoomEnabled; }
-    void setZoomEnabled(bool v) { m_zoomEnabled = v; }
-
-    virtual void invalidateBackground();
-    virtual void invalidateForeground();
-    void invalidateLayout();
+    // 旧 API 注释保留（待对应阶段恢复）：
+    // viewRectFitMode()/setViewRectFitMode()/scale()/setScale()/FitStrategy fitViewRectToPlotArea()
+    //   —— 待相机配置阶段（相机已归 layer，配置 API 将作用于层相机）
+    // setTheme(QChartTheme::Preset/const QChartTheme&)/theme()/pushTheme()/setBackgroundColor()/
+    // clearBackgroundColor()/backgroundColor()/setFollowSystemPalette()/followSystemPalette()/
+    // assignSeriesPaletteColor()/QChartTheme m_theme/m_backgroundColorOverride/m_followSystemPalette/
+    // m_seriesColorIndex —— 待 Phase-1 主题阶段恢复
+    // legend()/setLegendVisible()/isLegendVisible()/setLegendAlignment()/legendItems()/
+    // m_legend/m_legendItems/rebuildLegendItems() —— 待 Phase-1 图例阶段恢复
+    // saveAsPng/Svg/Pdf（全部重载）/setExportTransparentBackground()/exportTransparentBackground()/
+    // QChartExportScope —— 待导出阶段恢复
+    // setTemporaryProjection()/clearTemporaryProjection()/m_tempProjection —— 待动画阶段恢复
+    // isCachingEnabled()/setCachingEnabled() —— 缓存已并入 renderer（viewDirty 模型）
+    // paintEvent()/resizeEvent()/event()/mouse*/wheel/leaveEvent 覆写 —— 基类已统一 final 分发；交互待交互阶段
+    // buildScreenScene()/buildExportScene()/buildHoverTooltip()/dimensionInteractive()/seriesHovered/viewChanged
+    //   —— 场景组装由「layer 快照 + renderer 管线」取代；hover/信号待拾取/交互阶段
+    // m_camera/m_renderer/m_viewInitialized/m_panEnabled/m_zoomEnabled/m_panStart/m_panning/
+    // m_hoverSeries/m_hoverIndex —— 相机归 layer；交互状态待交互阶段恢复
+    // （F2/t8 补全，按旧 HEAD 头逐项比对）
+    // drawOverlay(QPainter&, const QChartScene&) —— 待 GL overlay/数据标签阶段恢复
+    // invalidateLayout() —— 布局脏标记已并入 m_layoutDirty（批次 A 起 relayout 即布局失效）
+    // camera()/renderer()/glRenderer()（QChartAbstractWidget 旧 protected 访问器）—— 相机归 layer
+    //   （经 layer->camera() 访问）、渲染器为容器内部实现细节（待渲染器配置阶段）
+    // setProjection 旧签名 + public projection() —— 现投影经 protected projection() 覆写+setProjection 管理；
+    //   如需 public 只读访问器可在后续批次补（QChartAbstractWidget.h 旧 m_legend/m_plotArea 等见该头注释）
+    // setDataRangeDim0()/setDataRangeDim1() —— 待 Widget 数据链阶段（现链为 viewRect→recomputeDataBounds→
+    //   layer->setNumericBounds→轴 sugar）
+    // setPanEnabled/isPanEnabled/setZoomEnabled/isZoomEnabled —— 待交互阶段恢复（钩子已就位）
+    // seriesHovered(...) 信号 —— 待拾取/悬停阶段恢复
+    //
+    // 恢复指引（不依赖记忆）：本清单即恢复点索引；阶段迁移表见
+    // docs/stages/S0_axis_pipeline.md（§2 排除清单 / §5 类文档登记 / §6 遗留提示）；
+    // 各旧 API 完整旧实现位于用户 git 历史中本文件重构前版本（未执行任何 git 写操作），
+    // 恢复时按上表归属阶段（主题 Phase-1 / 图例 Phase-1 / 导出 / 动画 / 交互 / 拾取）取回。
 
 signals:
-    void seriesHovered(QChartSeries*, int, bool);
-    void viewChanged();
+    // viewChanged()/seriesHovered(...) 待交互阶段恢复（相机变化经层相机 viewChanged 传播）
 
 protected:
-    void paintEvent(QPaintEvent*) override;
-    void resizeEvent(QResizeEvent*) override;
-    bool event(QEvent*) override;
-    void mouseMoveEvent(QMouseEvent*) override;
-    void mousePressEvent(QMouseEvent*) override;
-    void mouseReleaseEvent(QMouseEvent*) override;
-    void wheelEvent(QWheelEvent*) override;
-    void leaveEvent(QEvent*) override;
-
-    /// §8.2 钩子：组装屏显场景快照（默认 = 2D 场景组装；3D 子类重写填 3D 段）
-    /// 由 paintEvent 调用；渲染器只依赖快照 + 目标 device，不反向依赖 Widget
-    virtual QChartScene buildScreenScene() const;
-
-    /// §8.2 钩子：组装导出场景（按 scope/size 计算设备尺寸与 plotArea）；
-    /// 改 protected virtual，3D 子类可注入 3D 段（导出 3D 场景低成本；验收不要求）
-    virtual QChartScene buildExportScene(QChartExportScope scope, const QSize& size,
-                                         QSizeF& outDeviceSize) const;
-
-    virtual void layoutAxes();
-
-    /// 调整 viewRect 使长宽比匹配 plotArea——Polar 下圆不变椭圆
-    /// 只负责触发相机拟合几何 + 反算 dataBounds（dataBounds 依赖 projection，故留在 Widget）
-    using FitStrategy = QChartCamera2D::FitStrategy;
-    void fitViewRectToPlotArea(FitStrategy strategy);
-
-    /// 悬停 tooltip 内容：命中点的 Data → Numeric 坐标
-    QString buildHoverTooltip(QChartLayer* g, QChartSeries* s, int index) const;
-
-    /// 该维度（0=dim0 水平, 1=dim1 垂直）是否允许交互：
-    /// 任一绑定轴 isInteractive()==false → 禁止（如分类轴）
-    bool dimensionInteractive(int dim) const;
-
-    // ===== 视窗状态 =====
-    std::unique_ptr<QChartProjection> m_projection;
-    QChartProjection* m_tempProjection = nullptr; // 动画临时投影（非持有，仅渲染用）
-    std::unique_ptr<QChartCamera2D> m_camera;   // viewRect 几何 + fit 策略 + View↔Pixel 映射
-    std::unique_ptr<QChartRenderer> m_renderer; // 渲染后端（缓存 + 绘制编排）
-    QRectF m_dataBounds;            // 对应的 Numeric 范围（从 viewRect 反算，Widget 持有）
-    bool m_viewInitialized = false; // 是否已初始化 viewRect
-
-    QList<QChartLayer*> m_layers;
-    QList<QChartAxis*> m_axes;
-    QRectF m_plotArea;
-
-    // 布局脏标记（缓存脏标记已迁入渲染器）
-    bool m_layoutDirty = true;
-
-    // 交互
-    bool m_panEnabled = true, m_zoomEnabled = true;
-    QPointF m_panStart;
-    bool m_panning = false;
-    QChartSeries* m_hoverSeries = nullptr;
-    int m_hoverIndex = -1;
-
-    // 布局
-    qreal m_marginLeft   = 20.0;
-    qreal m_marginTop    = 20.0;
-    qreal m_marginRight  = 20.0;
-    qreal m_marginBottom = 20.0;
+    QRectF calculatePlotArea() const override;   // margins + 各层边框轴 sizeHint 外边距
+    void layoutAxes();                            // 计算 plotArea + 广播 plotAreaChanged + push 上下文
+    void onBeforePaint() override;                // 渲染前：axis sugar → 层相机 viewRect 单次同步
+    void drawExternalContent(QPainter& painter) override;   // plotArea 外边框轴 drawAtEdge
+    const QChartAbstractProjection* projection() const override { return m_projection.get(); }
 
 private:
-    /// 推送当前主题默认色到所有子组件（axis/layer/series/legend，A5 调色板循环）
-    void pushTheme();
-    /// A5：给无 override 的 series 分配 palette[index % size]，推进索引；
-    /// 显式色/空调色板时不分配、不推进。返回是否分配。
-    bool assignSeriesPaletteColor(QChartSeries* s);
-    /// 重建 m_legendItems（汇总所有 layer、跳过空 name、按 add 顺序）
-    void rebuildLegendItems();
-    /// 给定尺寸下重算 plotArea（复用 layoutAxes 的 margin/sizeHint 逻辑，供 WholeWidget 导出）
-    QRectF plotAreaForSize(const QSize& size) const;
+    void attachToLayer(QChartLayer* layer, QChartAxis* a);  // 便捷轴挂载（isHorizontal→axisX，否则→axisY）
+    bool isAxisAttached(QChartAxis* a) const;
 
-    QChartTheme m_theme = QChartTheme::light();
-    std::optional<QColor> m_backgroundColorOverride;   // 显式背景覆盖（setBackgroundColor）
-    bool m_followSystemPalette = false;
-    int m_seriesColorIndex = 0;                        // A5 全局 add 顺序索引（跨 layer）
-    QChartLegend* m_legend = nullptr;                  // 图例（构造函数创建，parented）
-    QList<QChartSeries*> m_legendItems;                // 图例条目（paint 前重建）
-    bool m_exportTransparentBackground = false;        // C5：导出透明背景开关
+    std::unique_ptr<QChartProjection> m_projection;  // 唯一投影（2D；容器持有，默认 Cartesian）
+    QRectF m_dataBounds;                              // 当前 Numeric 范围（viewRect 反算缓存）
+    QList<QChartAxis*> m_axes;                        // 便捷轴列表（非持有；转发挂载到图层）
+    bool m_viewSynced = false;                        // 相机视图是否已同步（axis→camera 单次链）
 };
 
-#endif
+#endif // QCHARTWIDGET_H
