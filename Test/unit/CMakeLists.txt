@@ -8,6 +8,12 @@ set(QCHART_UNIT_HEADERS
     tests/test_axis_pipeline.h
     # 批次 A：widget 容器冒烟（offscreen CPU）
     tests/test_widget_smoke.h
+    # 批次 B1：3D 轴渲染冒烟（offscreen CPU）
+    tests/test_axes3d_smoke.h
+    # 批次 B2：widget3D 轻量容器冒烟（offscreen CPU）
+    tests/test_widget3d_smoke.h
+    # 批次 B3：drawAtEdge 专项
+    tests/test_axis_edge.h
 )
 
 set(QCHART_UNIT_SOURCES
@@ -16,6 +22,12 @@ set(QCHART_UNIT_SOURCES
     tests/test_axis_pipeline.cpp
     # 批次 A：widget 容器冒烟（offscreen CPU）
     tests/test_widget_smoke.cpp
+    # 批次 B1：3D 轴渲染冒烟（offscreen CPU）
+    tests/test_axes3d_smoke.cpp
+    # 批次 B2：widget3D 轻量容器冒烟（offscreen CPU）
+    tests/test_widget3d_smoke.cpp
+    # 批次 B3：drawAtEdge 专项
+    tests/test_axis_edge.cpp
 )
 
 qt6_wrap_cpp(QCHART_UNIT_MOCS ${QCHART_UNIT_HEADERS})

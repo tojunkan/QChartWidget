@@ -4,6 +4,8 @@
 #include "test_widget_gl.h"
 
 #include <QtTest>
+#include <QtMath>
+#include <QRegularExpression>
 #include <QGuiApplication>
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions_3_3_Core>
@@ -80,6 +82,7 @@ void TestWidgetGl::glWidgetRenders()
     const auto* v = reinterpret_cast<const char*>(f->glGetString(GL_VENDOR));
     const auto* r = reinterpret_cast<const char*>(f->glGetString(GL_RENDERER));
     const auto* ver = reinterpret_cast<const char*>(f->glGetString(GL_VERSION));
+    QString vendorStr = QString::fromLatin1(v ? v : "unknown");
     qInfo().noquote() << QString("widget GL 环境: platform=%1 vendor=%2 renderer=%3 version=%4")
         .arg(QGuiApplication::platformName())
         .arg(v ? v : "?").arg(r ? r : "?").arg(ver ? ver : "?");
@@ -91,6 +94,123 @@ void TestWidgetGl::glWidgetRenders()
     // host FBO 取证：网格/轴脊落屏（FBO 行序底→顶，翻转后与顶层行序一致）
     const QImage fbo = host->grabFramebuffer();
     QVERIFY2(!fbo.isNull(), "host grabFramebuffer 应成功");
+
+    // ===== t13(HiDPI)：FBO 尺寸锁定 + dpr 感知采样比例 =====
+    // FBO（默认帧缓冲）按设备像素分配：期望 == hostGeo(逻辑) × devicePixelRatioF（±1px 容差）。
+    const int expFW = qRound(host->geometry().width() * host->devicePixelRatioF());
+    const int expFH = qRound(host->geometry().height() * host->devicePixelRatioF());
+    QVERIFY2(qAbs(fbo.width() - expFW) <= 1 && qAbs(fbo.height() - expFH) <= 1,
+             qPrintable(QString("FBO 尺寸应≈hostGeo×dpr：fbo=%1x%2 hostGeo=%3x%4 dpr=%5 期望=%6x%7")
+                        .arg(fbo.width()).arg(fbo.height())
+                        .arg(host->geometry().width()).arg(host->geometry().height())
+                        .arg(host->devicePixelRatioF()).arg(expFW).arg(expFH)));
+    // 采样缩放（标签带等按逻辑坐标给定 → 设备像素）；DPR=1 时 s=1，采样矩形与现值逐位一致
+    const double sX = double(fbo.width()) / double(qMax(1, host->geometry().width()));
+    const double sY = double(fbo.height()) / double(qMax(1, host->geometry().height()));
+
+    // ===== t12 诊断 =====
+    // 环境/几何/刻度信息：无条件 QINFO（2-3 行，供 Windows 裸跑带回关键行，不污染断言）；
+    // 逐环扫描/8 方向/全图 ink/PNG：QCHART_WIDGETGL_DUMP=1 门控。
+    {
+        const QRectF pa = w.plotArea();
+        const QRectF db = w.dataBounds();
+        const QRectF vr = layer.camera() ? layer.camera()->viewRect() : QRectF();
+        const QVector<qreal> xt = ax.tickValues(db.left(), db.right());
+        const QVector<qreal> yt = ay.tickValues(db.bottom(), db.top());
+        QString xs, ys;
+        for (qreal v : xt) xs += QString::number(v, 'g', 6) + " ";
+        for (qreal v : yt) ys += QString::number(v, 'g', 6) + " ";
+        qInfo().noquote() << "DUMP fbo" << fbo.width() << "x" << fbo.height()
+                          << "dpr" << host->devicePixelRatioF()
+                          << "hostGeo" << host->geometry();
+        qInfo().noquote() << "DUMP plotArea" << pa << "dataBounds" << db << "viewRect" << vr;
+        qInfo().noquote() << QString("DUMP xTicks(%1): %2").arg(xt.size()).arg(xs.trimmed());
+        qInfo().noquote() << QString("DUMP yTicks(%1): %2").arg(yt.size()).arg(ys.trimmed());
+        qInfo().noquote() << QString("DUMP axisX sugar=%1..%2 axisY sugar=%3..%4 gridVisible=%5")
+            .arg(ax.min(), 0, 'g', 6).arg(ax.max(), 0, 'g', 6)
+            .arg(ay.min(), 0, 'g', 6).arg(ay.max(), 0, 'g', 6)
+            .arg(layer.isGridVisible());
+    }
+
+    if (qEnvironmentVariableIsSet("QCHART_WIDGETGL_DUMP")) {
+        const QRectF pa = w.plotArea();
+        const QRectF vr = layer.camera() ? layer.camera()->viewRect() : QRectF();
+
+        // 中心逐环扫描：半径 1..48，环定义 max(|dx|,|dy|)==r（方形环），统计环内 ink
+        const int cx = fbo.width() / 2, cy = fbo.height() / 2;
+        int firstRing = -1;
+        double firstAng = 0;
+        for (int r = 1; r <= 48; ++r) {
+            int n = 0;
+            double angSum = 0;
+            int angCnt = 0;
+            for (int dy = -r; dy <= r; ++dy) {
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (qMax(qAbs(dx), qAbs(dy)) != r) continue;
+                    const int px = cx + dx, py = cy + dy;
+                    if (px < 0 || px >= fbo.width() || py < 0 || py >= fbo.height()) continue;
+                    if (isInk(fbo.pixelColor(px, py))) {
+                        ++n;
+                        angSum += qAtan2(double(dy), double(dx));
+                        ++angCnt;
+                    }
+                }
+            }
+            if (n > 0 && firstRing < 0) {
+                firstRing = r;
+                firstAng = (angCnt > 0) ? (angSum / angCnt) : 0.0;
+            }
+            qInfo().noquote() << QString("DUMP ring r=%1 ink=%2").arg(r).arg(n);
+        }
+        qInfo().noquote() << "DUMP firstInkRing" << firstRing
+                          << "avgAngleDeg" << qRadiansToDegrees(firstAng);
+
+        // 补丁(队长批准)：全图 ink 总计数（判整帧空白/部分内容）
+        int fullInk = 0;
+        for (int y = 0; y < fbo.height(); ++y)
+            for (int x = 0; x < fbo.width(); ++x)
+                if (isInk(fbo.pixelColor(x, y))) ++fullInk;
+        qInfo().noquote() << "DUMP fullInk" << fullInk;
+
+        // 补丁：8 方向（上/下/左/右 + 四角 45° 带）自中心出发的首个 ink 偏移（像素；48 内未遇 → -1）
+        struct Dir { const char* name; int dx; int dy; };
+        const Dir dirs[8] = {
+            { "up", 0, -1 }, { "down", 0, 1 }, { "left", -1, 0 }, { "right", 1, 0 },
+            { "ne", 1, -1 }, { "nw", -1, -1 }, { "se", 1, 1 }, { "sw", -1, 1 }
+        };
+        for (const Dir& d : dirs) {
+            int hit = -1;
+            for (int k = 1; k <= 48; ++k) {
+                const int px = cx + d.dx * k, py = cy + d.dy * k;
+                if (px < 0 || px >= fbo.width() || py < 0 || py >= fbo.height()) break;
+                if (isInk(fbo.pixelColor(px, py))) { hit = k; break; }
+            }
+            qInfo().noquote() << QString("DUMP dir %1 firstInkOffset=%2").arg(d.name).arg(hit);
+        }
+
+        // 补丁：映射参考点——numeric (0,0) 与 plotArea 四角 numeric 端点经相机投影到像素
+        if (layer.camera()) {
+            const QChartCamera* cam = layer.camera();
+            auto proj = [&](qreal x, qreal y) {
+                return cam->project(QVector3D(x, y, 0.0f), pa).screen;
+            };
+            qInfo().noquote() << "DUMP projOrigin(numeric 0,0)=" << proj(0.0, 0.0)
+                              << "plotArea=" << pa;
+            qInfo().noquote() << "DUMP projCorner(lo,lo)=" << proj(vr.left(), vr.top())
+                              << "projCorner(hi,hi)=" << proj(vr.right(), vr.bottom());
+            qInfo().noquote() << "DUMP projCorner(lo,hi)=" << proj(vr.left(), vr.bottom())
+                              << "projCorner(hi,lo)=" << proj(vr.right(), vr.top());
+        }
+
+        // 另存整帧 FBO PNG（工作目录 widgetgl_fbo_<vendor>.png，防多后端覆盖）
+        QString safeVendor = vendorStr;
+        safeVendor.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9]+")),
+                           QStringLiteral("_"));
+        const QString pngName = QStringLiteral("widgetgl_fbo_%1.png").arg(safeVendor);
+        const bool saved = fbo.save(pngName);
+        qInfo().noquote() << "DUMP pngSaved" << saved << fbo.size() << pngName;
+    }
+
     const QPoint center(fbo.width() / 2, fbo.height() / 2);
     QVERIFY2(inkIn(fbo, QRect(center.x() - 3, center.y() - 3, 7, 7)) > 0,
              "host FBO 中心应有网格墨迹（轴域 0,0 交叉）");
@@ -101,10 +221,18 @@ void TestWidgetGl::glWidgetRenders()
     // 实测字形墨迹 rows≈135..143（水平网格线行 row≈139 除外）：
     //   正确带 rows≈140..144 cols≈36..66（translate(-plotArea.topLeft) 生效时字形在此）
     //   偏移带 rows≈160..164 cols≈104..134（未平移时字形整体 +plotArea.topLeft 落此）
-    const int nLocalBand = inkIn(fbo, QRect(36, 140, 30, 5));
-    const int nShiftBand = inkIn(fbo, QRect(104, 160, 30, 5));
-    qInfo().noquote() << QString("widget GL 标签带采样: 正确带(local)=%1 偏移带(父系)=%2")
-                         .arg(nLocalBand).arg(nShiftBand);
+    // t13(HiDPI)：采样矩形按 s=fbo/hostGeo 缩放（DPR=1 → s=1 → 与历史逐位一致；
+    // DPR=1.5 → 带落字形实际设备位置）。边按 qRound(edge*s) 取整保宽度。
+    const QRect bandOk(qRound(36.0 * sX), qRound(140.0 * sY),
+                       qRound(66.0 * sX) - qRound(36.0 * sX),
+                       qRound(145.0 * sY) - qRound(140.0 * sY));
+    const QRect bandShift(qRound(104.0 * sX), qRound(160.0 * sY),
+                          qRound(134.0 * sX) - qRound(104.0 * sX),
+                          qRound(165.0 * sY) - qRound(160.0 * sY));
+    const int nLocalBand = inkIn(fbo, bandOk);
+    const int nShiftBand = inkIn(fbo, bandShift);
+    qInfo().noquote() << QString("widget GL 标签带采样: 正确带(local)=%1 偏移带(父系)=%2 采样比例=%3x%4")
+                         .arg(nLocalBand).arg(nShiftBand).arg(sX, 0, 'g', 6).arg(sY, 0, 'g', 6);
     QVERIFY2(nLocalBand > 0,
              "标签局部坐标带应有字形墨迹（translate(-plotArea.topLeft) 生效）");
     QVERIFY2(nShiftBand == 0,

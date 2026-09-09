@@ -7,6 +7,12 @@
 #include "test_axis_pipeline.h"
 // 批次 A：widget 容器冒烟
 #include "test_widget_smoke.h"
+// 批次 B1：3D 轴渲染冒烟
+#include "test_axes3d_smoke.h"
+// 批次 B2：widget3D 轻量容器冒烟
+#include "test_widget3d_smoke.h"
+// 批次 B3：drawAtEdge 专项
+#include "test_axis_edge.h"
 
 int main(int argc, char* argv[])
 {
@@ -16,6 +22,9 @@ int main(int argc, char* argv[])
     // S0：在此追加 QTest::qExec(new TestXxx, argc, argv)
     rc |= QTest::qExec(new TestAxisPipeline, argc, argv);
     rc |= QTest::qExec(new TestWidgetSmoke, argc, argv);
+    rc |= QTest::qExec(new TestAxes3DSmoke, argc, argv);
+    rc |= QTest::qExec(new TestWidget3DSmoke, argc, argv);
+    rc |= QTest::qExec(new TestAxisEdge, argc, argv);
 
     return rc;
 }

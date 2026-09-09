@@ -15,7 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ---- 构建选项（保持与旧版同名，默认开）----
-option(BUILD_DEMOS "构建演示程序" OFF)          # S0 阶段 demo 未迁移，默认关
+option(BUILD_DEMOS "构建演示程序" ON)           # 批次 B4：轴阶段 demo 为交付物，默认开
 option(BUILD_BENCH "构建性能基准" OFF)          # S0 阶段 bench 未迁移，默认关
 option(BUILD_UNIT_TESTS "构建单元测试" ON)
 option(BUILD_INTEGRATION_TESTS "构建集成测试" ON)
@@ -26,15 +26,16 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Svg OpenGL OpenGLWidge
 # enable_testing() 必须位于顶层；Test/unit 与 Test/integration 内 add_test 由此生效。
 enable_testing()
 
-# ---- 库源码（S0 子集）----
+# ---- 库源码（S0+批次A/B1 子集）----
 set(QCHART_SOURCES
-    # axes：轴基类 + 2D 轴（3D 轴 QChartAxes3D 待后续阶段）
+    # axes：轴基类 + 2D 轴 + 3D 轴编排器（批次 B1）
     src/axes/QChartAxis.cpp
     src/axes/2d/QValueAxis.cpp
     src/axes/2d/QLogAxis.cpp
     src/axes/2d/QDateTimeAxis.cpp
     src/axes/2d/QBarCategoryAxis.cpp
-    # core：2D 相机 + 双后端渲染器 + GL 资源池 + widget 容器层（批次 A 加入）
+    src/axes/3d/QChartAxes3D.cpp
+    # core：2D 相机 + 双后端渲染器 + GL 资源池 + widget 容器层（批次 A）+ 3D 相机（批次 B1）
     src/core/QChartCamera.cpp
     src/core/QChartRenderer.cpp
     src/core/QPainterChartRenderer.cpp
@@ -42,8 +43,11 @@ set(QCHART_SOURCES
     src/core/QChartGL.cpp
     src/core/QChartAbstractWidget.cpp
     src/core/QChartWidget.cpp
-    # layers：2D 图层（3D 图层待后续阶段）
+    src/core/QChartWidget3D.cpp     # 批次 B2：轻量 3D 容器（单 layer3D、相机归层）
+    src/core/QChartCamera3D.cpp
+    # layers：2D 图层 + 3D 图层（批次 B1；3D series 后续批次）
     src/layers/QChartLayer.cpp
+    src/layers/3d/QChartLayer3D.cpp
     # projection：2D 投影族（3D 投影族为 header-only，随头文件引入即可；插值投影有 .cpp）
     src/projection/QInterpolatedProjection.cpp
 )
@@ -55,8 +59,10 @@ set(QCHART_HEADERS
     include/axes/2d/QLogAxis.h
     include/axes/2d/QDateTimeAxis.h
     include/axes/2d/QBarCategoryAxis.h
+    include/axes/3d/QChartAxes3D.h
     include/core/QChartAbstractCamera.h
     include/core/QChartCamera.h
+    include/core/QChartCamera3D.h
     include/core/QChartPrimitive.h
     include/core/QChartScene.h
     include/core/QChartTextLabel.h
@@ -66,7 +72,9 @@ set(QCHART_HEADERS
     include/core/QChartGL.h
     include/core/QChartAbstractWidget.h
     include/core/QChartWidget.h
+    include/core/QChartWidget3D.h     # 批次 B2：轻量 3D 容器（moc）
     include/layers/QChartLayer.h
+    include/layers/3d/QChartLayer3D.h
     include/projection/QChartAbstractProjection.h
     include/projection/2d/QChartProjection.h
     include/projection/2d/QCartesianProjection.h
@@ -91,10 +99,14 @@ target_include_directories(QChartWidget PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include/core
     ${CMAKE_CURRENT_SOURCE_DIR}/include/axes
     ${CMAKE_CURRENT_SOURCE_DIR}/include/axes/2d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/axes/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/layers
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/layers/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/projection
     ${CMAKE_CURRENT_SOURCE_DIR}/include/projection/2d
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/projection/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/series
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/series/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/utils
 )
 target_link_libraries(QChartWidget PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::OpenGL Qt6::OpenGLWidgets)
@@ -104,4 +116,9 @@ set_target_properties(QChartWidget PROPERTIES AUTOMOC ON)
 # ---- 测试（S0 阶段只构建新写的分期测试入口）----
 if(BUILD_UNIT_TESTS OR BUILD_INTEGRATION_TESTS)
     add_subdirectory(Test)
+endif()
+
+# ---- 演示（批次 B4：轴阶段 demo；后续阶段随模块迁移逐个加回）----
+if(BUILD_DEMOS)
+    add_subdirectory(Test/demos)
 endif()

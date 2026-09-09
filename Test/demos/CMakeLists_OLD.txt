@@ -1,9 +1,17 @@
-# Test/demos —— 批次 B4：轴阶段 demo（QChartDemo）
-# 旧版（11 个 demo_*.cpp 引用已删 API）清单见 CMakeLists_OLD.txt 与 LEGACY_DEMOS_OLD.txt，
-# 文件实体保留、不再参与构建（每阶段随模块迁移逐个加回）。
+# Test/demos/CMakeLists.txt
 add_executable(QChartDemo
     test.cpp
-    demo_axis.cpp
+    demo_polar.cpp
+    demo_bar.cpp
+    demo_pendulum.cpp
+    demo_sort.cpp
+    demo_camera.cpp
+    demo_swirl.cpp
+    demo_stress.cpp
+    demo_theme.cpp
+    demo_scatter3d.cpp
+    demo_line3d.cpp
+    demo_surface3d.cpp
 )
 set_target_properties(QChartDemo PROPERTIES AUTOMOC OFF)
 target_link_libraries(QChartDemo PRIVATE QChartWidget::QChartWidget)

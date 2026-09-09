@@ -12,6 +12,17 @@
 
 Q_LOGGING_CATEGORY(logGLRender, "chart.render.gl")
 
+// ===== t14(HiDPI)：宿主 DPR 注入通道 =====
+// 图元内的点尺寸/线宽是逻辑单位（CPU QPainter 按逻辑像素自动放大）；
+// GL 侧以设备像素光栅化，需按宿主 DPR 放大保持 CPU/GL 视觉对等。
+// 最小侵入：文件级共享值 + 自由函数（宿主 GlPlotWidget::paintGL 每帧注入；
+// 头文件不动——正式 setPixelRatio API 随渲染器配置阶段落头）。
+namespace {
+qreal s_glPixelRatio = 1.0;
+}
+void qchartSetGLPixelRatio(qreal r) { if (r > 0.0) s_glPixelRatio = r; }
+qreal qchartGLPixelRatio() { return s_glPixelRatio; }
+
 
 // 构造 / 析构
 
@@ -200,7 +211,7 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
     for (const Group& grp : groups) {
         GLBatch batch;
         batch.shaderKind = grp.key.kind;
-        batch.pointSize = grp.key.pointSize;
+        batch.pointSize = float(grp.key.pointSize * qchartGLPixelRatio());
         batch.depthTest = !grp.key.isDecor;
         batch.depthBias = grp.key.isGrid ? 0.001f : 0.0f;
         batch.baseId = baseId;
@@ -380,6 +391,14 @@ void QOpenGLChartRenderer::drawPass(const QChartScene& scene, ShaderKind kind)
     }
     prog->setUniformValue("u_blendAlpha", float(blendAlpha));
 
+    // t14(HiDPI)：线宽按宿主 DPR 放大（图元 penWidth 逻辑单位；S0 轴/网格 penWidth 恒 1
+    // → 设备宽 = 1×dpr，与 CPU 1 逻辑 px 对齐）。DPR=1 时 glLineWidth(1)=默认 → 零变化。
+    // 注：宽度超 1 依赖驱动 ALIASED_LINE_WIDTH_RANGE（llvmpipe/多数桌面驱动支持 [1,N]）；
+    // 驱动仅支持 1 时 glLineWidth 静默钳制为 1（不报错）。
+    const bool linePass = (kind == ShaderKind::Line);
+    if (linePass)
+        f->glLineWidth(qMax(1.0f, float(qchartGLPixelRatio())));
+
     // 分层绘制（Grid -> Series -> Decor）
     for (const GLBatch& batch : m_batches) {
         if (batch.shaderKind != kind) continue;
@@ -405,6 +424,8 @@ void QOpenGLChartRenderer::drawPass(const QChartScene& scene, ShaderKind kind)
         f->glDrawArrays(batch.primitive, 0, batch.vertexCount);
     }
 
+    if (linePass)
+        f->glLineWidth(1.0f);   // 恢复默认
     f->glDisable(GL_DEPTH_TEST);
     prog->release();
 }

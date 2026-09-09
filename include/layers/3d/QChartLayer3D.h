@@ -5,10 +5,10 @@
 #include "QChartLayer.h"
 #include "QChartSeries3D.h"
 #include "QChartAxes3D.h"
+#include "QChartCamera3D.h"   // 值成员 m_camera3D 需完整类型（批次 B1）
 #include <QVector>
 #include <memory>
 
-class QChartCamera3D;
 class QChartProjection3D;
 class QChartSurfaceSeries;
 class QChartTextLabel;
@@ -49,6 +49,15 @@ public:
 
     // 图元收集（纯 Numeric，无投影）
     void collectPrimitives();
+
+    // ===== 相机/场景访问（批次 B1：3D 相机值成员 + scene3D 上下文，模式同 2D layer）=====
+    QChartCamera3D* camera3D() { return &m_camera3D; }
+    const QChartCamera3D* camera3D() const { return &m_camera3D; }
+    void setScene3DProjection(const QChartAbstractProjection* p) { m_scene3D.projection = p; }
+    void setScene3DPlotArea(const QRectF& plotArea) { m_scene3D.plotArea = plotArea; }
+    void setScene3DBackground(const QColor& c) { m_scene3D.backgroundColor = c; }
+    const QChartScene& scene3D() const { return m_scene3D; }
+    QChartScene& scene3D() { return m_scene3D; }
 
 protected:
     // 系列脏标记挂钩

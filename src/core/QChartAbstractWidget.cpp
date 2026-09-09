@@ -17,6 +17,10 @@
 
 Q_LOGGING_CATEGORY(logAbstractWidget, "chart.abstractwidget")
 
+// t14(HiDPI)：GL 渲染器 DPR 注入通道（定义于 QOpenGLChartRenderer.cpp；头文件不动——
+// 正式 setPixelRatio API 随渲染器配置阶段落头）
+extern void qchartSetGLPixelRatio(qreal);
+
 // ===== GlPlotWidget：plotArea 对齐的 QOpenGLWidget 子控件（替换旧全窗 GlHost）=====
 // GL 只画 plotArea 内；plotArea 外（边框轴 drawAtEdge/标题）由外层 widget QPainter 画，互不遮挡。
 // 旧 GlHost（全窗覆盖 + legend overlay）已整体后置，随图例/Phase-1 恢复。
@@ -40,12 +44,21 @@ protected:
     {
         if (!m_ready) return;
 
-        // 视口=本控件尺寸（= plotArea 像素区）
+        // ★ t13(HiDPI 修复)：视口必须用设备像素尺寸（FBO/默认帧缓冲按 devicePixelRatio
+        // 分配：Windows DPR=1.5 时 FBO=498x416 而逻辑尺寸 332x277）。用逻辑尺寸会令
+        // GL 内容只占 FBO 左下、中心采样落空。逻辑中心 → 设备中心由视口变换保证
+        // （u_viewProj 的 aspect 与逻辑/设备一致——等比缩放不改变中心/几何比例）。
         auto* f = QOpenGLVersionFunctionsFactory::get<QOpenGLFunctions_3_3_Core>(context());
         if (!f) return;
-        f->glViewport(0, 0, width(), height());
+        const int vpW = qRound(width() * devicePixelRatioF());
+        const int vpH = qRound(height() * devicePixelRatioF());
+        f->glViewport(0, 0, vpW, vpH);
         f->glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
         f->glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // t14(HiDPI)：每帧向 GL 渲染器注入宿主 DPR（点尺寸/线宽按设备像素放大，
+        // 保持与 CPU QPainter 逻辑像素语义对等）；DPR=1 时注入 1 → 零变化。
+        qchartSetGLPixelRatio(devicePixelRatioF());
 
         // plotArea 内内容：各 layer 快照 → GL 渲染（标签 QPainter 覆盖层由 renderer 完成）
         m_owner->renderLayersGL(this);
@@ -197,13 +210,18 @@ void QChartAbstractWidget::renderLayersGL(QPaintDevice* device)
     pushContextToLayers();
 
     // ★ F1(t8)：GL 标签覆盖层经透明位图合成到宿主（child-local）。
-    // 背景：标签统一经 plotArea 尺寸透明 QImage 中间层（renderer 内
-    // translate(-plotArea.topLeft) 使锚点落在局部坐标）再 SourceOver 合成——
-    // 直接 QPainter-on-QOpenGLWidget 在部分平台/时序下不可靠（llvmpipe/wayland
-    // 实测可用，但合成路径与 GL 清屏/批次顺序解耦、跨环境一致，且便于多标签层叠加）。
-    // 尺寸向上取整（I1/t11 定案）：plotArea 尺寸非整数时避免最右/下 1px 字形被截断。
-    const QSize devSize = QSize(qCeil(m_plotArea.width()), qCeil(m_plotArea.height()));
+    // 背景：标签统一经透明 QImage 中间层（renderer 内 translate(-plotArea.topLeft)
+    // 使锚点落在局部坐标）再 SourceOver 合成。
+    // t14(HiDPI)：QImage 改设备分辨率（plotArea 逻辑 × 宿主 dpr）+ setDevicePixelRatio(dpr)——
+    // QPainter 仍画逻辑坐标由 Qt 自动映射到设备像素，文字不再被二次放大（清晰度）；
+    // 合成 drawImage 以逻辑尺寸上屏，Qt painter 按 dpr 映射，无二次缩放。DPR=1 时与现状逐位一致。
+    qreal labelDpr = 1.0;
+    if (const QWidget* wgt = dynamic_cast<const QWidget*>(device))
+        labelDpr = wgt->devicePixelRatioF();
+    const QSize devSize(qMax(1, qCeil(m_plotArea.width() * labelDpr)),
+                        qMax(1, qCeil(m_plotArea.height() * labelDpr)));
     QImage labelDev(devSize, QImage::Format_ARGB32_Premultiplied);
+    labelDev.setDevicePixelRatio(labelDpr);
     labelDev.fill(Qt::transparent);
 
     for (QChartLayer* layer : m_layers) {

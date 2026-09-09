@@ -102,12 +102,13 @@ protected:
     virtual void onWheel(QWheelEvent* e) { Q_UNUSED(e); }
 
     // ---- 渲染管线编排（CPU/GL 共用）----
+    // ---- 渲染管线编排（CPU/GL 共用；批次 B2：虚化以支持 3D 容器覆写场景源）----
     /// 把 layer 内容渲染到 device（每 layer 一次快照渲染；CPU 后端）
-    void renderLayers(QPaintDevice* device);
+    virtual void renderLayers(QPaintDevice* device);
     /// GL 后端渲染入口（GlPlotWidget::paintGL 调用；要求当前 GL 上下文）
-    void renderLayersGL(QPaintDevice* device);
+    virtual void renderLayersGL(QPaintDevice* device);
     /// 同步 plotArea/投影上下文到各 layer（渲染前调用）
-    void pushContextToLayers();
+    virtual void pushContextToLayers();
 
     // ===== 成员 =====
     QList<QChartLayer*> m_layers;    // 非持有（调用方保证生命周期）

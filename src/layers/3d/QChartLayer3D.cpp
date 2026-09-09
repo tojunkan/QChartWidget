@@ -15,6 +15,11 @@ QChartLayer3D::QChartLayer3D(QObject* parent)
     m_axes3D->axis(0).axis = m_axisX;
     m_axes3D->axis(1).axis = m_axisY;
     m_axes3D->axis(2).axis = m_axisZ;
+    // ★ 批次 B1：3D 相机归 layer——scene3D.camera 恒指向本层相机值成员
+    m_scene3D.camera = &m_camera3D;
+    // 轴/网格数据盒默认与 axes3D 默认盒一致（collect 使用 m_axesDataMin/Max 工作副本）
+    m_axesDataMin = QVector3D(0, 0, 0);
+    m_axesDataMax = QVector3D(10, 10, 10);
 }
 
 // ===== 轴重绑 =====
@@ -32,8 +37,14 @@ void QChartLayer3D::setAxisZ(QChartAxis* a) {
 }
 
 // ===== 数据盒 =====
+void QChartLayer3D::setProjection3D(const QChartProjection3D* proj) {
+    m_projection3D = proj;   // 仅用于采样提示/默认盒；图元组装本身纯 Numeric
+}
+
 void QChartLayer3D::setDataBounds(const QVector3D& dataMin, const QVector3D& dataMax) {
     m_axes3D->dataBounds = QCube(dataMin, dataMax);
+    m_axesDataMin = dataMin;   // ★ 批次 B1 收尾：同步 collect 使用的工作副本
+    m_axesDataMax = dataMax;
 }
 bool QChartLayer3D::hasValidDataBounds() const {
     return m_axes3D->dataBounds.isValid();
@@ -56,6 +67,13 @@ bool QChartLayer3D::hasValidDataBounds() const {
 
 // ===== collectPrimitives —— 纯 Numeric 图元组装 =====
 void QChartLayer3D::collectPrimitives() {
+    // 0a. 场景负载复位（每帧重收集；sourceId 从 0 重新分配）
+    m_scene3D.primitives.clear();
+    m_scene3D.labels.clear();
+    m_scene3D.maxSourceId = 0;
+    m_scene3D.PrimitiveIdPrefixSum.clear();
+    m_scene3D.PrimitiveIdPrefixSum.append(0);
+
     // 0. 轴配置重同步
     if (m_axes3D) {
         m_axes3D->axis(0).axis = m_axisX;

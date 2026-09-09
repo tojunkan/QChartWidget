@@ -1,0 +1,13 @@
+# 旧 demo 清单（批次 B4 移出构建；文件实体保留，随后续阶段模块迁移逐个加回/重建）
+# 引用的已删 API 包括旧 QChartWidget/theme/legend/export/Series/3D 系列等（见 CMakeLists_OLD.txt 完整编译清单）。
+demo_polar.cpp
+demo_bar.cpp
+demo_pendulum.cpp
+demo_sort.cpp
+demo_camera.cpp
+demo_swirl.cpp
+demo_stress.cpp
+demo_theme.cpp
+demo_scatter3d.cpp
+demo_line3d.cpp
+demo_surface3d.cpp

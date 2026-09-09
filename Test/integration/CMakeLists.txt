@@ -8,6 +8,12 @@ set(QCHART_INTEGRATION_HEADERS
     tests/test_axis_matrix.h
     # 批次 A：widget GL 宿主冒烟
     tests/test_widget_gl.h
+    # 批次 B1：3D 轴 GL 冒烟
+    tests/test_axes3d_gl.h
+    # 批次 B2：widget3D GL 冒烟
+    tests/test_widget3d_gl.h
+    # 批次 B3：3D 轴矩阵 + spherical（CPU/GL）
+    tests/test_axes3d_matrix.h
 )
 
 set(QCHART_INTEGRATION_SOURCES
@@ -16,6 +22,12 @@ set(QCHART_INTEGRATION_SOURCES
     tests/test_axis_matrix.cpp
     # 批次 A：widget GL 宿主冒烟
     tests/test_widget_gl.cpp
+    # 批次 B1：3D 轴 GL 冒烟
+    tests/test_axes3d_gl.cpp
+    # 批次 B2：widget3D GL 冒烟
+    tests/test_widget3d_gl.cpp
+    # 批次 B3：3D 轴矩阵 + spherical（CPU/GL）
+    tests/test_axes3d_matrix.cpp
 )
 
 qt6_wrap_cpp(QCHART_INTEGRATION_MOCS ${QCHART_INTEGRATION_HEADERS})

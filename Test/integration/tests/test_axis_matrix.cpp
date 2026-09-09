@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QColor>
 #include <QOpenGLWidget>
+#include <QPainter>
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLVersionFunctionsFactory>
 #include <memory>
@@ -109,6 +110,17 @@ int inkCountAll(const QImage& img)
     int n = 0;
     for (int y = 0; y < img.height(); ++y)
         for (int x = 0; x < img.width(); ++x)
+            if (isInk(img.pixelColor(x, y))) ++n;
+    return n;
+}
+
+int inkInRect(const QImage& img, const QRect& r)
+{
+    int n = 0;
+    const int x0 = qMax(0, r.left()), y0 = qMax(0, r.top());
+    const int x1 = qMin(img.width() - 1, r.right()), y1 = qMin(img.height() - 1, r.bottom());
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x)
             if (isInk(img.pixelColor(x, y))) ++n;
     return n;
 }
@@ -224,6 +236,65 @@ void TestAxisMatrixCpu::cpuMatrix()
 
                 verifyCombo(img, kind, grid, labels, nullptr, "CPU");
                 qInfo().noquote() << QString("[CPU PASS] %1").arg(comboName(kind, grid, labels));
+            }
+        }
+    }
+
+    // ---- 边框轴维度（批次 B3）：16 组合补齐 ----
+    // 边框轴 = plotArea 外 QPainter 直绘（不进 renderer/cull）：外缘出现墨迹带，
+    // plotArea 内基线不变（与无边框版本相比仅容许边缘线/刻度微小差）。
+    for (ProjectionKind kind : {ProjectionKind::Cartesian, ProjectionKind::Polar}) {
+        for (bool grid : {false, true}) {
+            for (bool labels : {false, true}) {
+                AxisFixture f(kind);
+                f.build(grid, labels);
+                const QRectF pa(20, 20, 400, 400);
+                f.scene.plotArea = pa;
+                f.camera.setViewRect(QRectF(kViewLo, kViewLo, kViewHi - kViewLo, kViewHi - kViewLo));
+
+                QImage img(440, 440, QImage::Format_ARGB32_Premultiplied);
+                img.fill(Qt::white);
+                QPainterChartRenderer r;
+                r.render(f.scene, &img);
+
+                // 边框轴（Bottom + Left）画在 plotArea 外侧边距
+                DrawContext ctx;
+                ctx.plotArea = pa;
+                ctx.dataBounds = QRectF(kViewLo, kViewLo, kViewHi - kViewLo, kViewHi - kViewLo);
+                ctx.viewRect = ctx.dataBounds;
+                ctx.projection = f.projection.get();
+                {
+                    QPainter p(&img);
+                    f.dim0Axis.drawAtEdge(&p, ctx, true, true, true);
+                    f.dim1Axis.drawAtEdge(&p, ctx, true, true, true);
+                    p.end();
+                }
+                const int leftBand = inkInRect(img, QRect(0, 20, 20, 400));
+                const int bottomBand = inkInRect(img, QRect(20, 420, 400, 20));
+                QVERIFY2(leftBand > 0, "边框轴开：plotArea 左外带应有墨迹");
+                QVERIFY2(bottomBand > 0, "边框轴开：plotArea 下外带应有墨迹");
+
+                // 基线不变：无边框渲染同场景 interior 计数近似（容差边缘线/刻度小差）
+                AxisFixture base(kind);
+                base.build(grid, labels);
+                base.scene.plotArea = pa;
+                QImage imgBase(440, 440, QImage::Format_ARGB32_Premultiplied);
+                imgBase.fill(Qt::white);
+                QPainterChartRenderer rb;
+                rb.render(base.scene, &imgBase);
+                auto interiorInk = [](const QImage& im) {
+                    int n = 0;
+                    for (int y = 21; y < 420; ++y)
+                        for (int x = 21; x < 420; ++x)
+                            if (isInk(im.pixelColor(x, y))) ++n;
+                    return n;
+                };
+                const int diff = qAbs(interiorInk(img) - interiorInk(imgBase));
+                QVERIFY2(diff < 120,
+                         qPrintable(QString("边框轴不应改变 plotArea 内基线（diff=%1）")
+                                    .arg(diff)));
+                qInfo().noquote() << QString("[CPU PASS] %1|border=on")
+                    .arg(comboName(kind, grid, labels));
             }
         }
     }
