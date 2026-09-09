@@ -1,6 +1,6 @@
 # S0 Stage Record — 轴渲染管线（CPU+GL 双后端）
 
-> ⚠ v1 记录：本文件为轴渲染阶段早期快照，widget 容器化与 3D 轴渲染已并入本阶段（用户决策），阶段记录将在代码落地后由 v2 合并记录取代
+> ⚠ 本文件（v1 早期快照）**已被 `docs/stages/axis_stage_merged.md`（v2 轴阶段合并记录）取代**：范围已并入 widget 容器化与 3D 轴渲染（用户决策）；下文决策/修复清单/测试矩阵作为 v2 子集保留，登记总表以 v2 §8 为准。
 
 > 阶段：S0（架构重构阶梯第一步）
 > 代码基线：`/home/unidu/dsh/QChartWidget`（新根 CMakeLists S0 子集；旧版 `CMakeLists_OLD.txt` 保留）

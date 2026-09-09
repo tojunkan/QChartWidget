@@ -1,7 +1,7 @@
 # QPainterChartRenderer Documentation
 
 ## Brief Introduction:
-QPainterChartRenderer 是 **CPU/QPainter 后端渲染器**（继承 QChartRenderer，S0 主渲染路径）。步骤 2 在 CPU 完成：`transformNumericToCartesian` 逐图元按类型调 `projection->toCartesian`（Rect/Ellipse 恒等投影直算 cartRect，否则**退化转换**为 4 顶点 Polygon 再变换）；`cullAndResolveLabels` 精确裁剪（点=viewRect.contains、线=端点/边相交、盒=相交、顶点类=包围盒相交，**零面积盒微扩 1e-6 判交**——R6 修复）并解析绑定/自由标签。步骤 3/4 经 `dynamic_cast<const QChartCamera*>` 走 **2D 分支**（drawPrimitives2D/drawLabels2D）：图元逐顶点 `camera->project` → QPainter 绘制；标签走共享 `drawLabel` 排版。**3D 路径（drawPrimitives3D/drawLabels3D/isPrimitiveVisible3D 等 #if 0 块）随 3D 阶段恢复**——3D 相机 typeinfo/moc 未入 S0，非 2D 相机时仅 qWarning 后跳过。
+QPainterChartRenderer 是 **CPU/QPainter 后端渲染器**（继承 QChartRenderer；v2 修订：批次 B1 起 **3D 分支恢复**，2D/3D 双路径按相机类型分发）。步骤 2 在 CPU 完成：`transformNumericToCartesian` 逐图元按类型调 `projection->toCartesian`（Rect/Ellipse 恒等投影直算 cartRect，否则退化为 4 顶点 Polygon）；`cullAndResolveLabels` 精确裁剪并解析绑定/自由标签（R6 零面积盒微扩、R5/F1 越界守卫保留）。步骤 3/4 分发：`dynamic_cast<QChartCamera*>` → **2D 分支**（drawPrimitives2D/drawLabels2D：顶点 project → QPainter）；`dynamic_cast<QChartCamera3D*>` → **3D 分支**（drawPrimitives3D：**painter's algorithm**——逐可见图元取相机投影 depth（Point 本体 / Line 中点 / Polygon·Path·Mesh=QCube(verts).center()），按 depth 降序（远→近）排序后投影绘制，非有限/越界跳过；drawLabels3D：非有限/plotArea 外跳过 + 共享 drawLabel）；未知相机类型 qWarning。裁剪：`isPrimitiveVisible` 2D→viewRect 精确测试；3D→`isPrimitiveVisible3D`（图元包围盒 × 相机 viewCube：Point=contains、Line=端点为盒的 intersects、Rect/Ellipse=z0 薄片近似（qWarning 注明未实现精确裁剪）、顶点类=AABB intersects）。头文件含 QCube.h（3D 包围盒）。
 
 ## Constant Variables:
 None.
@@ -13,20 +13,24 @@ None.（private 无成员；复用基类 m_viewDirty/m_visibilityCache）
 
 | Return Value Type | Name | Description | Parameters | Declared Field | Available Value | Called By | Related Classes |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| — | `QPainterChartRenderer` | 构造（default） | 无 | public | — | 测试（栈对象 `QPainterChartRenderer renderer; renderer.render(...)`） | — |
+| — | `QPainterChartRenderer` | 构造（default） | 无 | public | — | QChartAbstractWidget（m_cpuRenderer）、测试栈对象 | — |
 | — | `~QPainterChartRenderer` | 析构（default override） | 无 | public | — | — | — |
-| `void` | `transformNumericToCartesian` | 覆写：proj 空返回；逐图元按 Type——Point/Line 变换端点；Rect/Ellipse：isIdentityMapping → 对角点变换成 cartRect，否则改写 type=Polygon + numVerts 4 角 + cartVerts 变换；Polygon/Path/三角族：cartVerts.resize 逐点变换 + cartIndices=numIndices | `QChartScene& scene` | protected | — | `QChartRenderer::render`（m_viewDirty 时） | `QChartAbstractProjection` |
-| `void` | `cullAndResolveLabels` | 覆写：visibility.resize(N)；逐图元 `isPrimitiveVisible(prim, camera)`；可见图元回填 `lastVisibleIndex[sourceId]`（**F1 守卫：仅 0≤sourceId<size 写入**——防直接装配图元 sourceId=-1 越界）；绑定标签：锚=图元 cartA、visible=该图元可见性；自由标签：sourceId 组最后可见图元锚定，无则不可见 | `QChartScene& scene` | protected | — | `QChartRenderer::render` | `QChartScene` |
-| `void` | `drawPrimitives` | 覆写：device/camera 空返回；建 QPainter（抗锯齿 + clipRect(plotArea)）；`dynamic_cast` 2D → drawPrimitives2D；否则 qWarning（3D 阶段恢复） | `QChartScene& scene, QPaintDevice* device, const QVector<bool>& visibility` | protected | — | `QChartRenderer::render` | `QChartCamera` |
-| `void` | `drawLabels` | 覆写：同 drawPrimitives 分派（2D → drawLabels2D；非 2D 相机 qWarning） | `QChartScene& scene, QPaintDevice* device` | protected | — | `QChartRenderer::render` | `QChartCamera` |
-| `bool` | `isPrimitiveVisible` | （private）camera 空 → true；2D → `isPrimitiveVisible2D(prim, cam2d->viewRect())`；非 2D → true（3D viewCube 裁剪随 3D 恢复） | `const QChartPrimitive& prim, const QChartAbstractCamera* camera` | private | `true`/`false` | `cullAndResolveLabels` 内部 | `QChartCamera` |
-| `bool` | `isPrimitiveVisible2D` | （private）2D 精确裁剪：Point=viewRect 含点；Line=端点含或与四边 BoundedIntersection；Rect/Ellipse=viewRect.intersects(cartRect)；Polygon/Path/三角族=顶点 AABB 与 viewRect 相交（**宽或高≤0 的退化盒 adjust ±1e-6 后判交**——R6，防水平/垂直轴脊被误裁）；空顶点 false | `const QChartPrimitive& prim, const QRectF& viewRect` | private | `true`/`false` | `isPrimitiveVisible` 内部 | — |
-| `void` | `drawPrimitives2D` | （private）按 m_visibilityCache 循环：Point → brush 画圆（半径=markerSize×0.5）；Line → 两点投影连线；Rect/Ellipse → 对角投影画矩形/椭圆（fill）；Polygon → 顶点序列投影 drawPolygon(fill)；Path → drawPolyline（NoBrush）；三角族：Mesh 有索引按 3 索引一组、Fan/Strip 连续 3 顶点一组 drawPolygon | `QPainter& painter, const QChartScene& scene, const QChartCamera* cam2d` | private | — | `drawPrimitives` 内部 | `QChartCamera` |
-| `void` | `drawLabels2D` | （private）循环 scene.labels：visible 才处理；`cam2d->project(cartesianAnchor)` 出屏外跳过；共享 `drawLabel` 排版绘制 | `QPainter& painter, const QChartScene& scene, const QChartCamera* cam2d` | private | — | `drawLabels` 内部 | `QChartCamera` |
+| `void` | `transformNumericToCartesian` | 覆写：proj 空返回；按 Type——Point/Line 变换端点；Rect/Ellipse：恒等投影直算 cartRect，否则 type 改写 Polygon + 4 角变换；Polygon/Path/三角族逐点变换 + cartIndices=numIndices | `QChartScene& scene` | protected | — | `QChartRenderer::render`（m_viewDirty） | `QChartAbstractProjection` |
+| `void` | `cullAndResolveLabels` | 覆写：visibility.resize(N)；逐图元 isPrimitiveVisible（按相机 2D/3D）；可见回填 lastVisibleIndex[sourceId]（0≤sourceId<size 守卫）；绑定标签锚=图元 cartA/可见性继承；自由标签按 sourceId 组最后可见图元 | `QChartScene& scene` | protected | — | `QChartRenderer::render` | — |
+| `void` | `drawPrimitives` | 覆写：device/camera 空返回；QPainter（抗锯齿+clipRect）；**2D → drawPrimitives2D；QChartCamera3D → drawPrimitives3D；否则 qWarning** | `QChartScene& scene, QPaintDevice* device, const QVector<bool>& visibility` | protected | — | `QChartRenderer::render` | `QChartCamera` <br> `QChartCamera3D` |
+| `void` | `drawPrimitives2D` | （private）2D 逐图元像素绘制（v1 语义：Point 圆半径 markerSize/2、Line/Rect/Ellipse/Polygon/Path/三角族投影绘制） | `QPainter& painter, const QChartScene& scene, const QChartCamera* cam2d` | private | — | drawPrimitives（2D 分支） | `QChartCamera` |
+| `void` | `drawPrimitives3D` | （private，批次 B1 恢复）painter 算法：①可见索引收集 → ②逐图元 depth=cam3d->project(...).depth（Point 本体 / Line 中点 / Rect·Ellipse 跳过 / Polygon·Path·三角族=QCube(cartVerts).center()）写 prim.depth → ③按 depth 降序排序（远→近）→ ④逐图元投影绘制（非有限屏幕跳过；逐类型绘制经 cam3d->project） | `QPainter& painter, QChartScene& scene, const QChartCamera3D* cam3d` | private | — | drawPrimitives（3D 分支） | `QChartCamera3D` <br> `QCube` |
+| `void` | `drawLabels` | 覆写：同 drawPrimitives 分派（2D/3D/未知警告） | `QChartScene& scene, QPaintDevice* device` | protected | — | `QChartRenderer::render` | — |
+| `void` | `drawLabels2D` | （private）2D 标签（v1 语义：project + plotArea 内 + 共享 drawLabel） | `QPainter&, const QChartScene&, const QChartCamera*` | private | — | drawLabels（2D 分支） | — |
+| `void` | `drawLabels3D` | （private，批次 B1 恢复）3D 标签：visible → cam3d->project；**非有限屏幕坐标/plotArea 外跳过** → 共享 drawLabel | `QPainter& painter, const QChartScene& scene, const QChartCamera3D* cam3d` | private | — | drawLabels（3D 分支） | `QChartCamera3D` |
+| `bool` | `isPrimitiveVisible` | （private）camera 空 → true；2D → isPrimitiveVisible2D(viewRect)；3D → isPrimitiveVisible3D(**cam3d->viewCube()**)；未知 → true | `const QChartPrimitive& prim, const QChartAbstractCamera* camera` | private | `true`/`false` | cullAndResolveLabels | — |
+| `bool` | `isPrimitiveVisible2D` | （private）2D 精确裁剪（v1 语义：点含/线边相交/盒相交/退化盒微扩 ±1e-6） | `const QChartPrimitive& prim, const QRectF& viewRect` | private | `true`/`false` | isPrimitiveVisible | — |
+| `bool` | `isPrimitiveVisible3D` | （private，批次 B1 恢复）3D 裁剪：Point=viewCube.contains(cartA)；Line=端点盒 intersects；Rect/Ellipse=z0 薄片盒（qWarning 注明近似）；Polygon/Path/三角族=顶点 AABB intersects；空顶点 false | `const QChartPrimitive& prim, const QCube& viewCube` | private | `true`/`false` | isPrimitiveVisible | `QCube` |
 
 Notes:
-- 头注释契约：S0 CPU 渲染器只含 2D 路径；3D 相关私有方法声明已注释（drawPrimitives3D/drawLabels3D/isPrimitiveVisible3D 的 #if 0 定义保留在 .cpp，待 3D 阶段恢复启用，QCube 引用随之恢复）。
-- 像素语义：轴脊/刻度/标签像素断言（unit 6/6、矩阵 CPU 8/8）全部经本后端 offscreen 实测通过。
+- 3D 通路数据流（实测）：QChartLayer3D::collectPrimitives 产出 Numeric 图元（scene3D）→ 本类 transform（scene3D.projection=projection3D->toCartesian）→ cull（viewCube）→ drawPrimitives3D 排序绘制；scene3D.camera 恒为 layer3D 的 m_camera3D。
+- 3D 深度：depth=视图深度（−viewZ），排序降序=远→近（painter 算法；GL 端深度批次语义后续批次，见阶段记录 v2 §7 informational①）。
+- v1 版"3D 路径 #if0 后置"表述已过时（批次 B1 恢复：头文件声明与 .cpp 定义均已启用）；其余 v1 语义（F1/R6/R9 引用等）不变。
 
 ## Overrided Qt Events:
 无（非 QWidget）。
