@@ -56,30 +56,33 @@ struct AxisFixture {
 
     void build(bool grid, bool labels)
     {
+        // 批次1：夹具 bool 语义映射 true→Tickwise / false→None（Single 由标签契约专项测试覆盖）
+        const QChartAxis::LabelMode labelMode = labels ? QChartAxis::LabelMode::Tickwise
+                                                       : QChartAxis::LabelMode::None;
         scene.primitives.clear();
         scene.labels.clear();
 
         if (projection->type() == QChartAbstractProjection::CoordinateSystem::Cartesian) {
-            dim0Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 0, scene, 72, labels);
-            dim1Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 1, scene, 72, labels);
+            dim0Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 0, scene, 72, labelMode);
+            dim1Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 1, scene, 72, labelMode);
             if (grid) {
                 const QVector<qreal> ty = dim1Axis.tickValues(kViewLo, kViewHi);
                 for (qreal v : ty) { if (qAbs(v) < 1e-9) continue;
-                    dim0Axis.drawAtPosition(kViewLo, kViewHi, v, 0.0, 0, scene, 8, false); }
+                    dim0Axis.drawAtPosition(kViewLo, kViewHi, v, 0.0, 0, scene, 8, QChartAxis::LabelMode::None); }
                 const QVector<qreal> tx = dim0Axis.tickValues(kViewLo, kViewHi);
                 for (qreal v : tx) { if (qAbs(v) < 1e-9) continue;
-                    dim1Axis.drawAtPosition(kViewLo, kViewHi, v, 0.0, 1, scene, 8, false); }
+                    dim1Axis.drawAtPosition(kViewLo, kViewHi, v, 0.0, 1, scene, 8, QChartAxis::LabelMode::None); }
             }
         } else {
-            dim0Axis.drawAtPosition(0.0, 360.0, 10.0, 0.0, 0, scene, 90, labels);
-            dim1Axis.drawAtPosition(0.0, 10.0, 0.0, 0.0, 1, scene, 8, labels);
+            dim0Axis.drawAtPosition(0.0, 360.0, 10.0, 0.0, 0, scene, 90, labelMode);
+            dim1Axis.drawAtPosition(0.0, 10.0, 0.0, 0.0, 1, scene, 8, labelMode);
             if (grid) {
                 const QVector<qreal> tr = dim1Axis.tickValues(0.0, 10.0);
                 for (qreal r : tr) { if (r < 1e-9 || qAbs(r - 10.0) < 1e-9) continue;
-                    dim0Axis.drawAtPosition(0.0, 360.0, r, 0.0, 0, scene, 90, false); }
+                    dim0Axis.drawAtPosition(0.0, 360.0, r, 0.0, 0, scene, 90, QChartAxis::LabelMode::None); }
                 const QVector<qreal> tt = dim0Axis.tickValues(0.0, 360.0);
                 for (qreal th : tt) { if (qAbs(th) < 1e-9) continue;
-                    dim1Axis.drawAtPosition(0.0, 10.0, th, 0.0, 1, scene, 8, false); }
+                    dim1Axis.drawAtPosition(0.0, 10.0, th, 0.0, 1, scene, 8, QChartAxis::LabelMode::None); }
             }
         }
     }

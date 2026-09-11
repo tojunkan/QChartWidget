@@ -91,6 +91,33 @@ protected:
                           const QColor& color,
                           qreal fontSize,
                           Qt::Alignment alignment);
+
+    /// 标签锚点像素可见性判定（批次2 收尾：由 QPainterChartRenderer / QOpenGLChartRenderer
+    /// 中的两份副本搬入基类，单一实现、两后端共用——禁止再留副本）：
+    ///   非退化 plotArea（!isEmpty）+ camera->project 结果有限 + 投影像素落在 plotArea 内。
+    /// 语义见 include/core/QChartTextLabel.h 的"标签锚点契约（三级优先级）"tier1 显式锚点。
+    bool anchorVisibleInPlotArea(const QChartScene& scene, const QVector3D& cart) const;
+
+    // ========================================================================
+    // 【未来混合后端预研 · 当前不启用】hybridResolveFreeLabelAnchor —— 自由标签 CPU 前置解析旁路
+    // ------------------------------------------------------------------------
+    // 既定契约（批次1 过审）：纯 GPU 后端无能力渲染自由标签（tier3：numericAnchor 全 NaN 且
+    // refPrimitiveId == -1）→ GL cull 一律置不可见；二维网格脊标签因此在 GL 后端不显示（已知
+    // 缺陷、既定接受差异）。
+    // 本函数把 t29 期间验证过的"CPU 侧前置 projection + 裁剪"实现收拢为**独立旁路**（名字带
+    // hybrid 前缀，便于全仓 grep 辨认）：
+    //   锚点 = 同 sourceId 组尾图元（GL 粗裁语义：最后一个图元）→ projection->toCartesian；
+    //   可见性 = anchorVisibleInPlotArea（与 CPU 后端同一判定）。
+    // ★ 默认不被任何正常渲染路径调用（QOpenGLChartRenderer::cullAndResolveLabels 对 tier3 明确
+    //   置不可见）；仅供未来"混合后端（CPU 前置 projection+裁剪）"阶段启用——启用时改为在该处
+    //   调用本函数即可，属该阶段的评审内容。
+    // 验证记录（t29，已按用户裁定旁路化）：曾以本实现跑通"GL 可见自由标签"——widget GL
+    //   translate 同构探针 inkA(parent)=450 / inkB(local)=450 / maskDiff=0。
+    // 返回 true = 已解析（label.cartesianAnchor/visible 已写入）；false = 不适用（非自由标签、
+    //   组内无图元、或缺投影）。
+    bool hybridResolveFreeLabelAnchor(const QChartScene& scene, QChartTextLabel& label) const;
+    // ========================================================================
+
     // 可选钩子
 
     virtual void onRenderBegin(QPaintDevice* device) { Q_UNUSED(device); }

@@ -41,11 +41,21 @@ int maskDiff(const QImage& a, const QImage& b)
     return n;
 }
 
-struct Combo { bool lattice; qreal yaw, pitch; };
+struct Combo { QChartLayer3D::GridMode mode; qreal yaw, pitch; };
 
-/// 组装 Cartesian3D 层场景（Box/Lattice × 姿态）；grid 用深色便于区域计数判别
+const char* modeName(QChartLayer3D::GridMode m)
+{
+    switch (m) {
+    case QChartLayer3D::GridMode::Box:      return "Box";
+    case QChartLayer3D::GridMode::FaceLine: return "FaceLine";
+    case QChartLayer3D::GridMode::Lattice:  return "Lattice";
+    }
+    return "?";
+}
+
+/// 组装 Cartesian3D 层场景（三模式 × 姿态）；grid 用深色便于区域计数判别
 void buildScene3D(QChartLayer3D& layer, QChartScene& scene,
-                  const QChartProjection3D* proj, bool lattice, qreal yaw, qreal pitch,
+                  const QChartProjection3D* proj, QChartLayer3D::GridMode mode, qreal yaw, qreal pitch,
                   const QVector3D& mn, const QVector3D& mx)
 {
     Q_UNUSED(proj)
@@ -57,7 +67,7 @@ void buildScene3D(QChartLayer3D& layer, QChartScene& scene,
     layer.setAxisZ(&az);
     layer.setProjection3D(proj);
     layer.setDataBounds(mn, mx);
-    layer.setGridMode(lattice ? QChartLayer3D::GridMode::Lattice : QChartLayer3D::GridMode::Box);
+    layer.setGridMode(mode);
     layer.setGridColor(QColor(0, 0, 0));   // 深色网格（判别计数）
     QChartCamera3D* cam = layer.camera3D();
     const QVector3D pad = (mx - mn) * 0.25f;
@@ -83,39 +93,67 @@ QImage renderCpu(QChartScene& scene)
 
 QString comboTag(const Combo& c)
 {
-    return QString("%1|yaw=%2|pitch=%3").arg(c.lattice ? "Lattice" : "Box")
+    return QString("%1|yaw=%2|pitch=%3").arg(QLatin1String(modeName(c.mode)))
         .arg(c.yaw, 0, 'g', 3).arg(c.pitch, 0, 'g', 3);
+}
+
+/// 该模式的入墨下限（面线只画一条轴线+标签，墨迹远少于盒/晶格）
+int inkFloor(QChartLayer3D::GridMode m)
+{
+    return m == QChartLayer3D::GridMode::FaceLine ? 80 : 150;
 }
 } // namespace
 
-// ===== CPU：4 组合（Box/Lattice × 姿态 A/B）=====
-void TestAxes3dMatrixCpu::cpuMatrix8()
+// ===== CPU：6 组合（Box/FaceLine/Lattice × 姿态 A/B）=====
+void TestAxes3dMatrixCpu::cpuMatrixModes()
 {
-    const Combo combos[4] = {
-        {false, 0, 0}, {false, 45, 30}, {true, 0, 0}, {true, 45, 30}
+    const Combo combos[6] = {
+        {QChartLayer3D::GridMode::Box,      0,  0},
+        {QChartLayer3D::GridMode::Box,      45, 30},
+        {QChartLayer3D::GridMode::FaceLine, 0,  0},
+        {QChartLayer3D::GridMode::FaceLine, 45, 30},
+        {QChartLayer3D::GridMode::Lattice,  0,  0},
+        {QChartLayer3D::GridMode::Lattice,  45, 30},
     };
     QCartesianProjection3D proj;
     int latticeSum = 0, boxSum = 0;
-    QImage imgs[4];
-    for (int i = 0; i < 4; ++i) {
+    int faceSum = 0;
+    QImage imgs[6];
+    int labels[6] = {0};
+    for (int i = 0; i < 6; ++i) {
         QChartLayer3D layer;   // 生命周期覆盖渲染（scene 含指向其相机的指针）
         QChartScene scene;
-        buildScene3D(layer, scene, &proj, combos[i].lattice, combos[i].yaw, combos[i].pitch,
+        buildScene3D(layer, scene, &proj, combos[i].mode, combos[i].yaw, combos[i].pitch,
                      QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
+        labels[i] = scene.labels.size();
         imgs[i] = renderCpu(scene);
         const int n = inkAll(imgs[i]);
-        qInfo().noquote() << QString("[3D-CPU] %1 ink=%2").arg(comboTag(combos[i])).arg(n);
-        QVERIFY2(n > 150, qPrintable(QString("%1 应出墨 ink=%2").arg(comboTag(combos[i])).arg(n)));
-        if (combos[i].lattice) latticeSum += n; else boxSum += n;
+        qInfo().noquote() << QString("[3D-CPU] %1 ink=%2 labels=%3")
+                                 .arg(comboTag(combos[i])).arg(n).arg(labels[i]);
+        QVERIFY2(n > inkFloor(combos[i].mode),
+                 qPrintable(QString("%1 应出墨 ink=%2").arg(comboTag(combos[i])).arg(n)));
+        if (combos[i].mode == QChartLayer3D::GridMode::Lattice) latticeSum += n;
+        else if (combos[i].mode == QChartLayer3D::GridMode::Box) boxSum += n;
+        else faceSum += n;
     }
+    // 模式标签契约：Box/FaceLine 有主轴刻度标签；Lattice 无任何文字
+    QVERIFY2(labels[0] > 0 && labels[1] > 0, "Box 模式：三条主轴应按刻度标注");
+    QVERIFY2(labels[2] > 0 && labels[3] > 0, "FaceLine 模式：安全轴应按刻度标注");
+    QCOMPARE(labels[4], 0);
+    QCOMPARE(labels[5], 0);
     QVERIFY2(latticeSum > boxSum + 200, "Lattice 模式墨迹应显著多于 Box（判别计数非自证）");
+    QVERIFY2(boxSum > faceSum + 200, "Box（盒+网格）墨迹应显著多于 FaceLine（单轴）");
+
     // 姿态判别（B3/t21）：同模式下姿态 A(0,0) 与 B(45,30) 必须产生不同投影几何——
-    // 墨迹掩膜差异像素计数（旋转后盒/网格位置变化，差异应为万级；阈值 300 保守）
+    // 墨迹掩膜差异像素计数（旋转后几何位置变化；FaceLine 只有一条轴线+标签，阈值更低）
     const int diffBox = maskDiff(imgs[0], imgs[1]);
-    const int diffLattice = maskDiff(imgs[2], imgs[3]);
-    qInfo().noquote() << QString("[3D-CPU] pose-diff: Box(A/B)=%1 Lattice(A/B)=%2")
-                         .arg(diffBox).arg(diffLattice);
+    const int diffFace = maskDiff(imgs[2], imgs[3]);
+    const int diffLattice = maskDiff(imgs[4], imgs[5]);
+    qInfo().noquote() << QString("[3D-CPU] pose-diff: Box(A/B)=%1 FaceLine(A/B)=%2 Lattice(A/B)=%3")
+                             .arg(diffBox).arg(diffFace).arg(diffLattice);
     QVERIFY2(diffBox > 300, qPrintable(QString("Box 姿态 A/B 投影几何应不同（diff=%1）").arg(diffBox)));
+    QVERIFY2(diffFace > 100,
+             qPrintable(QString("FaceLine 姿态 A/B 投影几何应不同（diff=%1）").arg(diffFace)));
     QVERIFY2(diffLattice > 300,
              qPrintable(QString("Lattice 姿态 A/B 投影几何应不同（diff=%1）").arg(diffLattice)));
 }
@@ -127,7 +165,7 @@ void TestAxes3dMatrixCpu::cpuSpherical()
     QChartScene scene;
     // 轴数值盒 = 球坐标默认数据域形状（r/θ/φ 量纲）
     const QVector3D numMin(1, 0, -30), numMax(3, 90, 30);
-    buildScene3D(layer, scene, &proj, /*lattice=*/true, 45.0, 30.0, numMin, numMax);
+    buildScene3D(layer, scene, &proj, QChartLayer3D::GridMode::Lattice, 45.0, 30.0, numMin, numMax);
     // 非恒等投影：viewCube 必须取世界（Cartesian）包围盒而非数值盒
     {
         QChartCamera3D* cam = layer.camera3D();
@@ -164,19 +202,26 @@ void TestAxes3dMatrixGl::initTestCase()
         QSKIP("offscreen 平台无真实 GL：3D 矩阵 GL 跳过（wayland/xcb 实跑或 Windows 侧）");
 }
 
-void TestAxes3dMatrixGl::glMatrix8()
+void TestAxes3dMatrixGl::glMatrixModes()
 {
-    const Combo combos[4] = {
-        {false, 0, 0}, {false, 45, 30}, {true, 0, 0}, {true, 45, 30}
+    const Combo combos[6] = {
+        {QChartLayer3D::GridMode::Box,      0,  0},
+        {QChartLayer3D::GridMode::Box,      45, 30},
+        {QChartLayer3D::GridMode::FaceLine, 0,  0},
+        {QChartLayer3D::GridMode::FaceLine, 45, 30},
+        {QChartLayer3D::GridMode::Lattice,  0,  0},
+        {QChartLayer3D::GridMode::Lattice,  45, 30},
     };
     QCartesianProjection3D proj;
-    int latticeSum = 0, boxSum = 0;
-    QImage imgs[4];
-    for (int i = 0; i < 4; ++i) {
+    int latticeSum = 0, boxSum = 0, faceSum = 0;
+    QImage imgs[6];
+    int labels[6] = {0};
+    for (int i = 0; i < 6; ++i) {
         QChartLayer3D layer;
         QChartScene scene;
-        buildScene3D(layer, scene, &proj, combos[i].lattice, combos[i].yaw, combos[i].pitch,
+        buildScene3D(layer, scene, &proj, combos[i].mode, combos[i].yaw, combos[i].pitch,
                      QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
+        labels[i] = scene.labels.size();
 
         QOpenGLWidget host;
         host.setFormat(QChartGL::surfaceFormat());
@@ -209,17 +254,30 @@ void TestAxes3dMatrixGl::glMatrix8()
         imgs[i] = img;
 
         const int n = inkAll(imgs[i]);
-        qInfo().noquote() << QString("[3D-GL] %1 ink=%2").arg(comboTag(combos[i])).arg(n);
-        QVERIFY2(n > 120, qPrintable(QString("GL %1 应出墨 ink=%2").arg(comboTag(combos[i])).arg(n)));
-        if (combos[i].lattice) latticeSum += n; else boxSum += n;
+        qInfo().noquote() << QString("[3D-GL] %1 ink=%2 labels=%3")
+                                 .arg(comboTag(combos[i])).arg(n).arg(labels[i]);
+        QVERIFY2(n > inkFloor(combos[i].mode),
+                 qPrintable(QString("GL %1 应出墨 ink=%2").arg(comboTag(combos[i])).arg(n)));
+        if (combos[i].mode == QChartLayer3D::GridMode::Lattice) latticeSum += n;
+        else if (combos[i].mode == QChartLayer3D::GridMode::Box) boxSum += n;
+        else faceSum += n;
     }
+    // 模式标签契约（GL 侧同语义）：Lattice 无任何文字；Box/FaceLine 有刻度标签
+    QVERIFY2(labels[0] > 0 && labels[1] > 0, "GL Box 模式：三条主轴应按刻度标注");
+    QVERIFY2(labels[2] > 0 && labels[3] > 0, "GL FaceLine 模式：安全轴应按刻度标注");
+    QCOMPARE(labels[4], 0);
+    QCOMPARE(labels[5], 0);
     QVERIFY2(latticeSum > boxSum + 150, "GL Lattice 墨迹应显著多于 Box（判别计数非自证）");
+    QVERIFY2(boxSum > faceSum + 150, "GL Box 墨迹应显著多于 FaceLine（单轴）");
     // 姿态判别（B3/t21）：GL 同模式下姿态 A/B 投影几何必须不同（墨迹掩膜差异）
     const int diffBox = maskDiff(imgs[0], imgs[1]);
-    const int diffLattice = maskDiff(imgs[2], imgs[3]);
-    qInfo().noquote() << QString("[3D-GL] pose-diff: Box(A/B)=%1 Lattice(A/B)=%2")
-                         .arg(diffBox).arg(diffLattice);
+    const int diffFace = maskDiff(imgs[2], imgs[3]);
+    const int diffLattice = maskDiff(imgs[4], imgs[5]);
+    qInfo().noquote() << QString("[3D-GL] pose-diff: Box(A/B)=%1 FaceLine(A/B)=%2 Lattice(A/B)=%3")
+                             .arg(diffBox).arg(diffFace).arg(diffLattice);
     QVERIFY2(diffBox > 300, qPrintable(QString("GL Box 姿态 A/B 投影几何应不同（diff=%1）").arg(diffBox)));
+    QVERIFY2(diffFace > 100,
+             qPrintable(QString("GL FaceLine 姿态 A/B 投影几何应不同（diff=%1）").arg(diffFace)));
     QVERIFY2(diffLattice > 300,
              qPrintable(QString("GL Lattice 姿态 A/B 投影几何应不同（diff=%1）").arg(diffLattice)));
 }
@@ -230,7 +288,7 @@ void TestAxes3dMatrixGl::glSpherical()
     QChartLayer3D layer;
     QChartScene scene;
     const QVector3D numMin(1, 0, -30), numMax(3, 90, 30);
-    buildScene3D(layer, scene, &proj, /*lattice=*/true, 45.0, 30.0, numMin, numMax);
+    buildScene3D(layer, scene, &proj, QChartLayer3D::GridMode::Lattice, 45.0, 30.0, numMin, numMax);
     {
         QChartCamera3D* cam = layer.camera3D();
         QCube wc = proj.computeViewCube(numMin, numMax);

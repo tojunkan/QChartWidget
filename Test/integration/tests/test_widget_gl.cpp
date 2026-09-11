@@ -5,15 +5,18 @@
 
 #include <QtTest>
 #include <QtMath>
+#include <cmath>
 #include <QRegularExpression>
 #include <QGuiApplication>
 #include <QOpenGLWidget>
+#include <QOpenGLContext>
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLVersionFunctionsFactory>
 
 #include "QChartWidget.h"
 #include "QChartLayer.h"
 #include "QValueAxis.h"
+#include "QOpenGLChartRenderer.h"
 
 namespace {
 bool isInk(const QColor& c)
@@ -217,24 +220,120 @@ void TestWidgetGl::glWidgetRenders()
     QVERIFY2(inkIn(fbo, QRect(0, 0, fbo.width(), fbo.height())) > 400,
              "host FBO 应产生大量墨迹（网格+刻度）");
 
-    // F1(t8) 标签 child-local 探针：垂直网格脊 x=-8 上 y=0 刻度标签（文本向右排）。
-    // 实测字形墨迹 rows≈135..143（水平网格线行 row≈139 除外）：
-    //   正确带 rows≈140..144 cols≈36..66（translate(-plotArea.topLeft) 生效时字形在此）
-    //   偏移带 rows≈160..164 cols≈104..134（未平移时字形整体 +plotArea.topLeft 落此）
-    // t13(HiDPI)：采样矩形按 s=fbo/hostGeo 缩放（DPR=1 → s=1 → 与历史逐位一致；
-    // DPR=1.5 → 带落字形实际设备位置）。边按 qRound(edge*s) 取整保宽度。
-    const QRect bandOk(qRound(36.0 * sX), qRound(140.0 * sY),
-                       qRound(66.0 * sX) - qRound(36.0 * sX),
-                       qRound(145.0 * sY) - qRound(140.0 * sY));
-    const QRect bandShift(qRound(104.0 * sX), qRound(160.0 * sY),
-                          qRound(134.0 * sX) - qRound(104.0 * sX),
-                          qRound(165.0 * sY) - qRound(160.0 * sY));
-    const int nLocalBand = inkIn(fbo, bandOk);
-    const int nShiftBand = inkIn(fbo, bandShift);
-    qInfo().noquote() << QString("widget GL 标签带采样: 正确带(local)=%1 偏移带(父系)=%2 采样比例=%3x%4")
-                         .arg(nLocalBand).arg(nShiftBand).arg(sX, 0, 'g', 6).arg(sY, 0, 'g', 6);
-    QVERIFY2(nLocalBand > 0,
-             "标签局部坐标带应有字形墨迹（translate(-plotArea.topLeft) 生效）");
-    QVERIFY2(nShiftBand == 0,
-             "父系偏移带应为空白（标签未按局部坐标绘制时字形会落此）");
+    // ===== t31 契约锁定：GL 纯 GPU 后端不渲染自由标签（二维网格脊标签在 GL 消失）=====
+    // 二维网格脊标签（批次2 A）以**自由标签**提交（全 NaN 锚点 + refPrimitiveId=-1）；
+    // 既定契约（批次1 过审）：GL cull 对 tier3 一律置不可见 → 标签层图为空（既定已接受差异）。
+    {
+        const QRectF pa = w.plotArea();
+        const QSize sz(qRound(pa.width()), qRound(pa.height()));
+        QChartScene probeFree = layer.scene();
+        QVERIFY2(!probeFree.labels.isEmpty(), "二维网格脊标签应已收集（自由标签）");
+        for (const QChartTextLabel& l : probeFree.labels)
+            QVERIFY2(l.refPrimitiveId == -1 && std::isnan(l.numericAnchor.x()),
+                     "前置条件：本场景标签应全部为自由标签");
+
+        QImage imgFree(sz, QImage::Format_ARGB32_Premultiplied);
+        imgFree.fill(Qt::transparent);
+        if (QOpenGLContext* ctx = QOpenGLContext::currentContext()) ctx->doneCurrent();
+        {
+            QOpenGLChartRenderer r;
+            QTest::ignoreMessage(QtWarningMsg, "No current OpenGL context!");
+            r.render(probeFree, &imgFree);   // 步骤 2 cull + 步骤 4 标签覆盖层
+        }
+        int freeVisible = 0;
+        for (const QChartTextLabel& l : probeFree.labels)
+            if (l.visible) ++freeVisible;
+        // 注意：透明图不能用 isInk(RGB) 计数（alpha=0 的像素 RGB 未定义会被误判为墨）
+        int inkFree = 0;
+        for (int y = 0; y < sz.height(); ++y)
+            for (int x = 0; x < sz.width(); ++x)
+                if (imgFree.pixelColor(x, y).alpha() > 0) ++inkFree;
+        qInfo().noquote() << QString("widget GL 自由标签契约探针: labels=%1 visible=%2 ink=%3")
+                                 .arg(probeFree.labels.size()).arg(freeVisible).arg(inkFree);
+        QVERIFY2(freeVisible == 0, "GL 不渲染自由标签：cull 后自由标签应全部不可见（t31 契约）");
+        QVERIFY2(inkFree == 0, "GL 不渲染自由标签：标签层图应为空（二维网格脊标签在 GL 消失）");
+    }
+
+    // ===== F1(t8) 标签 translate 回归守卫（t31/收尾：自建含显式坐标标签的合成场景）=====
+    // GL 不再渲染自由标签 → 原"网格脊自由标签层"无内容；按 t30 结论改为**合成场景**：
+    //   场景内自建 tier1 显式坐标标签（numericAnchor 非 NaN）+ 一个 tier2 指向图元标签
+    //   （两类均在 GL 存活，与批次1 过审契约一致），清空收集到的自由标签，
+    //   渲染到与绘图区对齐的设备（plotArea 尺寸透明图，等价 widget 的 plotArea 对齐 GL 宿主；
+    //   无 GL context → 图元绘制跳过、只留标签覆盖层）；
+    //   A = 父系 plotArea（topLeft != 0，translate(-plotArea.topLeft()) 生效）
+    //   B = 同尺寸 (0,0) plotArea（translate 为零）
+    //   两次渲染应产出**同构**标签层图（同一 local 坐标系）；translate 缺失时 A 整体
+    //   偏移 +plotArea.topLeft()，掩膜差异巨大 → 判别力保留。
+    {
+        const QRectF pa = w.plotArea();
+        const QSize sz(qRound(pa.width()), qRound(pa.height()));
+        QChartScene probeA = layer.scene();
+        QChartScene probeB = probeA;
+        probeB.plotArea = QRectF(0, 0, pa.width(), pa.height());
+
+        QVERIFY2(!probeA.primitives.isEmpty(), "场景应含图元（tier2 绑定目标）");
+        // 清空收集到的自由标签（GL 不渲染，且避免污染掩膜对照）；自建两类 GL 存活标签：
+        QChartTextLabel t1a;   // tier1 显式坐标（数值域原点 → 绘图区中心）
+        t1a.text = QStringLiteral("t1");
+        t1a.color = Qt::black;
+        t1a.numericAnchor = QVector3D(0, 0, 0);
+        QChartTextLabel t1b;   // tier1 显式坐标（偏移位置，覆盖不同排版方向）
+        t1b.text = QStringLiteral("t1b");
+        t1b.color = Qt::black;
+        t1b.numericAnchor = QVector3D(-5, 4, 0);
+        QChartTextLabel t2;    // tier2 指向图元（第 0 号图元）
+        t2.text = QStringLiteral("t2");
+        t2.color = Qt::black;
+        t2.refPrimitiveId = 0;
+        for (QChartScene* sc : {&probeA, &probeB}) {
+            sc->labels.clear();
+            sc->labels.append(t1a);
+            sc->labels.append(t1b);
+            sc->labels.append(t2);
+        }
+
+        QImage imgA(sz, QImage::Format_ARGB32_Premultiplied);
+        QImage imgB(sz, QImage::Format_ARGB32_Premultiplied);
+        imgA.fill(Qt::transparent);
+        imgB.fill(Qt::transparent);
+
+        if (QOpenGLContext* ctx = QOpenGLContext::currentContext()) ctx->doneCurrent();
+        {
+            QOpenGLChartRenderer rA;
+            QTest::ignoreMessage(QtWarningMsg, "No current OpenGL context!");
+            rA.render(probeA, &imgA);
+        }
+        if (QOpenGLContext* ctx = QOpenGLContext::currentContext()) ctx->doneCurrent();
+        {
+            QOpenGLChartRenderer rB;
+            QTest::ignoreMessage(QtWarningMsg, "No current OpenGL context!");
+            rB.render(probeB, &imgB);
+        }
+
+        int explicitVisible = 0, boundVisible = 0;
+        for (const QChartTextLabel& l : probeA.labels) {
+            if (!l.visible) continue;
+            if (l.refPrimitiveId == -1) ++explicitVisible;   // tier1（自建场景内无自由标签）
+            else ++boundVisible;                             // tier2
+        }
+        QVERIFY2(explicitVisible == 2, "GL tier1（显式坐标）标签应可见（t31：两类标签不受影响）");
+        QVERIFY2(boundVisible == 1, "GL tier2（指向图元）标签应可见（t31：两类标签不受影响）");
+
+        int inkA = 0, inkB = 0, diff = 0;
+        for (int y = 0; y < sz.height(); ++y)
+            for (int x = 0; x < sz.width(); ++x) {
+                const bool a = imgA.pixelColor(x, y).alpha() > 0;
+                const bool b = imgB.pixelColor(x, y).alpha() > 0;
+                if (a) ++inkA;
+                if (b) ++inkB;
+                if (a != b) ++diff;
+            }
+        qInfo().noquote() << QString("widget GL 标签 translate 探针: tier1Visible=%1 tier2Visible=%2 "
+                                     "inkA(parent)=%3 inkB(local)=%4 maskDiff=%5")
+                                 .arg(explicitVisible).arg(boundVisible).arg(inkA).arg(inkB).arg(diff);
+        QVERIFY2(inkA > 0, "父系 plotArea 下合成标签层应有字形墨迹（标签确实绘制）");
+        QVERIFY2(inkB > 0, "local plotArea 对照应有字形墨迹");
+        QVERIFY2(diff <= qMax(50, inkA / 50),
+                 "父系(translate 生效)与 local 对照的标签掩膜应基本一致（translate 缺失时整体偏移）");
+    }
 }

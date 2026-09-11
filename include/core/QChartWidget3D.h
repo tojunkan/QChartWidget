@@ -48,6 +48,10 @@ public:
     void setProjection3D(const QChartProjection3D* proj);
     const QChartProjection3D* projection3D() const;
 
+    // ===== 网格模式（批次2 B：Box / FaceLine（默认）/ Lattice，转发 layer3D）=====
+    void setGridMode3D(QChartLayer3D::GridMode m);
+    QChartLayer3D::GridMode gridMode3D() const;
+
     // ===== 相机（归 layer3D；本类无相机成员）=====
     QChartCamera3D* camera3D() { return m_layer3D ? m_layer3D->camera3D() : nullptr; }
     const QChartCamera3D* camera3D() const { return m_layer3D ? m_layer3D->camera3D() : nullptr; }

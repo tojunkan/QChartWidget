@@ -30,6 +30,72 @@ void QChartRenderer::render(QChartScene& scene, QPaintDevice* device)
     onRenderEnd(device);
 }
 
+// 标签锚点像素可见性判定（批次2 收尾：两后端共用单一实现，见 QChartRenderer.h）
+bool QChartRenderer::anchorVisibleInPlotArea(const QChartScene& scene, const QVector3D& cart) const
+{
+    const QChartAbstractCamera* camera = scene.camera;
+    if (!camera) return false;
+
+    const QRectF& plotArea = scene.plotArea;
+    if (plotArea.isEmpty()) return false;   // 零面积画布：显式锚点一律不可见
+
+    const QChartProjectedPoint pp = camera->project(cart, plotArea);
+    return std::isfinite(pp.screen.x()) && std::isfinite(pp.screen.y())
+           && plotArea.contains(pp.screen);
+}
+
+// ============================================================================
+// 【未来混合后端预研 · 当前不启用】自由标签 CPU 前置解析旁路（hybrid 预研）
+// ----------------------------------------------------------------------------
+// 见 include/core/QChartRenderer.h 中 hybridResolveFreeLabelAnchor 的长注释：
+// 既定契约 = GL 不渲染自由标签；本组代码是 t29 验证过的"CPU 前置 projection+裁剪"实现
+// 的收拢存放处，默认不被任何正常渲染路径调用（属旁路 / 死代码，grep "hybrid" 可定位）。
+// ============================================================================
+namespace {
+/// hybrid 预研旁路内部辅助：组尾图元的数值锚点（Point=numA；顶点型=末顶点；Rect/Ellipse=中心）
+QVector3D hybridGroupTailNumeric(const QChartPrimitive& p)
+{
+    switch (p.type) {
+    case QChartPrimitive::Type::Point:
+        return p.numA;
+    case QChartPrimitive::Type::Line:
+        return p.numB;
+    case QChartPrimitive::Type::Polygon:
+    case QChartPrimitive::Type::Path:
+    case QChartPrimitive::Type::TriangleMesh:
+    case QChartPrimitive::Type::TriangleFan:
+    case QChartPrimitive::Type::TriangleStrip:
+        return p.numVerts.isEmpty() ? p.numA : p.numVerts.last();
+    case QChartPrimitive::Type::Rect:
+    case QChartPrimitive::Type::Ellipse:
+        return QVector3D(static_cast<float>(p.numRect.center().x()),
+                         static_cast<float>(p.numRect.center().y()), 0.0f);
+    }
+    return p.numA;
+}
+} // namespace
+
+bool QChartRenderer::hybridResolveFreeLabelAnchor(const QChartScene& scene,
+                                                 QChartTextLabel& label) const
+{
+    // ★ 旁路函数：默认不被正常渲染路径调用（见头文件注释）。启用属"混合后端"阶段内容。
+    if (label.hasExplicitAnchor() || label.refPrimitiveId != -1) return false;
+    if (label.sourceId < 0) return false;
+
+    const QChartAbstractProjection* proj = scene.projection;
+    if (!proj) return false;
+
+    // 组尾图元：同 sourceId 的最后一个（GL 粗裁=全可见 → "最后一个"即"最后可见"）
+    int tail = -1;
+    for (int i = 0; i < scene.primitives.size(); ++i)
+        if (scene.primitives[i].sourceId == label.sourceId) tail = i;
+    if (tail < 0) return false;
+
+    label.cartesianAnchor = proj->toCartesian(hybridGroupTailNumeric(scene.primitives[tail]));
+    label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
+    return true;
+}
+
 void QChartRenderer::drawLabel(QPainter& painter,
                                const QRectF& plotArea,
                                const QPointF& pixelAnchor,

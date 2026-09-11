@@ -57,7 +57,13 @@ public:
 
     // ===== 绘制（由 QChartWidget 调用）=====
 
-    /// 画网格：用 axisX/axisY 的 tickValues 作为 offset，画数据主脊（只画轴线，无标签刻度）
+    /// 画网格：用 axisX/axisY 的 tickValues 作为 offset，画数据主脊（轴脊 + 刻度点）；
+    /// 批次2（A）起每条网格脊只出 1 个标签，且以自由标签提交（全 NaN 锚点 / refId=-1 /
+    /// sourceId=本脊组号 → 由 renderer 的"同组组尾最后可见图元"机制定位），
+    /// 文字取固定坐标所属值轴对该刻度的文字（水平脊 y=t → y 轴；垂直脊 x=t → x 轴）。
+    /// ★ 后端差异（既定契约）：GL（纯 GPU 后端）不渲染自由标签 → 本网格脊标签在 GL 后端
+    ///   不显示（已知缺陷、接受差异）；tier1/tier2 两类标签不受影响。混合后端预研旁路见
+    ///   QChartRenderer::hybridResolveFreeLabelAnchor（当前不启用）。
     void drawGrid(QChartScene& scene);
     void collectPrimitives();
     void invalidateData() { m_dataDirty = true; }
@@ -99,6 +105,12 @@ public:
 protected:
 
     // hookSeriesDirty/unhookSeriesDirty 待 Series 阶段随 QChartSeries.cpp 恢复
+
+    /// 网格脊标签策略（批次2 A）：图层决定哪些脊使用"单标签"模式。
+    /// 当前策略 = 全部网格脊使用 LabelMode::Single（每脊 1 个自由标签；GL 后端不渲染自由标签，
+    /// 该差异为既定契约）；
+    /// 子类可覆写以让部分/全部脊不出标签（None）或按刻度出标签（Tickwise）。
+    virtual QChartAxis::LabelMode gridSpineLabelMode() const { return QChartAxis::LabelMode::Single; }
 
     QChartAxis *m_axisX = nullptr;
     QChartAxis *m_axisY = nullptr;

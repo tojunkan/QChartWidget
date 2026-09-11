@@ -4,10 +4,12 @@
 #include <QtTest>
 #include <QImage>
 #include <QColor>
+#include <QRegularExpression>
 
 #include "QChartWidget3D.h"
 #include "QChartCamera3D.h"
 #include "QCartesianProjection3D.h"
+#include "QSphericalProjection3D.h"
 
 namespace {
 bool isInk(const QColor& c)
@@ -44,6 +46,10 @@ void TestWidget3DSmoke::cpuWidget3DRenders()
     QCartesianProjection3D proj;          // 生命周期覆盖渲染（非持有约定）
     w.setProjection3D(&proj);
     w.setDomainBox(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));   // → layer3D.setDataBounds + fitWorld
+    // 批次2 B：FaceLine 为默认模式——容器冒烟取证（盒/网格/刻度墨迹）显式使用几何最丰富的 Box
+    w.setGridMode3D(QChartLayer3D::GridMode::Box);
+    QCOMPARE(static_cast<int>(w.gridMode3D()),
+             static_cast<int>(QChartLayer3D::GridMode::Box));
     QVERIFY2(w.hasDomainBox(), "setDomainBox 应记录域盒");
     QVERIFY2(w.layer3D() != nullptr, "构造应托管默认 layer3D");
     QVERIFY2(w.camera3D() == w.layer3D()->camera3D(), "相机归 layer3D（widget 无独立相机成员）");
@@ -67,4 +73,56 @@ void TestWidget3DSmoke::cpuWidget3DRenders()
     const int tiles = inkTiles(img);
     QVERIFY2(total > 150, qPrintable(QString("3D 盒/网格/刻度应出墨 total=%1").arg(total)));
     QVERIFY2(tiles >= 4, qPrintable(QString("3D 内容应铺开多区 tiles=%1/9").arg(tiles)));
+}
+
+// ===== 批次2 B：QChartWidget3D 三网格模式入口（转发图层）+ 默认值 + 标签契约 =====
+void TestWidget3DSmoke::cpuWidget3DGridModes()
+{
+    QChartWidget3D w;
+    QCartesianProjection3D proj;
+    w.setProjection3D(&proj);
+    w.setDomainBox(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
+
+    // 默认模式 = FaceLine（批次2 B）
+    QCOMPARE(static_cast<int>(w.gridMode3D()),
+             static_cast<int>(QChartLayer3D::GridMode::FaceLine));
+
+    QChartLayer3D* layer = w.layer3D();
+    QVERIFY(layer != nullptr);
+
+    const auto collect = [layer](QChartLayer3D::GridMode m) {
+        layer->setGridMode(m);
+        layer->collectPrimitives();
+        return qMakePair(layer->scene3D().primitives.size(), layer->scene3D().labels.size());
+    };
+
+    // FaceLine：只画一条安全轴线 + 刻度标签；无盒边/网格
+    w.setGridMode3D(QChartLayer3D::GridMode::FaceLine);
+    QCOMPARE(static_cast<int>(w.gridMode3D()),
+             static_cast<int>(QChartLayer3D::GridMode::FaceLine));
+    const auto face = collect(QChartLayer3D::GridMode::FaceLine);
+    QVERIFY2(face.first > 0, "面线模式应有轴线图元");
+    QVERIFY2(face.second > 0, "面线模式：轴按刻度逐个标注");
+
+    // Box：盒 12 边 + 底面网格 + 三主轴标签（图元显著多于面线）
+    w.setGridMode3D(QChartLayer3D::GridMode::Box);
+    const auto box = collect(QChartLayer3D::GridMode::Box);
+    QVERIFY2(box.first > face.first, "盒模式图元应多于面线模式");
+    QVERIFY2(box.second > 0, "盒模式：三条主轴应按刻度生成标签");
+
+    // Lattice：只画线，无任何标签
+    w.setGridMode3D(QChartLayer3D::GridMode::Lattice);
+    const auto lat = collect(QChartLayer3D::GridMode::Lattice);
+    QCOMPARE(lat.second, 0);
+    QVERIFY2(lat.first > 0, "晶格模式应有线图元");
+
+    // Box + 非直角投影：图层 qWarning 并回退 FaceLine（模式下不变）
+    QSphericalProjection3D sph;
+    w.setProjection3D(&sph);
+    w.setGridMode3D(QChartLayer3D::GridMode::Box);
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression("GridMode::Box"));
+    layer->collectPrimitives();
+    QCOMPARE(layer->scene3D().primitives.size(), face.first);
+    QCOMPARE(static_cast<int>(w.gridMode3D()),
+             static_cast<int>(QChartLayer3D::GridMode::Box));
 }

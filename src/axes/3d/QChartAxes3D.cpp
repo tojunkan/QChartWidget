@@ -24,3 +24,18 @@ QVector<QPair<int, int>> QChartAxes3D::boxEdges() {
 QVector<int> QChartAxes3D::spineEdgeIndices() {
     return {0, 4, 8};   // 从角0出发的三条边
 }
+
+// ===== FaceLine 模式几何（批次2 B）=====
+qreal QChartAxes3D::safeFixedValue(qreal lo, qreal hi) {
+    if (lo > hi) { const qreal t = lo; lo = hi; hi = t; }
+    if (lo <= 0.0 && 0.0 <= hi) return 0.0;   // 0 在范围内 → 取 0（球坐标 θ/φ 的安全位置）
+    return 0.5 * (lo + hi);                   // 否则取中点（仍远离极点/奇点）
+}
+
+QPair<QVector3D, QVector3D> QChartAxes3D::faceLineSegment(const QVector3D& dataMin,
+                                                          const QVector3D& dataMax) {
+    const qreal fixed1 = safeFixedValue(dataMin.y(), dataMax.y());
+    const qreal fixed2 = safeFixedValue(dataMin.z(), dataMax.z());
+    return { QVector3D(dataMin.x(), fixed1, fixed2),
+             QVector3D(dataMax.x(), fixed1, fixed2) };
+}

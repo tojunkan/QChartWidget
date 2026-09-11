@@ -38,6 +38,16 @@ public:
     static QVector<QPair<int, int>> boxEdges();
     static QVector<int> spineEdgeIndices();
 
+    /// FaceLine 模式（批次2 B）：退化安全的固定值——0 落在 [lo,hi] 内取 0，否则取区间中点。
+    /// 对球坐标（dim1=θ、dim2=φ）即优先取 θ=φ=0（赤道/本初子午线，远离极点与 r=0 奇点）。
+    static qreal safeFixedValue(qreal lo, qreal hi);
+
+    /// FaceLine 模式（批次2 B）：退化安全的轴线端点——沿 dim0 的线段，其余两维固定在
+    /// safeFixedValue（球坐标即 θ=φ=0 那条半径线；直角坐标即过 0/中点的 x 轴线）。
+    /// FACE-DEFERRED：面（曲面）绘制留待曲面系列阶段实现，本函数只给线。
+    static QPair<QVector3D, QVector3D> faceLineSegment(const QVector3D& dataMin,
+                                                       const QVector3D& dataMax);
+
 private:
     AxisConfig m_cfg[3];
     bool m_visible = true;

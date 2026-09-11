@@ -6,6 +6,7 @@
 #include "QCube.h"
 #include <QPainter>
 #include <QLoggingCategory>
+#include <cmath>
 
 Q_LOGGING_CATEGORY(logPainter, "chart.render.painter")
 
@@ -71,6 +72,7 @@ void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
 }
 
 // 步骤 2b：裁剪 + 标签解析
+// （tier1 显式锚点可见性判定 = 基类 QChartRenderer::anchorVisibleInPlotArea，两后端共用单一实现）
 
 void QPainterChartRenderer::cullAndResolveLabels(QChartScene& scene)
 {
@@ -94,28 +96,43 @@ void QPainterChartRenderer::cullAndResolveLabels(QChartScene& scene)
         }
     }
 
-    // 绑定标签
+    // 标签解析（批次1：锚点三级优先级；见 QChartTextLabel.h 契约）
     for (QChartTextLabel& label : scene.labels) {
-        if (label.refPrimitiveId >= 0 && label.refPrimitiveId < N) {
-            const QChartPrimitive& prim = scene.primitives[label.refPrimitiveId];
-            label.cartesianAnchor = prim.cartA;
-            label.visible = visibility[label.refPrimitiveId];
+        // tier1：显式锚点（numericAnchor 任一分量非 NaN）→ 数值锚点直接生效，不被 refId 覆盖
+        if (label.hasExplicitAnchor()) {
+            if (!scene.projection) { label.visible = false; continue; }
+            label.cartesianAnchor = scene.projection->toCartesian(label.numericAnchor);
+            label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
+            continue;
         }
-    }
 
-    // 自由标签
-    for (QChartTextLabel& label : scene.labels) {
-        if (label.refPrimitiveId != -1) continue;
-        int sid = label.sourceId;
-        if (sid >= 0 && sid < lastVisibleIndex.size()) {
-            int idx = lastVisibleIndex[sid];
-            if (idx != -1) {
-                label.cartesianAnchor = scene.primitives[idx].cartA;
-                label.visible = true;
-                continue;
+        // tier2：锚点全 NaN 且绑定图元 → 继承该图元 cartesianAnchor 与可见性
+        if (label.refPrimitiveId >= 0) {
+            if (label.refPrimitiveId < N) {
+                label.cartesianAnchor = scene.primitives[label.refPrimitiveId].cartA;
+                label.visible = visibility[label.refPrimitiveId];
+            } else {
+                label.visible = false;   // 越界绑定：无对应图元 → 不可见
             }
+            continue;
         }
-        label.visible = false;
+
+        // tier3：自由标签（refPrimitiveId == -1）→ 同 sourceId 组尾最后可见图元（机制不变）
+        if (label.refPrimitiveId == -1) {
+            const int sid = label.sourceId;
+            if (sid >= 0 && sid < lastVisibleIndex.size()) {
+                const int idx = lastVisibleIndex[sid];
+                if (idx != -1) {
+                    label.cartesianAnchor = scene.primitives[idx].cartA;
+                    label.visible = true;
+                    continue;
+                }
+            }
+            label.visible = false;   // 同组无可见图元
+            continue;
+        }
+
+        label.visible = false;       // 非法绑定值（refPrimitiveId < -1）
     }
 }
 

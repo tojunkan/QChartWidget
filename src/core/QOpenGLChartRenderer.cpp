@@ -40,6 +40,8 @@ void QOpenGLChartRenderer::transformNumericToCartesian(QChartScene& /*scene*/)
     // ★ GPU 后端：变换在 Shader 中完成，CPU 端什么都不做
 }
 
+// （tier1 显式锚点可见性判定 = 基类 QChartRenderer::anchorVisibleInPlotArea，两后端共用单一实现）
+
 void QOpenGLChartRenderer::cullAndResolveLabels(QChartScene& scene)
 {
     const int N = scene.primitives.size();
@@ -49,16 +51,33 @@ void QOpenGLChartRenderer::cullAndResolveLabels(QChartScene& scene)
     const QChartAbstractProjection* proj = scene.projection;
     if (!proj) return;
 
-    // ---- 绑定标签：用 CPU 计算 Cartesian 坐标 ----
+    // ---- 标签解析（批次1：锚点三级优先级；见 QChartTextLabel.h 契约）----
     for (QChartTextLabel& label : scene.labels) {
-        if (label.refPrimitiveId >= 0 && label.refPrimitiveId < N) {
-            const QVector3D& num = scene.primitives[label.refPrimitiveId].numA;
-            label.cartesianAnchor = proj->toCartesian(num);
-            label.visible = true;
-        } else {
-            // GPU 后端不支持自由标签
-            label.visible = false;
+        // tier1：显式锚点 → CPU 侧 toCartesian + 像素可见性判定（绘制仍走 GL/覆盖层）
+        if (label.hasExplicitAnchor()) {
+            label.cartesianAnchor = proj->toCartesian(label.numericAnchor);
+            label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
+            continue;
         }
+
+        // tier2：锚点全 NaN 且绑定图元 → 用该图元 numA 算 Cartesian 锚点；
+        // 图元可见性归 GPU 裁剪（本后端粗裁 = 全可见）
+        if (label.refPrimitiveId >= 0) {
+            if (label.refPrimitiveId < N) {
+                const QVector3D& num = scene.primitives[label.refPrimitiveId].numA;
+                label.cartesianAnchor = proj->toCartesian(num);
+                label.visible = true;
+            } else {
+                label.visible = false;   // 越界绑定：无对应图元 → 不可见
+            }
+            continue;
+        }
+
+        // tier3：自由标签 —— 既定契约（批次1 过审）：纯 GPU 后端无能力渲染自由标签 → 不可见。
+        // 二维网格脊标签（批次2 A 以自由标签提交）因此在 GL 后端不显示：已知缺陷、既定接受差异。
+        // 未来"混合后端"（CPU 前置 projection+裁剪）的预研旁路见
+        // QChartRenderer::hybridResolveFreeLabelAnchor（当前不启用，本路径不得调用）。
+        label.visible = false;
     }
 }
 

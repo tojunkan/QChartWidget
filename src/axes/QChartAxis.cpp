@@ -239,7 +239,7 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
                                 int dimIndex,
                                 QChartScene& scene,
                                 int segments,
-                                bool drawLabels) const
+                                LabelMode labelMode) const
 {
     if (!m_visible) return;
     if (dimMin > dimMax) std::swap(dimMin, dimMax);
@@ -250,6 +250,13 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
     QVector<qreal> ticks = tickValues(dimMin, dimMax);
     QStringList labels = tickLabels(ticks);
     const QColor axisColor = color();
+
+    // 1b. 标签模式（批次1）：None=不出标签；Single=仅中间刻度出 1 个代表标签；
+    //     Tickwise=每刻度一个（现状默认）。
+    const bool labelsEnabled = (labelMode != LabelMode::None);
+    const int singleIdx = (labelMode == LabelMode::Single && !ticks.isEmpty())
+                              ? ticks.size() / 2
+                              : -1;
 
     // 2. 计算三个方向向量（轴方向 + 两个垂直方向）
     QVector3D axisDir, dir1, dir2;
@@ -308,9 +315,10 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         }
 
         // 4c. 标签（锚点指向刻度位置，方向由 Renderer 决定）
-        // 绑定到本刻度中心点图元：cullAndResolveLabels 经 refPrimitiveId
-        // 得到 cartesianAnchor 与可见性（sourceId=-1 的自由标签路径会隐藏标签，故用绑定路线）。
-        if (drawLabels && i < labels.size() && !labels[i].isEmpty()) {
+        // 批次1：numericAnchor 为显式锚点（tier1）→ 数值锚点生效，不再被 refId 覆盖；
+        // refPrimitiveId 仍绑定本刻度中心点图元，作为锚点缺失时的回退（tier2）。
+        if (labelsEnabled && (singleIdx < 0 || i == singleIdx)
+            && i < labels.size() && !labels[i].isEmpty()) {
             QChartTextLabel label;
             label.text = labels[i];
             label.color = axisColor;

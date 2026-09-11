@@ -87,6 +87,19 @@ const QChartProjection3D* QChartWidget3D::projection3D() const
     return m_layer3D ? m_layer3D->projection3D() : nullptr;
 }
 
+// ===== 网格模式（批次2 B：转发 layer3D）=====
+
+void QChartWidget3D::setGridMode3D(QChartLayer3D::GridMode m)
+{
+    if (m_layer3D)
+        m_layer3D->setGridMode(m);   // Box 仅 Cartesian3D：非直角投影时图层 qWarning 并回退 FaceLine
+}
+
+QChartLayer3D::GridMode QChartWidget3D::gridMode3D() const
+{
+    return m_layer3D ? m_layer3D->gridMode() : QChartLayer3D::GridMode::FaceLine;
+}
+
 // ===== fit / 坐标 =====
 
 void QChartWidget3D::fitWorld()
