@@ -5,6 +5,11 @@
 #include <limits>
 #include <cmath>
 
+// ===== QCube：三维轴对齐盒（值类型）=====
+// 4c 记录：QCube 工具 = 既有 API（两盒合并 united / 相等比较 == != / 包含判定 contains(点|盒) /
+// 相交 intersected / center·size·min·max / isValid·isNull·normalized）。
+// 4c 做的是「QCube 工具测试覆盖补齐（**无新增 API**）」——本批未新增任何工具，
+// 后续批次不要按"新增了工具"理解，也不要重复添加同名工具。
 struct QCube
 {
 public:

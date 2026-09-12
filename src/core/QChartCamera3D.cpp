@@ -66,6 +66,7 @@ void QChartCamera3D::setYaw(qreal deg) {
 }
 
 void QChartCamera3D::setPitch(qreal deg) {
+    // 4d：直接超范围调用也钳制到 ±89°（与 orbit 的增量钳制同一语义，避免万向节退化）
     const qreal clamped = qBound<qreal>(-89.0, deg, 89.0);
     if (qFuzzyCompare(m_pitch, clamped))
         return;
@@ -124,10 +125,23 @@ void QChartCamera3D::setFarPlane(qreal val) {
     emit viewChanged();
 }
 
+// 4d：内切 near/far 的唯一实现（near = max(0.01, distance − r)、far = distance + r）。
+// 只写值、不发射信号、不动 override 标志——resetNearFar()（复位路径）与 fitCameraConfig()（收尾路径）
+// 共用本函数，消除此前的双份实现/语义重叠。
+bool QChartCamera3D::applyAutoNearFar() {
+    const qreal r = radius();
+    const qreal newNear = qMax<qreal>(0.01, m_distance - r);
+    const qreal newFar = m_distance + r;
+    if (qFuzzyCompare(m_near, newNear) && qFuzzyCompare(m_far, newFar))
+        return false;
+    m_near = newNear;
+    m_far = newFar;
+    return true;
+}
+
+// 用户/构造显式复位路径：内切值 + 清除 override + 无条件通知（既有语义保持）
 void QChartCamera3D::resetNearFar() {
-    qreal r = radius();
-    m_near = qMax<qreal>(0.01, m_distance - r);
-    m_far = m_distance + r;
+    applyAutoNearFar();
     m_nearFarOverride = false;
     emit viewChanged();
 }
@@ -253,13 +267,15 @@ Ray QChartCamera3D::unproject(const QPointF& pixel, const QRectF& plotArea) cons
 
 // ---- fitCameraConfig（核心求解器） ----
 bool QChartCamera3D::fitCameraConfig(const QRectF& plotArea, FitConstraints constraints) {
-    if (plotArea.width() <= 0.0 || plotArea.height() <= 0.0)
-        return false;
-
-    qreal aspect = plotArea.width() / plotArea.height();
+    // ── 退化输入策略（4d 明确，与头文件 FitConstraint 注释一致）──
+    //  · r ≤ 0（零尺寸盒）：无几何可适配 → 不改动任何参数并返回 false
+    //  · plotArea 零/负/非有限尺寸：aspect 视为 1.0（垂直基准）后**继续求解**——
+    //    FixedFov 只依赖 r 与 fov，不因退化 plotArea 变成 no-op（与 4c fitWorld 内联解算逐位一致）
     qreal r = radius();
     if (r <= 0.0)
         return false;
+    const qreal aspect = (plotArea.width() > 0.0 && plotArea.height() > 0.0)
+                             ? plotArea.width() / plotArea.height() : 1.0;
 
     // 判断临界轴（窄边）
     qreal halfFovY = qDegreesToRadians(m_fov) * 0.5;
@@ -268,8 +284,8 @@ bool QChartCamera3D::fitCameraConfig(const QRectF& plotArea, FitConstraints cons
 
     bool changed = false;
 
-    // 处理约束冲突：按优先级 Fov > Dist > Near > Far
-    // 如果同时设置了多个，只取最高优先级的
+    // 处理约束冲突：按优先级 Fov > Dist > Near > Far（4d 钉死：只解最高优先级项；
+    // 其余掩码位不参与求解，仅 FixedNear/FixedFar 影响上面的 near/far 保护判定）
     FitConstraint primary = FitConstraint::None;
     if (constraints & FitConstraint::FixedFov)
         primary = FitConstraint::FixedFov;
@@ -287,8 +303,9 @@ bool QChartCamera3D::fitCameraConfig(const QRectF& plotArea, FitConstraints cons
     // 根据主要约束求解
     switch (primary) {
     case FitConstraint::FixedFov: {
-        // 固定 fov → 求解 distance
-        qreal newDist = r / qSin(criticalHalfAngle);
+        // 固定 fov → 求解 distance（4c fitWorld 手写式的等价形式：halfDiag/sin(fov/2)；
+        // 下限 0.05 与迁移前一致，避免极小 fov 时距离发散）
+        qreal newDist = r / qMax<qreal>(0.05, qSin(criticalHalfAngle));
         if (!qFuzzyCompare(m_distance, newDist)) {
             m_distance = newDist;
             changed = true;
@@ -377,22 +394,16 @@ bool QChartCamera3D::fitCameraConfig(const QRectF& plotArea, FitConstraints cons
         break;
     }
 
-    // 更新 near/far，除非用户手动覆盖且没有指定 FixedNear/FixedFar
-    bool overrideNearFar = m_nearFarOverride &&
-                          !(constraints & FitConstraint::FixedNear) &&
-                          !(constraints & FitConstraint::FixedFar);
-    if (!overrideNearFar) {
-        qreal newNear = qMax<qreal>(0.01, m_distance - r);
-        qreal newFar = m_distance + r;
-        if (!qFuzzyCompare(m_near, newNear) || !qFuzzyCompare(m_far, newFar)) {
-            m_near = newNear;
-            m_far = newFar;
+    // ── near/far 收尾（4d：复用 applyAutoNearFar，唯一实现）──
+    // 保护策略：用户显式设过 near/far（override）且本次未指定 FixedNear/FixedFar ⇒ 不覆盖、保留用户值；
+    // 其余情况由 fit 接管：写内切值（与 resetNearFar 数值完全一致）并清除 override 标志。
+    const bool overrideProtected = m_nearFarOverride &&
+                                   !(constraints & FitConstraint::FixedNear) &&
+                                   !(constraints & FitConstraint::FixedFar);
+    if (!overrideProtected) {
+        if (applyAutoNearFar())
             changed = true;
-        }
-        // 如果用户之前设置了覆盖，现在清除覆盖标志，因为这次 fit 显式地控制了 near/far
-        if (m_nearFarOverride) {
-            m_nearFarOverride = false;
-        }
+        m_nearFarOverride = false;   // fit 显式接管 → clear override
     }
 
     if (changed)

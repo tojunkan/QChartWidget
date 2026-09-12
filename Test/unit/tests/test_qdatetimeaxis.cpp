@@ -17,12 +17,12 @@ void TestQDateTimeAxis::toNumeric_epoch() {
     QCOMPARE(back.toDateTime(), dt);
 }
 
-void TestQDateTimeAxis::setRange_datetimeSugar() {
+void TestQDateTimeAxis::setRange_datetime() {
     QDateTimeAxis axis;
     QDateTime min(QDate(2026, 8, 1), QTime(0, 0, 0));
     QDateTime max(QDate(2026, 8, 8), QTime(0, 0, 0));
 
-    // QDateTime 版 setRange 应转发到基类语法糖
+    // QDateTime 版 setRange 应转发到基类范围写入（4c 措辞：轴范围为真实状态，非"语法糖"）
     axis.setRange(min, max);
     QCOMPARE(axis.min(), static_cast<qreal>(min.toMSecsSinceEpoch()));
     QCOMPARE(axis.max(), static_cast<qreal>(max.toMSecsSinceEpoch()));

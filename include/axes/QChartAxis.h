@@ -90,13 +90,13 @@ public:
     /// 边框轴占用空间估算；数据主脊返回 {0, 0}
     virtual QSizeF sizeHint(const QFont& font) const;
 
-    // ===== 语法糖（仅 Cartesian，内部转发给 Widget）=====
-    /// setRange / min / max 仅在 Cartesian 下有意义
-    /// 内部存储语法糖字段，通过 rangeChanged 信号由 Widget 连接后
-    /// 映射到 Widget::setDataRangeDim0/Dim1
+    // ===== 轴范围（4b：轴是范围的唯一持有者）=====
+    /// 本轴在当前视图下的 numeric 范围就是轴的**真实状态**（min/max 直接读写，不再是语法糖，
+    /// 也不再经 Widget 映射）：setRange 直接写状态并发出 rangeChanged 范围变化通知；
+    /// dataBounds（若需要）由各持有者按需从轴范围临时组装，用完即弃。
     void setRange(qreal min, qreal max);
-    qreal min() const { return m_sugarMin; }
-    qreal max() const { return m_sugarMax; }
+    qreal min() const { return m_rangeMin; }   // 真实范围（4c 起字段名 m_rangeMin/m_rangeMax，原名 m_sugarMin/m_sugarMax）
+    qreal max() const { return m_rangeMax; }
 
     // ===== 样式 / 查询 =====
     Qt::Alignment alignment() const { return m_alignment; }
@@ -147,7 +147,7 @@ public:
     virtual bool isInteractive() const { return true; }
 
 signals:
-    /// setRange 语法糖触发，Widget 连接后映射到 setDataRangeDim0/Dim1
+    /// 轴范围变化通知（setRange 写状态后发出；无内部映射语义）
     void rangeChanged(qreal min, qreal max);
     void visibleChanged();
     void styleChanged();
@@ -155,9 +155,11 @@ signals:
     void subTickCountChanged();
 
 protected:
-    // ── 语法糖字段（仅 Cartesian 有效，非映射基准）──
-    qreal m_sugarMin = 0.0;
-    qreal m_sugarMax = 0.0;
+    // ── 轴范围 ──
+    // 4c 起字段名 m_rangeMin/m_rangeMax（原名 m_sugarMin/m_sugarMax，已随本批重命名）；
+    // 语义=当前视图可见范围，0,0=未设置。子类 QBarCategoryAxis 直接读写这两个字段。
+    qreal m_rangeMin = 0.0;
+    qreal m_rangeMax = 0.0;
 
     // ── 刻度参数 ──
     int m_tickCount = 5;         // 目标主刻度数（供 niceStep 参考）

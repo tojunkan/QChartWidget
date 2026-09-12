@@ -7,6 +7,13 @@
 //                                      也可用环境变量 QCHART_DEMO_3D_GRID=box|faceline|lattice
 // 出图：QCHART_DEMO_SHOT=1 时框架存 demo_<name>.png（GL 另存 _glhost.png）；
 //      3D 演示额外按模式存 demo_axis3d_<mode>.png（模式间出图产物不互相覆盖）。
+// 4f 交互（可玩；CPU/GL 两后端一致；交互开关默认开，见 QChartAbstractWidget::setInteractionEnabled）：
+//   2D（axis）    ：左键拖动 = 平移视图（像素位移 → 视图坐标位移）；滚轮 = 以光标为中心缩放
+//                  （中心处数据坐标不变）。
+//   3D（axis3d）  ：左键拖动 = 旋转（orbit，俯仰钳制 ±89°）；滚轮 = 推拉（dolly 改视野盒尺寸，
+//                  autoFit 开启时随之重算 distance/近远面；关闭时保留手调参数）；
+//                  中键/右键拖动 = 平移视野盒中心（panViewCube）。
+//   出图路径不受影响：QCHART_DEMO_SHOT=1 时演示不注入任何鼠标事件，产物与无交互时逐字节一致。
 #include "demos.h"
 #include "QChartWidget.h"
 #include "QChartWidget3D.h"
@@ -179,7 +186,7 @@ QWidget* buildDemoAxis3D(DemoBackend backend)
     auto* w3 = new QChartWidget3D;
     w3->setProjection3D(&s_proj3);
     w3->setGridMode3D(mode);                                        // 转发 layer3D（Box 仅直角投影，否则回退）
-    w3->setDomainBox(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));    // → layer3D.setDataBounds + fitWorld
+    w3->setDomainBox(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));   // 4c：QCube 域盒 → layer3D + fitWorld
     // 相机初始姿态（fitWorld 内已置 yaw=45/pitch=30；此处再显式设定一次演示意图）
     if (QChartCamera3D* cam = w3->camera3D()) {
         cam->setYaw(45.0);

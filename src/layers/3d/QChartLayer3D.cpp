@@ -1,5 +1,6 @@
 // QChartLayer3D.cpp
 #include "QChartLayer3D.h"
+#include "QChartAxis.h"   // 4a：不再经二维层头传递，需完整类型
 #include "QChartCamera3D.h"
 #include "QChartProjection3D.h"
 #include "QChartSurfaceSeries.h"
@@ -27,28 +28,27 @@ QString projection3DTypeName(const QChartProjection3D* p)
 } // namespace
 
 QChartLayer3D::QChartLayer3D(QObject* parent)
-    : QChartLayer(parent)
+    : QChartAbstractLayer(parent)
 {
+    // 4a：网格样式变化 → 数据脏标记（语义同原二维层构造内的同名连接）
+    connect(this, &QChartLayer3D::gridChanged, this, &QChartLayer3D::invalidateData);
     m_axes3D = std::make_unique<QChartAxes3D>();
-    m_axes3D->dataBounds = m_projection3D ? QCube(m_projection3D->defaultDataBounds().first, m_projection3D->defaultDataBounds().second)
-                                          : QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10));
+    // 4b：数据盒不再独立持有（由三根轴范围组装）；轴缺省范围 0..10 即迁移前的默认盒
     m_axes3D->axis(0).axis = m_axisX;
     m_axes3D->axis(1).axis = m_axisY;
     m_axes3D->axis(2).axis = m_axisZ;
     // ★ 批次 B1：3D 相机归 layer——scene3D.camera 恒指向本层相机值成员
-    m_scene3D.camera = &m_camera3D;
-    // 轴/网格数据盒默认与 axes3D 默认盒一致（collect 使用 m_axesDataMin/Max 工作副本）
-    m_axesDataMin = QVector3D(0, 0, 0);
-    m_axesDataMax = QVector3D(10, 10, 10);
+    m_scene.camera = &m_camera3D;
+    // 4b：无独立工作副本——collect 时由 m_axes3D->dataBounds() 从三轴范围组装
 }
 
 // ===== 轴重绑 =====
 void QChartLayer3D::setAxisX(QChartAxis* a) {
-    QChartLayer::setAxisX(a);
+    m_axisX = a;                                   // 4a：三维层自持轴绑定
     if (m_axes3D) m_axes3D->axis(0).axis = a;
 }
 void QChartLayer3D::setAxisY(QChartAxis* a) {
-    QChartLayer::setAxisY(a);
+    m_axisY = a;
     if (m_axes3D) m_axes3D->axis(1).axis = a;
 }
 void QChartLayer3D::setAxisZ(QChartAxis* a) {
@@ -61,13 +61,15 @@ void QChartLayer3D::setProjection3D(const QChartProjection3D* proj) {
     m_projection3D = proj;   // 仅用于采样提示/默认盒；图元组装本身纯 Numeric
 }
 
-void QChartLayer3D::setDataBounds(const QVector3D& dataMin, const QVector3D& dataMax) {
-    m_axes3D->dataBounds = QCube(dataMin, dataMax);
-    m_axesDataMin = dataMin;   // ★ 批次 B1 收尾：同步 collect 使用的工作副本
-    m_axesDataMax = dataMax;
+void QChartLayer3D::setDataBounds(const QCube& box) {
+    // 4b：数据盒写入 = 写三根轴的范围（轴是范围的唯一持有者；未绑定的轴跳过）
+    // 4c：统一 QCube 主签名（两点重载在头文件内转发至此）
+    if (QChartAxis* ax = m_axes3D ? m_axes3D->axis(0).axis : nullptr) ax->setRange(box.min.x(), box.max.x());
+    if (QChartAxis* ay = m_axes3D ? m_axes3D->axis(1).axis : nullptr) ay->setRange(box.min.y(), box.max.y());
+    if (QChartAxis* az = m_axes3D ? m_axes3D->axis(2).axis : nullptr) az->setRange(box.min.z(), box.max.z());
 }
 bool QChartLayer3D::hasValidDataBounds() const {
-    return m_axes3D->dataBounds.isValid();
+    return m_axes3D && m_axes3D->dataBounds().isValid();   // 4b：从三轴范围按需组装
 }
 
 // // ===== ProjectFn3D（供系列使用，保留）=====
@@ -85,14 +87,64 @@ bool QChartLayer3D::hasValidDataBounds() const {
 //     };
 // }
 
+// ===== 网格样式（4a：自持；实现语义同原二维层）=====
+void QChartLayer3D::setGridVisible(bool v)
+{
+    if (m_gridVisible == v) return;
+    m_gridVisible = v;
+    emit gridChanged();
+}
+
+void QChartLayer3D::setGridColor(const QColor& c)
+{
+    if (m_gridColorOverride && *m_gridColorOverride == c) return;
+    m_gridColorOverride = c;
+    emit gridChanged();
+}
+
+void QChartLayer3D::setThemeGridColor(const QColor& c)
+{
+    m_themeGridColor = c;
+    if (!m_gridColorOverride) emit gridChanged();
+}
+
+void QChartLayer3D::clearGridColor()
+{
+    if (!m_gridColorOverride) return;
+    m_gridColorOverride.reset();
+    emit gridChanged();
+}
+
+// 4a：与迁移前继承自二维层的空默认一致（3D 范围重算归后续批次）
+void QChartLayer3D::recomputeDataBounds() {}
+
+// 4a：边框轴外边距（用本层 axisX/axisY；算术与原二维层实现逐字一致）
+void QChartLayer3D::borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,
+                                       qreal& right, qreal& bottom) const
+{
+    const QChartAxis* axes[2] = { m_axisX, m_axisY };
+    for (const QChartAxis* a : axes) {
+        if (!a) continue;
+        const Qt::Alignment al = a->alignment();
+        if (al == Qt::AlignBottom || al == Qt::AlignTop) {
+            const qreal h = a->sizeHint(font).height();
+            if (al == Qt::AlignBottom) bottom += h; else top += h;
+        } else if (al == Qt::AlignLeft || al == Qt::AlignRight) {
+            const qreal w = a->sizeHint(font).width();
+            if (al == Qt::AlignLeft) left += w; else right += w;
+        }
+        // HCenter/VCenter（数据主脊）不占外边距
+    }
+}
+
 // ===== collectPrimitives —— 纯 Numeric 图元组装 =====
 void QChartLayer3D::collectPrimitives() {
     // 0a. 场景负载复位（每帧重收集；sourceId 从 0 重新分配）
-    m_scene3D.primitives.clear();
-    m_scene3D.labels.clear();
-    m_scene3D.maxSourceId = 0;
-    m_scene3D.PrimitiveIdPrefixSum.clear();
-    m_scene3D.PrimitiveIdPrefixSum.append(0);
+    m_scene.primitives.clear();
+    m_scene.labels.clear();
+    m_scene.maxSourceId = 0;
+    m_scene.PrimitiveIdPrefixSum.clear();
+    m_scene.PrimitiveIdPrefixSum.append(0);
 
     // 0. 轴配置重同步
     if (m_axes3D) {
@@ -136,8 +188,10 @@ void QChartLayer3D::collectPrimitives() {
     // 2. 轴/网格/盒边框（全部通过 drawAtPosition 生成 Numeric 图元）
     const bool axesValid = m_axes3D && m_axes3D->visible() && hasValidDataBounds();
     if (axesValid) {
-        const QVector3D& mn = m_axesDataMin;
-        const QVector3D& mx = m_axesDataMax;
+        // 4b：数据盒按需从三根轴范围组装（用完即弃；数值与迁移前工作副本逐位一致）
+        const QCube box = m_axes3D->dataBounds();
+        const QVector3D mn = box.min;
+        const QVector3D mx = box.max;
         const int segments = m_projection3D ? m_projection3D->samplingSegmentsHint() : 72;
         const QColor gridCol = gridColor();
         const QColor boxCol(160, 160, 160);
@@ -170,17 +224,17 @@ void QChartLayer3D::collectPrimitives() {
                            qreal off0, qreal off1, QChartAxis::LabelMode labelMode, const QColor& color, qreal penWidth) {
             if (!axis) return;
             // int segments = m_projection3D ? m_projection3D->samplingSegmentsHint() : 72;
-            int cnt = m_scene3D.primitives.size();
-            m_scene3D.maxSourceId++;
+            int cnt = m_scene.primitives.size();
+            m_scene.maxSourceId++;
             axis->drawAtPosition(dimMin, dimMax, off0, off1, dimIndex,
-                                 m_scene3D, segments, labelMode);
-            for (int i = cnt; i < m_scene3D.primitives.size(); ++i) {
-                auto& prim = m_scene3D.primitives[i];
+                                 m_scene, segments, labelMode);
+            for (int i = cnt; i < m_scene.primitives.size(); ++i) {
+                auto& prim = m_scene.primitives[i];
                 prim.color = color;
                 prim.penWidth = penWidth;
-                prim.sourceId = m_scene3D.maxSourceId;
+                prim.sourceId = m_scene.maxSourceId;
             }
-            m_scene3D.PrimitiveIdPrefixSum.push_back(m_scene3D.primitives.size());
+            m_scene.PrimitiveIdPrefixSum.push_back(m_scene.primitives.size());
         };
 
         // ===== 模式解析（批次2 B）=====

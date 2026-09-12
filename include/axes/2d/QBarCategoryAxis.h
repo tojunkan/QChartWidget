@@ -1,7 +1,7 @@
 // QBarCategoryAxis.h —— 分类轴
 // Data = QString（类别名："苹果"、"香蕉"）
 // Numeric = 类别索引（0, 1, 2, ... ±0.5 为中心对齐）
-// 无次刻度、无语法糖 setRange（类别由数据决定）
+// 无次刻度；setRange 无效（类别由数据决定；4b 起 setRange 为轴范围真实状态写入）
 #pragma once
 #include "QChartAxis.h"
 #include <QStringList>
@@ -57,7 +57,7 @@ public:
     QStringList tickLabels(const QVector<qreal>& ticks) const override;
     QVector<qreal> subTickValues(qreal, qreal) const override { return {}; }
 
-    // 语法糖 setRange 无效（类别由数据决定）
+    // setRange 无效（类别由数据决定）——4c 措辞清理（旧“语法糖”表述已废弃）
     void setRange(qreal, qreal) {
         qWarning() << "QBarCategoryAxis::setRange ignored — range is determined by categories";
     }

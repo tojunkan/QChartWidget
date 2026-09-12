@@ -1,5 +1,23 @@
 // QChartAxes3D.cpp
 #include "QChartAxes3D.h"
+#include "QChartAxis.h"   // 4b：组装数据盒需读取轴范围
+
+// ===== 4b：数据盒按需从三根轴范围组装（不长期持有）=====
+QCube QChartAxes3D::dataBounds() const
+{
+    QVector3D mn(0, 0, 0), mx(10, 10, 10);   // 默认（axis 缺失维度的回退，与迁移前默认盒一致）
+    for (int d = 0; d < 3; ++d) {
+        const QChartAxis* a = m_cfg[d].axis;
+        if (!a) continue;
+        const qreal lo = a->min(), hi = a->max();
+        switch (d) {
+        case 0: mn.setX(lo); mx.setX(hi); break;
+        case 1: mn.setY(lo); mx.setY(hi); break;
+        default: mn.setZ(lo); mx.setZ(hi); break;
+        }
+    }
+    return QCube(mn, mx);
+}
 
 QVector<QVector3D> QChartAxes3D::boxCorners(const QVector3D& dataMin, const QVector3D& dataMax) {
     QVector<QVector3D> corners;

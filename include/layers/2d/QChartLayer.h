@@ -1,6 +1,9 @@
-// QChartLayer.h —— 图层基类
-// 持有 axisX/axisY 和 Series 列表，从Widget接收plotArea/dataBounds，负责 drawGrid 和 drawAllSeries
-// 负责 drawGrid 和 drawAllSeries
+// QChartLayer.h —— 二维图层（4a：迁入 layers/2d 并改继承 QChartAbstractLayer）
+// 维度无关公共部分（QChartScene m_scene / plotArea·背景·通用投影注入 / m_dataDirty+invalidateData /
+// collectPrimitives·recomputeDataBounds 接口）见 include/layers/QChartAbstractLayer.h。
+// 本类只保留二维专属：axisX/axisY 绑定、二维相机值成员（scene.camera 指向它）、drawGrid、
+// 网格样式（gridVisible/gridColor + Q_PROPERTY）；range 由轴持有（4b），需要时 numericBoundsFromAxes()
+// 临时组装；Series 管理待 Series 阶段恢复。
 #ifndef QCHARTLAYER_H
 #define QCHARTLAYER_H
 #include <QObject>
@@ -11,12 +14,13 @@
 #include <QColor>
 #include <functional>
 #include <optional>
+#include "QChartAbstractLayer.h"   // 4a：抽象层（每层一个 QChartScene + 上下文注入 + 脏标记）
 #include "QChartAxis.h" // DrawContext 在此定义
 #include "QChartHitTester.h"   // 统一命中引擎（Phase 3 任务 0）：HitResult 定义提升于此
 
 class QChartSeries;
 
-class QChartLayer : public QObject
+class QChartLayer : public QChartAbstractLayer
 {
     Q_OBJECT
     Q_PROPERTY(bool gridVisible READ isGridVisible WRITE setGridVisible NOTIFY gridChanged)
@@ -31,16 +35,10 @@ public:
     // ===== 相机（批次 A：相机归 layer——值成员自持，scene.camera 指向它）=====
     QChartCamera* camera() { return &m_camera; }
     const QChartCamera* camera() const { return &m_camera; }
-    /// 注入场景上下文（widget 渲染前调用）
-    void setSceneProjection(const QChartAbstractProjection* p) { m_scene.projection = p; }
-    void setScenePlotArea(const QRectF& plotArea) { m_scene.plotArea = plotArea; }
-    void setSceneBackground(const QColor& c) { m_scene.backgroundColor = c; }
-    /// 设置 Numeric 数据范围（legacy 取向：left/right=dim0 极值、bottom/top=dim1 极值）
-    /// 并同步到已绑定的 axisX/axisY 语法糖范围（widget viewRect→dataBounds 驱动链末端）
-    void setNumericBounds(const QRectF& bounds);
-    /// 收集结果快照（collectPrimitives 之后使用；scene.camera 恒指向本层 &m_camera）
-    const QChartScene& scene() const { return m_scene; }
-    QChartScene& scene() { return m_scene; }
+    // 场景快照/上下文注入（setSceneProjection/setScenePlotArea/setSceneBackground/scene()）与
+    // m_scene/m_dataDirty/invalidateData() 已上移到 QChartAbstractLayer（4a）。
+    // 4b：删除 setNumericBounds(QRectF) —— 轴是范围的唯一持有者；需要范围时由本类按需组装
+    // （numericBoundsFromAxes()，用完即弃），不再持有 m_dataBounds 成员。
 
     // ===== 轴绑定 =====
     QChartAxis* axisX() const { return m_axisX; }
@@ -65,8 +63,13 @@ public:
     ///   不显示（已知缺陷、接受差异）；tier1/tier2 两类标签不受影响。混合后端预研旁路见
     ///   QChartRenderer::hybridResolveFreeLabelAnchor（当前不启用）。
     void drawGrid(QChartScene& scene);
-    void collectPrimitives();
-    void invalidateData() { m_dataDirty = true; }
+    void collectPrimitives() override;        // 4a：实现抽象层接口（二维层实现，行为不变）
+    /// 4b：临时组装本层 numeric 范围（legacy 取向：left/right=dim0、bottom/top=dim1）——
+    /// 直接读 axisX/axisY 的真实范围，用完即弃（无长期持有成员）。
+    QRectF numericBoundsFromAxes() const;
+    /// 4a：边框轴外边距占用（axisX/axisY 的 sizeHint；算术与迁移前 calculatePlotArea 内联逻辑一致）
+    void borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,
+                            qreal& right, qreal& bottom) const override;
     // void drawAllSeries(QChartScene& scene);   // 待 Series 阶段恢复
 
     // ===== 命中检测（Phase 3 任务 0：定义提升到 QChartHitTester）=====
@@ -76,8 +79,8 @@ public:
     //   待拾取（hitTest）随后续阶段恢复时与 QChartHitTester 一起重新接入。
 
     // ===== 交互 =====
-    // 批次 A：默认空实现（.cpp 已有空体）；交互/数据链阶段可视需要恢复纯虚
-    virtual void recomputeDataBounds();
+    // 批次 A：默认空实现（.cpp 已有空体）；4a 起为抽象层接口的实现（override）
+    void recomputeDataBounds() override;
 
 signals:
     // seriesAdded(QChartSeries*)/seriesRemoved(QChartSeries*) 待 Series 阶段恢复
@@ -115,10 +118,9 @@ protected:
     QChartAxis *m_axisX = nullptr;
     QChartAxis *m_axisY = nullptr;
 
-    QRectF m_dataBounds; // 通过 axisX/axisY 的 min/m_max 计算得出，供 drawGrid/collectPrimitives 使用
-    QChartCamera m_camera;  // ★ 相机值成员（批次 A：相机归 layer；scene.camera=&m_camera 于构造注入）
-    QChartScene m_scene;  // 当前场景快照（collectPrimitives 填充；渲染上下文由 widget 注入）
-    bool m_dataDirty = true;
+    // 4b：m_dataBounds 已删除（范围由 axisX/axisY 持有，需要时 numericBoundsFromAxes() 临时组装）
+    QChartCamera m_camera;  // ★ 相机值成员（批次 A：相机归 layer；m_scene.camera=&m_camera 于构造注入）
+    // m_scene / m_dataDirty 已上移 QChartAbstractLayer（4a）。
     // QList<QChartSeries*> m_series;   // 待 Series 阶段恢复
     bool m_gridVisible = true;
     std::optional<QColor> m_gridColorOverride;           // 用户显式设过（setGridColor）

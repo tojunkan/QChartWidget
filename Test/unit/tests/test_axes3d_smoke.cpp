@@ -1,6 +1,6 @@
 // test_axes3d_smoke.cpp —— 批次 B1/B2：3D 轴渲染冒烟（CPU offscreen）
 // 组装：QChartLayer3D（QChartAxes3D 编排器 + 3 轴 + 自带 QChartCamera3D 值成员）
-//   → setDataBounds + collectPrimitives（drawAtPosition 生成 Numeric 图元入 m_scene3D）
+//   → setDataBounds + collectPrimitives（drawAtPosition 生成 Numeric 图元入 m_scene）
 //   → 3D 投影 + Camera3D → QPainterChartRenderer::render(scene3D, QImage) 像素断言。
 // 批次2 B 覆盖：三网格模式（Box/FaceLine/Lattice）语义 + 面线退化安全 + Box 非直角投影回退。
 #include "test_axes3d_smoke.h"

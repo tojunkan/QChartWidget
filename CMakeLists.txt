@@ -45,8 +45,9 @@ set(QCHART_SOURCES
     src/core/QChartWidget.cpp
     src/core/QChartWidget3D.cpp     # 批次 B2：轻量 3D 容器（单 layer3D、相机归层）
     src/core/QChartCamera3D.cpp
-    # layers：2D 图层 + 3D 图层（批次 B1；3D series 后续批次）
-    src/layers/QChartLayer.cpp
+    # layers：抽象图层（4a）+ 2D 图层（4a 起在 layers/2d）+ 3D 图层（批次 B1；3D series 后续批次）
+    src/layers/QChartAbstractLayer.cpp
+    src/layers/2d/QChartLayer.cpp
     src/layers/3d/QChartLayer3D.cpp
     # projection：2D 投影族（3D 投影族为 header-only，随头文件引入即可；插值投影有 .cpp）
     src/projection/QInterpolatedProjection.cpp
@@ -73,7 +74,8 @@ set(QCHART_HEADERS
     include/core/QChartAbstractWidget.h
     include/core/QChartWidget.h
     include/core/QChartWidget3D.h     # 批次 B2：轻量 3D 容器（moc）
-    include/layers/QChartLayer.h
+    include/layers/QChartAbstractLayer.h
+    include/layers/2d/QChartLayer.h
     include/layers/3d/QChartLayer3D.h
     include/projection/QChartAbstractProjection.h
     include/projection/2d/QChartProjection.h
@@ -101,6 +103,7 @@ target_include_directories(QChartWidget PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include/axes/2d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/axes/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/layers
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/layers/2d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/layers/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/projection
     ${CMAKE_CURRENT_SOURCE_DIR}/include/projection/2d

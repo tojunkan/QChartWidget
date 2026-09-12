@@ -24,7 +24,8 @@ QChartAxis::QChartAxis(QObject* parent, Qt::Alignment alignment)
     : QObject(parent)
     , m_alignment(alignment)
 {
-    // 语法糖字段 m_sugarMin/m_sugarMax 初始为 0,0（= "未设置"）
+    // 轴范围 m_rangeMin/m_rangeMax 初始为 0,0（= "未设置"；4c 起字段名 m_rangeMin/m_rangeMax，
+    // 原名 m_sugarMin/m_sugarMax 已随本批重命名；语义=当前视图可见范围）
     // 对齐校验：只接受六种合法值，非法则回退为 AlignVCenter
     if (alignment != Qt::AlignBottom && alignment != Qt::AlignTop
         && alignment != Qt::AlignLeft   && alignment != Qt::AlignRight
@@ -58,13 +59,13 @@ void QChartAxis::setSubTickCount(int n) {
     emit subTickCountChanged();
 }
 
-// ===== 语法糖 setRange（仅 Cartesian 有效）=====
+// ===== setRange：直接写轴范围真实状态 + 发范围变化通知（4b：非语法糖、无 Widget 映射）=====
 void QChartAxis::setRange(qreal min, qreal max) {
-    if (qFuzzyCompare(m_sugarMin, min) && qFuzzyCompare(m_sugarMax, max))
+    if (qFuzzyCompare(m_rangeMin, min) && qFuzzyCompare(m_rangeMax, max))
         return;
-    m_sugarMin = min;
-    m_sugarMax = max;
-    qCDebug(logAxis) << "setRange (语法糖):" << min << "→" << max;
+    m_rangeMin = min;
+    m_rangeMax = max;
+    qCDebug(logAxis) << "setRange:" << min << "→" << max;
     emit rangeChanged(min, max);
     emit styleChanged();
 }

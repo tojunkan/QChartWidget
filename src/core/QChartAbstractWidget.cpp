@@ -1,6 +1,6 @@
 // QChartAbstractWidget.cpp —— 图表抽象基类实现（S0+批次 A：纯容器）
 #include "QChartAbstractWidget.h"
-#include "QChartLayer.h"
+#include "QChartAbstractLayer.h"   // 4a：层列表改抽象层类型
 #include "QPainterChartRenderer.h"
 #include "QOpenGLChartRenderer.h"
 #include "QChartGL.h"
@@ -126,7 +126,7 @@ void QChartAbstractWidget::setRenderBackend(RenderBackend backend)
 
 // ===== 图层管理 =====
 
-void QChartAbstractWidget::addLayer(QChartLayer* layer)
+void QChartAbstractWidget::addLayer(QChartAbstractLayer* layer)
 {
     if (!layer || m_layers.contains(layer)) return;
     m_layers.append(layer);
@@ -134,7 +134,7 @@ void QChartAbstractWidget::addLayer(QChartLayer* layer)
     scheduleRepaint();
 }
 
-void QChartAbstractWidget::removeLayer(QChartLayer* layer)
+void QChartAbstractWidget::removeLayer(QChartAbstractLayer* layer)
 {
     if (m_layers.removeAll(layer) > 0) {
         m_layoutDirty = true;
@@ -167,6 +167,7 @@ void QChartAbstractWidget::relayout()
     if (newPlotArea != m_plotArea) {
         m_plotArea = newPlotArea;
         emit plotAreaChanged(m_plotArea);
+        onPlotAreaChanged(m_plotArea);   // 4e：像素侧驱动（子类重 fit 相机）
     }
     layoutGlHost();
 }
@@ -184,7 +185,7 @@ void QChartAbstractWidget::pushContextToLayers()
 {
     const QChartAbstractProjection* proj = projection();
     const QColor bg = sceneBackgroundColor();
-    for (QChartLayer* layer : m_layers) {
+    for (QChartAbstractLayer* layer : m_layers) {
         if (!layer) continue;
         layer->setSceneProjection(proj);
         layer->setScenePlotArea(m_plotArea);
@@ -196,7 +197,7 @@ void QChartAbstractWidget::renderLayers(QPaintDevice* device)
 {
     if (!m_cpuRenderer) return;
     pushContextToLayers();   // plotArea/投影/背景 → 各层场景（渲染前恒同步，幂等）
-    for (QChartLayer* layer : m_layers) {
+    for (QChartAbstractLayer* layer : m_layers) {
         if (!layer) continue;
         layer->collectPrimitives();
         m_cpuRenderer->invalidateView();   // 每层场景各自重算变换（相机/内容不同）
@@ -224,7 +225,7 @@ void QChartAbstractWidget::renderLayersGL(QPaintDevice* device)
     labelDev.setDevicePixelRatio(labelDpr);
     labelDev.fill(Qt::transparent);
 
-    for (QChartLayer* layer : m_layers) {
+    for (QChartAbstractLayer* layer : m_layers) {
         if (!layer) continue;
         layer->collectPrimitives();
         m_glRenderer->invalidateView();
@@ -286,10 +287,11 @@ void QChartAbstractWidget::resizeEvent(QResizeEvent*)
     scheduleRepaint();
 }
 
-void QChartAbstractWidget::mousePressEvent(QMouseEvent* e)    { onMousePress(e); }
-void QChartAbstractWidget::mouseMoveEvent(QMouseEvent* e)     { onMouseMove(e); }
-void QChartAbstractWidget::mouseReleaseEvent(QMouseEvent* e)  { onMouseRelease(e); }
-void QChartAbstractWidget::wheelEvent(QWheelEvent* e)         { onWheel(e); }
+// 4f：事件分发统一先过交互开关——关闭时鼠标事件零效果（不调用钩子）
+void QChartAbstractWidget::mousePressEvent(QMouseEvent* e)    { if (!m_interactionEnabled) return; onMousePress(e); }
+void QChartAbstractWidget::mouseMoveEvent(QMouseEvent* e)     { if (!m_interactionEnabled) return; onMouseMove(e); }
+void QChartAbstractWidget::mouseReleaseEvent(QMouseEvent* e)  { if (!m_interactionEnabled) return; onMouseRelease(e); }
+void QChartAbstractWidget::wheelEvent(QWheelEvent* e)         { if (!m_interactionEnabled) return; onWheel(e); }
 
 // ===== 外部内容 / 重绘调度 =====
 

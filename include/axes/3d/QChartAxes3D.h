@@ -25,7 +25,9 @@ public:
         QString axisTitle;
     };
 
-    QCube dataBounds;
+    // 4b：数据盒不再独立持有——需要时按需从三根轴的当前范围组装（用完即弃）。
+    /// 组装数据盒：各维取该维轴的范围（axis 缺失的维度回退默认 0..10，与迁移前默认盒一致）。
+    QCube dataBounds() const;
 
     AxisConfig& axis(int dim) { return m_cfg[dim]; }
     const AxisConfig& axis(int dim) const { return m_cfg[dim]; }

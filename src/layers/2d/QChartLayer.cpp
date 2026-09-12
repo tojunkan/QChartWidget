@@ -6,7 +6,7 @@
 
 Q_LOGGING_CATEGORY(logLayer, "chart.layer")
 
-QChartLayer::QChartLayer(QObject* parent) : QObject(parent) {
+QChartLayer::QChartLayer(QObject* parent) : QChartAbstractLayer(parent) {
     connect(this, &QChartLayer::gridChanged, this, &QChartLayer::invalidateData);
     // ★ 批次 A：相机归 layer——scene.camera 恒指向本层相机值成员
     //（相机 viewRect 由 widget/viewRect 驱动链或调用方显式设置后再渲染）
@@ -18,32 +18,24 @@ QChartLayer::QChartLayer(QObject* parent) : QObject(parent) {
 QChartLayer::~QChartLayer() = default;
 
 // ===== 轴绑定 =====
-void QChartLayer::setNumericBounds(const QRectF& bounds) {
-    m_dataBounds = bounds;
-    // 同步语法糖范围（X=dim0: left→right；Y=dim1: bottom→top，数值增序；
-    // legacy 取向 rect 的 top>bottom，故用 bottom<=top 判合法）
-    if (m_axisX && bounds.left() <= bounds.right())
-        m_axisX->setRange(bounds.left(), bounds.right());
-    if (m_axisY && bounds.bottom() <= bounds.top())
-        m_axisY->setRange(bounds.bottom(), bounds.top());
+// 4b：setNumericBounds(QRectF) 已删除——轴是范围的唯一持有者（范围写入由 QChartWidget
+// 在 recomputeDataBounds/onBeforePaint 中直接对轴 setRange 完成）；本类需要范围时临时组装。
+QRectF QChartLayer::numericBoundsFromAxes() const
+{
+    QRectF b;   // 默认 (0,0,0,0)：未绑定/未设置的维度保持 0（与迁移前 m_dataBounds 初值一致）
+    if (m_axisX) { b.setLeft(m_axisX->min()); b.setRight(m_axisX->max()); }
+    if (m_axisY) { b.setBottom(m_axisY->min()); b.setTop(m_axisY->max()); }
+    return b;
 }
 
 void QChartLayer::setAxisX(QChartAxis* a) {
-    m_axisX = a;
+    m_axisX = a;   // 4b：不再维护 m_dataBounds 缓存（范围由轴持有，按需组装）
     qCDebug(logLayer) << "setAxisX:" << (a ? "set" : "null");
-    if(m_axisX) {
-        m_dataBounds.setLeft(m_axisX->min());
-        m_dataBounds.setRight(m_axisX->max());
-    }
 }
 
 void QChartLayer::setAxisY(QChartAxis* a) {
     m_axisY = a;
     qCDebug(logLayer) << "setAxisY:" << (a ? "set" : "null");
-    if(m_axisY) {
-        m_dataBounds.setTop(m_axisY->max());
-        m_dataBounds.setBottom(m_axisY->min());
-    }
 }
 
 bool QChartLayer::validateAxes() const {
@@ -121,6 +113,27 @@ void QChartLayer::setGridColor(const QColor& c) {
 //   未来"混合后端（CPU 前置 projection+裁剪）"的预研旁路入口：
 //   QChartRenderer::hybridResolveFreeLabelAnchor —— 当前不启用，正常渲染路径不得调用。
 
+// ===== 边框轴外边距（4a：维度无关布局查询的二维实现）=====
+// 与迁移前 QChartWidget::calculatePlotArea 内的内联逻辑逐字一致（Bottom/Top 占上下、Left/Right 占左右；
+// HCenter/VCenter（数据主脊）不占外边距）。
+void QChartLayer::borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,
+                                     qreal& right, qreal& bottom) const
+{
+    const QChartAxis* axes[2] = { m_axisX, m_axisY };
+    for (const QChartAxis* a : axes) {
+        if (!a) continue;
+        const Qt::Alignment al = a->alignment();
+        if (al == Qt::AlignBottom || al == Qt::AlignTop) {
+            const qreal h = a->sizeHint(font).height();
+            if (al == Qt::AlignBottom) bottom += h; else top += h;
+        } else if (al == Qt::AlignLeft || al == Qt::AlignRight) {
+            const qreal w = a->sizeHint(font).width();
+            if (al == Qt::AlignLeft) left += w; else right += w;
+        }
+        // HCenter/VCenter（数据主脊）不占外边距
+    }
+}
+
 void QChartLayer::collectPrimitives() {
     // 批次 A：每次收集前复位场景负载（widget 每帧重收集；sourceId 从 0 起重新分配）
     m_scene.primitives.clear();
@@ -175,23 +188,26 @@ void QChartLayer::drawGrid(QChartScene& scene) {
         lbl.sourceId = groupId;                                // 同组组尾可见图元定位
     };
 
+    // 4b：范围按需从轴临时组装（数值与迁移前 m_dataBounds 逐位一致），用完即弃
+    const QRectF bounds = numericBoundsFromAxes();
+
     // ── 水平网格脊：dim0 扫动、固定 y = y 轴刻度（文字取 y 轴对该刻度的文字）──
-    const QVector<qreal> ticksY = m_axisY->tickValues(m_dataBounds.bottom(), m_dataBounds.top());
+    const QVector<qreal> ticksY = m_axisY->tickValues(bounds.bottom(), bounds.top());
     const QStringList labelsY = m_axisY->tickLabels(ticksY);
 
     for (int i = 0; i < ticksY.size(); ++i) {
         const qreal tickVal = ticksY[i];
-        addSpine(m_axisX, 0, m_dataBounds.left(), m_dataBounds.right(),
+        addSpine(m_axisX, 0, bounds.left(), bounds.right(),
                  tickVal, tickVal, labelsY.value(i), scene);
     }
 
     // ── 垂直网格脊：dim1 扫动、固定 x = x 轴刻度（文字取 x 轴对该刻度的文字）──
-    const QVector<qreal> ticksX = m_axisX->tickValues(m_dataBounds.left(), m_dataBounds.right());
+    const QVector<qreal> ticksX = m_axisX->tickValues(bounds.left(), bounds.right());
     const QStringList labelsX = m_axisX->tickLabels(ticksX);
 
     for (int i = 0; i < ticksX.size(); ++i) {
         const qreal tickVal = ticksX[i];
-        addSpine(m_axisY, 1, m_dataBounds.bottom(), m_dataBounds.top(),
+        addSpine(m_axisY, 1, bounds.bottom(), bounds.top(),
                  tickVal, tickVal, labelsX.value(i), scene);
     }
 }

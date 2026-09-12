@@ -14,9 +14,9 @@ void QBarCategoryAxis::setCategories(const QStringList& cats) {
     m_categories = cats;
     int n = m_categories.size();
     m_numericMax = qMax(0.0, static_cast<qreal>(n - 1));
-    m_sugarMin = -0.5;
-    m_sugarMax = m_numericMax + 0.5;
-    emit rangeChanged(m_sugarMin, m_sugarMax);
+    m_rangeMin = -0.5;
+    m_rangeMax = m_numericMax + 0.5;
+    emit rangeChanged(m_rangeMin, m_rangeMax);
     emit styleChanged();
     qCDebug(logCategoryAxis) << "categories:" << cats
                              << "numeric range:[" << m_numericMin << "," << m_numericMax << "]";
@@ -31,8 +31,8 @@ void QBarCategoryAxis::setNumericMapping(qreal numericMin, qreal numericMax) {
 
 void QBarCategoryAxis::appendCategory(const QString& cat) {
     m_categories.append(cat);
-    m_sugarMax = m_categories.size() - 0.5;
-    emit rangeChanged(m_sugarMin, m_sugarMax);
+    m_rangeMax = m_categories.size() - 0.5;
+    emit rangeChanged(m_rangeMin, m_rangeMax);
     emit styleChanged();
 }
 
@@ -42,8 +42,8 @@ void QBarCategoryAxis::insertCategory(int index, const QString& cat) {
         return;
     }
     m_categories.insert(index, cat);
-    m_sugarMax = m_categories.size() - 0.5;
-    emit rangeChanged(m_sugarMin, m_sugarMax);
+    m_rangeMax = m_categories.size() - 0.5;
+    emit rangeChanged(m_rangeMin, m_rangeMax);
     emit styleChanged();
 }
 
@@ -53,16 +53,16 @@ void QBarCategoryAxis::removeCategory(int index) {
         return;
     }
     m_categories.removeAt(index);
-    m_sugarMax = m_categories.size() - 0.5;
-    emit rangeChanged(m_sugarMin, m_sugarMax);
+    m_rangeMax = m_categories.size() - 0.5;
+    emit rangeChanged(m_rangeMin, m_rangeMax);
     emit styleChanged();
 }
 
 void QBarCategoryAxis::clearCategories() {
     m_categories.clear();
-    m_sugarMin = -0.5;
-    m_sugarMax = -0.5;
-    emit rangeChanged(m_sugarMin, m_sugarMax);
+    m_rangeMin = -0.5;
+    m_rangeMax = -0.5;
+    emit rangeChanged(m_rangeMin, m_rangeMax);
     emit styleChanged();
 }
 

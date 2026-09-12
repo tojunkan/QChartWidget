@@ -16,7 +16,7 @@
 #include <QList>
 #include <memory>
 
-class QChartLayer;
+class QChartAbstractLayer;   // 4a：层列表改抽象层类型（二维/三维层公共基类）
 class QChartAbstractProjection;
 class QPainterChartRenderer;
 class QOpenGLChartRenderer;
@@ -49,15 +49,22 @@ public:
     QWidget* glHostWidget() const { return m_glHostWidgetRaw; }
 
     // ===== 图层管理（容器）=====
-    void addLayer(QChartLayer* layer);
-    void removeLayer(QChartLayer* layer);
+    // 4a：层列表类型 = QChartAbstractLayer*（二维层 layers/2d/QChartLayer、三维层 layers/3d/QChartLayer3D 共同基类）
+    void addLayer(QChartAbstractLayer* layer);
+    void removeLayer(QChartAbstractLayer* layer);
     void clearLayers();
-    QList<QChartLayer*> layers() const { return m_layers; }
+    QList<QChartAbstractLayer*> layers() const { return m_layers; }
 
     // ===== 布局 / plotArea =====
     /// 触发 layoutAxes()（重算 plotArea 并广播 plotAreaChanged）
     void relayout();
     QRectF plotArea() const { return m_plotArea; }
+
+    // ===== 4f：最小交互开关 =====
+    /// 交互开关（默认开）。关闭后鼠标事件（拖动/滚轮）**不产生任何视图变化**——
+    /// 基类的 final 事件处理在派发到 onMouse* / onWheel 钩子前统一拦截；开启时行为不变。
+    void setInteractionEnabled(bool on) { m_interactionEnabled = on; }
+    bool isInteractionEnabled() const { return m_interactionEnabled; }
 
     // ===== 边距（边框轴 sizeHint 占用外边距的基值）=====
     void setMargins(qreal left, qreal top, qreal right, qreal bottom);
@@ -90,12 +97,15 @@ protected:
     virtual void drawExternalContent(QPainter& painter);
     /// 渲染前钩子（子类用于同步 viewRect/dataBounds 驱动链等）
     virtual void onBeforePaint() { }
+    /// 4e：plotArea 变化钩子（像素侧驱动）——relayout() 中 plotArea 实际变化后调用；
+    /// 子类据此重 fit 相机（2D：相机 fit 模式；3D：fitCameraConfig），默认空实现。
+    virtual void onPlotAreaChanged(const QRectF& newPlotArea) { Q_UNUSED(newPlotArea); }
     /// 容器当前投影（子类持有唯一投影；pushContextToLayers 使用）
     virtual const QChartAbstractProjection* projection() const { return nullptr; }
     /// 场景背景色（默认白；主题阶段前由子类/调用方覆盖）
     virtual QColor sceneBackgroundColor() const { return Qt::white; }
 
-    // ---- 事件分发钩子（本阶段为空；交互行为待交互阶段实现）----
+    // ---- 事件分发钩子（4f：二维平移/缩放、三维旋转/推拉在此接线；开关见 setInteractionEnabled）----
     virtual void onMousePress(QMouseEvent* e) { Q_UNUSED(e); }
     virtual void onMouseMove(QMouseEvent* e) { Q_UNUSED(e); }
     virtual void onMouseRelease(QMouseEvent* e) { Q_UNUSED(e); }
@@ -111,9 +121,10 @@ protected:
     virtual void pushContextToLayers();
 
     // ===== 成员 =====
-    QList<QChartLayer*> m_layers;    // 非持有（调用方保证生命周期）
+    QList<QChartAbstractLayer*> m_layers;   // 非持有（调用方保证生命周期；4a 起为抽象层类型）
     QRectF m_plotArea;
     bool m_layoutDirty = true;
+    bool m_interactionEnabled = true;   // 4f：最小交互开关（默认开；关闭后鼠标事件零效果）
 
     qreal m_marginLeft   = 20.0;
     qreal m_marginTop    = 20.0;

@@ -129,7 +129,7 @@ void TestWidgetGl::glWidgetRenders()
         qInfo().noquote() << "DUMP plotArea" << pa << "dataBounds" << db << "viewRect" << vr;
         qInfo().noquote() << QString("DUMP xTicks(%1): %2").arg(xt.size()).arg(xs.trimmed());
         qInfo().noquote() << QString("DUMP yTicks(%1): %2").arg(yt.size()).arg(ys.trimmed());
-        qInfo().noquote() << QString("DUMP axisX sugar=%1..%2 axisY sugar=%3..%4 gridVisible=%5")
+        qInfo().noquote() << QString("DUMP axisX range=%1..%2 axisY range=%3..%4 gridVisible=%5")
             .arg(ax.min(), 0, 'g', 6).arg(ax.max(), 0, 'g', 6)
             .arg(ay.min(), 0, 'g', 6).arg(ay.max(), 0, 'g', 6)
             .arg(layer.isGridVisible());

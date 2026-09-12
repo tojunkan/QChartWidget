@@ -6,6 +6,8 @@
 #include "QOpenGLChartRenderer.h"
 #include <QImage>
 #include <QPainter>
+#include <QMouseEvent>     // 4f：交互接线
+#include <QWheelEvent>
 #include <QtMath>
 #include <QLoggingCategory>
 
@@ -55,21 +57,25 @@ QChartAxis* QChartWidget3D::axisZ3D() const { return m_layer3D ? m_layer3D->axis
 
 // ===== 域盒 =====
 
-void QChartWidget3D::setDomainBox(const QVector3D& dataMin, const QVector3D& dataMax)
+void QChartWidget3D::setDomainBox(const QCube& box)
 {
-    m_domainMin = dataMin;
-    m_domainMax = dataMax;
+    m_domainBoxSet = true;   // 4b：数值落在轴上（layer3D->setDataBounds 写三轴范围）
     if (m_layer3D)
-        m_layer3D->setDataBounds(dataMin, dataMax);
+        m_layer3D->setDataBounds(box);   // 4c：QCube 主签名
     fitWorld();
+}
+
+QCube QChartWidget3D::domainBox() const
+{
+    // 4c：域盒访问器（QCube）——按需从 layer3D 的三轴组装，无长期持有
+    return (m_layer3D && m_layer3D->axes3D()) ? m_layer3D->axes3D()->dataBounds() : QCube();
 }
 
 void QChartWidget3D::clearDomainBox()
 {
-    m_domainMin.reset();
-    m_domainMax.reset();
+    m_domainBoxSet = false;
     if (m_layer3D)
-        m_layer3D->setDataBounds(QVector3D(0, 0, 0), QVector3D(10, 10, 10));
+        m_layer3D->setDataBounds(QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10)));   // 4c：QCube 默认盒
     fitWorld();
 }
 
@@ -108,25 +114,108 @@ void QChartWidget3D::fitWorld()
     QChartCamera3D* cam = m_layer3D->camera3D();
     if (!cam) return;
 
-    // 域盒（无则 axes3D 数据盒，再退默认 0..10）
-    QVector3D mn = m_domainMin.value_or(QVector3D(0, 0, 0));
-    QVector3D mx = m_domainMax.value_or(QVector3D(10, 10, 10));
-    if (m_layer3D->axes3D() && m_layer3D->axes3D()->dataBounds.isValid()
-        && !m_domainMin.has_value()) {
-        mn = m_layer3D->axes3D()->dataBounds.min;
-        mx = m_layer3D->axes3D()->dataBounds.max;
-    }
-    const QVector3D pad = (mx - mn) * 0.06f;
-    mn -= pad;
-    mx += pad;
+    // 4d①：autoFit 门——关闭时不做自动重算（相机零触碰，保留用户手调参数）
+    if (!cam->autoFit())
+        return;
 
-    cam->setViewCube(QCube(mn, mx));
-    // 重算 distance/near/far（fov 由相机保持；半对角线 → 距离）
-    const qreal halfDiag = (mx - mn).length() * 0.5;
-    cam->setDistance(halfDiag / qMax(qreal(0.05), qSin(qDegreesToRadians(cam->fov()) * 0.5)));
-    cam->resetNearFar();
+    // 4d②：域盒（4b：由三根轴范围组装；4c：全程用 QCube 访问器）→ 外扩 6% → 数据锚点 viewCube
+    const QCube box = domainBox();
+    const QCube fitBox = box.isValid()
+        ? QCube(box.min, box.max) : QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10));
+    const QVector3D pad = fitBox.size() * 0.06f;   // 外扩 6%（与迁移前 (max-min)*0.06 逐位一致）
+    cam->setViewCube(QCube(fitBox.min - pad, fitBox.max + pad));
+
+    // 4d②：镜头解算并入相机 fitCameraConfig（原手写 halfDiag/sin(fov/2) + setDistance + 近远面处理
+    // 全部由相机承担）：
+    //  · aspect ≥ 1 或 plotArea 退化（按 aspect=1）：d == r / max(0.05, sin(fov/2))，与 4c 内联式逐位一致；
+    //  · aspect < 1（竖高视口）：自 4d 起改按**横向**临界半视角解算
+    //    （d = r / max(0.05, sin(atan(tan(fov/2)·aspect)))）——4c 内联式忽略 aspect，此处为 4d 的
+    //    有意改进（t46 裁定①，已作为“表现可观测变更”登记；竖高视口下相机自动后退以完整包容数据）。
+    // 近远面由相机按内切值收尾。
+    cam->fitCameraConfig(plotArea(), FitConstraint::FixedFov);
+
+    // 姿态复位（widget 策略，非相机 fit 职责）
     if (qAbs(cam->yaw() - 45.0) > 0.5) cam->setYaw(45.0);
     if (qAbs(cam->pitch() - 30.0) > 0.5) cam->setPitch(30.0);
+}
+
+// ===== 4e：像素侧驱动（plotArea 变化 → 仅重解算镜头）=====
+
+void QChartWidget3D::onPlotAreaChanged(const QRectF& newPlotArea)
+{
+    Q_UNUSED(newPlotArea);
+    QChartCamera3D* cam = m_layer3D ? m_layer3D->camera3D() : nullptr;
+    if (!cam) return;
+    if (!cam->autoFit()) return;   // 4d 开关语义一致：关闭时零触碰（保留用户手调参数）
+    // 仅重解算镜头：plotArea 宽比 → 窄边临界半视角 → distance/fov/near/far（不改锚点/姿态）
+    ++m_plotAreaFitCount;   // 像素侧驱动次数（hook 实跑一次解算；宽视口下常为幂等无变化）
+    if (cam->fitCameraConfig(plotArea(), FitConstraint::FixedFov))
+        ++m_plotAreaFitChangeCount;   // 其中真正改变镜头的次数（竖高视口 → 相机后退）
+}
+
+// ===== 4f：鼠标交互接线（事件 → 既有相机 API；不动 4a–4e 机制）=====
+
+// 滚轮 → dolly 因子：120/格 → 1.10 倍；上滚（正值）放大（视野盒收缩 → factor < 1）
+qreal QChartWidget3D::wheelDollyFactor(int angleDeltaY)
+{
+    if (angleDeltaY == 0) return 1.0;
+    return qPow(1.10, -qreal(angleDeltaY) / 120.0);
+}
+
+void QChartWidget3D::onMousePress(QMouseEvent* e)
+{
+    if (e->button() == Qt::LeftButton)                       m_drag3D = Drag3D::Orbit;
+    else if (e->button() == Qt::MiddleButton || e->button() == Qt::RightButton) m_drag3D = Drag3D::Pan;
+    else return;
+    m_lastPixel = e->position();
+}
+
+void QChartWidget3D::onMouseMove(QMouseEvent* e)
+{
+    QChartCamera3D* cam = camera3D();
+    if (!cam || m_drag3D == Drag3D::None) return;
+    const QPointF pos = e->position();
+    const QPointF d = pos - m_lastPixel;
+    m_lastPixel = pos;
+    if (qFuzzyIsNull(d.x()) && qFuzzyIsNull(d.y())) return;
+
+    if (m_drag3D == Drag3D::Orbit) {
+        cam->orbit(orbitYawDelta(d.x()), orbitPitchDelta(d.y()));   // 相机内部钳制 pitch ±89°
+        scheduleRepaint();
+        return;
+    }
+    // Pan（中键/右键）：平移视野盒中心（panViewCube）——不改盒尺寸、不触发 fit
+    const QRectF pa = plotArea();
+    if (pa.width() <= 0.0 || pa.height() <= 0.0) return;
+    const QVector3D size = cam->viewCubeSize();
+    const qreal kx = size.x() / pa.width();
+    const qreal ky = size.y() / pa.height();
+    if (qFuzzyIsNull(kx) && qFuzzyIsNull(ky)) return;
+    cam->panViewCube(-d.x() * kx, d.y() * ky);   // 拖动内容：中心反向平移（屏向下 → 世界 +Y）
+    scheduleRepaint();
+}
+
+void QChartWidget3D::onMouseRelease(QMouseEvent* e)
+{
+    if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton || e->button() == Qt::RightButton)
+        m_drag3D = Drag3D::None;
+}
+
+void QChartWidget3D::onWheel(QWheelEvent* e)
+{
+    QChartCamera3D* cam = camera3D();
+    if (!cam) return;
+    const qreal f = wheelDollyFactor(e->angleDelta().y());
+    if (qFuzzyCompare(f, 1.0)) return;
+    const QCube before = cam->viewCube();
+    cam->dolly(f);                                            // 改视野盒尺寸（既有入口）
+    if (cam->viewCube().min == before.min && cam->viewCube().max == before.max) return;   // 无变化 → 无联动
+    // autoFit 联动：开 → 既有 fit 路径重算 distance/near/far（不改锚点、不复位姿态）；关 → 保留手调参数
+    if (cam->autoFit()) {
+        ++m_interactionFitCount;                              // 诊断计数（每次 dolly 后一次解算）
+        cam->fitCameraConfig(plotArea(), FitConstraint::FixedFov);
+    }
+    scheduleRepaint();
 }
 
 QPointF QChartWidget3D::worldToPixel(const QVector3D& w) const
