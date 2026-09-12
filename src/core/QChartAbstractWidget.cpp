@@ -185,11 +185,17 @@ void QChartAbstractWidget::pushContextToLayers()
 {
     const QChartAbstractProjection* proj = projection();
     const QColor bg = sceneBackgroundColor();
+    const qreal aspect = (m_plotArea.height() > 0.0) ? m_plotArea.width() / m_plotArea.height() : 1.0;
     for (QChartAbstractLayer* layer : m_layers) {
         if (!layer) continue;
         layer->setSceneProjection(proj);
         layer->setScenePlotArea(m_plotArea);
         layer->setSceneBackground(bg);
+        // 4g：视图状态指纹（相机视图投影 × plotArea × 投影 × 背景）→ 视图变化才置脏（重收集）
+        if (const QChartAbstractCamera* cam = layer->scene().camera)
+            layer->setSceneViewState(cam->viewProjectionMatrix(aspect), m_plotArea, proj, bg);
+        else
+            layer->setSceneViewState(QMatrix4x4(), m_plotArea, proj, bg);
     }
 }
 
@@ -199,8 +205,9 @@ void QChartAbstractWidget::renderLayers(QPaintDevice* device)
     pushContextToLayers();   // plotArea/投影/背景 → 各层场景（渲染前恒同步，幂等）
     for (QChartAbstractLayer* layer : m_layers) {
         if (!layer) continue;
-        layer->collectPrimitives();
-        m_cpuRenderer->invalidateView();   // 每层场景各自重算变换（相机/内容不同）
+        // 4g：脏才重收集（背景随可见 numeric 范围更新）；无变化跳过 → 也不重算变换/裁剪
+        if (layer->ensureSceneCollected())
+            m_cpuRenderer->invalidateView();   // 场景快照重建（视图或数据变化）→ 重算变换与裁剪
         m_cpuRenderer->render(layer->scene(), device);
     }
 }
@@ -227,8 +234,9 @@ void QChartAbstractWidget::renderLayersGL(QPaintDevice* device)
 
     for (QChartAbstractLayer* layer : m_layers) {
         if (!layer) continue;
-        layer->collectPrimitives();
-        m_glRenderer->invalidateView();
+        // 4g：同 CPU 路径——脏才重收集；无变化跳过（也不重算变换/裁剪）
+        if (layer->ensureSceneCollected())
+            m_glRenderer->invalidateView();
         m_glRenderer->render(layer->scene(), &labelDev);   // 图元→当前 GL FBO；标签→labelDev
     }
 

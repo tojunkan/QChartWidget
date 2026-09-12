@@ -61,7 +61,11 @@ public:
     /// 数据变化（Series 增删改、颜色变化等）→ 下一次 render 重算变换
     // void invalidateData() { m_dataDirty = true; }
 
-    /// 视图变化（Camera 变化、窗口 resize 等）→ 下一次 render 重算变换和裁剪
+    /// 场景快照重建（视图变化：Camera 操作 / resize 经 plotArea / 投影切换；或数据变化）→
+    /// 下一次 render 重算变换与裁剪。
+    /// 4g：本标记由 widget 在“层重收集（ensureSceneCollected() 为真）”时调用——不再每帧无条件置位；
+    /// 规则更正：**视图变化必须重收集背景**（网格脊/刻度/标签由轴持有的可见 numeric 范围生成），
+    /// 本阶段为**粗粒度 viewDirty = 全量更新（重收集 + 变换 + 裁剪）**，背景/前景分级留待后续批次。
     void invalidateView() { m_viewDirty = true; }
 
 protected:
@@ -125,7 +129,9 @@ protected:
 
     // 内部状态
     // bool m_dataDirty = true;          // 数据变化 → 需要重算变换 数据变化应该在构建scene的时候判定，这是widget的活
-    bool m_viewDirty = true;          // 视图变化 → 需要重算变换和裁剪
+    // 4g：视图/数据变化（= 场景快照重建）→ 需要重算变换与裁剪；无变化则不重算（缓存有效）。
+    // 粗粒度全量更新语义见 invalidateView() 注释（背景/前景分级留待后续批次）。
+    bool m_viewDirty = true;
     QVector<bool> m_visibilityCache;  // 与 scene.primitives 一一对应
 };
 

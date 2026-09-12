@@ -14,7 +14,9 @@ void QChartRenderer::render(QChartScene& scene, QPaintDevice* device)
 
     onRenderBegin(device);
 
-    // ---- 步骤 2：变换与裁剪（仅在视图脏或数据脏时执行） ----
+    // ---- 步骤 2：变换与裁剪（4g：仅在场景快照重建后执行——widget 在层重收集时置 viewDirty；
+    //      视图变化必须重收集背景（网格/刻度/标签随可见 numeric 范围更新），
+    //      当前为粗粒度全量更新（重收集 + 变换 + 裁剪），背景/前景分级留待后续批次） ----
     if (m_viewDirty) {
         transformNumericToCartesian(scene);
         cullAndResolveLabels(scene);

@@ -18,4 +18,7 @@ private slots:
 
     // ---- 4f：鼠标交互（二维平移/缩放 + 开关 + 计数）----
     void mouseInteractionContract();
+
+    // ---- 4g：脏模型（视图变化重收集 / 无变化跳过 / 数据变化仍重收集 + 背景随范围更新）----
+    void dirtyModelContract();
 };

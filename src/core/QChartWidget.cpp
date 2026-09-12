@@ -63,6 +63,18 @@ void QChartWidget::addAxis(QChartAxis* a)
     m_axes.append(a);
     // 4e：轴范围变化 = 数值侧驱动（首帧后同样生效——取代 4c 的一次性闩锁语义）
     connect(a, &QChartAxis::rangeChanged, this, &QChartWidget::onAxisRangeChanged, Qt::UniqueConnection);
+    // 4g-fix（t58 F1）：轴样式类变化 → 同样必须重收集（网格脊/刻度/标签由轴刻度与样式生成）。
+    // 逐信号接线 + 内容指纹（下方 onBeforePaint 注入）双保险；addAxis 对同一轴只连一次（m_axes 去重）。
+    // （lambda 内联：QChartWidget.h 不在本任务 inScope，故不新增成员函数）
+    auto markContentDirty = [this]() {
+        for (QChartLayer* l : layers2D())
+            if (l) l->invalidateData();
+        scheduleRepaint();
+    };
+    connect(a, &QChartAxis::tickCountChanged, this, [markContentDirty]() { markContentDirty(); });
+    connect(a, &QChartAxis::subTickCountChanged, this, [markContentDirty]() { markContentDirty(); });
+    connect(a, &QChartAxis::styleChanged, this, [markContentDirty]() { markContentDirty(); });
+    connect(a, &QChartAxis::visibleChanged, this, [markContentDirty]() { markContentDirty(); });
     const QList<QChartLayer*> ls = layers2D();
     if (!ls.isEmpty()) {
         attachToLayer(ls.first(), a);
@@ -370,7 +382,30 @@ void QChartWidget::onBeforePaint()
     }
     if (m_numericDirty) {
         m_numericDirty = false;
-        applyNumericFit();
+        if (!applyNumericFit()) {
+            // 4g-fix（t58 F2）：退化范围/未 fit（相机窗口未变 → 视图指纹不变）时轴状态仍已变化，
+            // 必须显式置脏——否则绘图区内网格/刻度保持陈旧，而边框轴外带已更新（内外不一致）。
+            for (QChartLayer* l : layers2D())
+                if (l) l->invalidateData();
+        }
+    }
+    // 4g-fix（t58 F4）：内容贡献指纹注入（轴范围/刻度/子刻度/可见性/颜色 + 网格样式 + 数据版本）
+    for (QChartLayer* l : layers2D()) {
+        if (!l) continue;
+        quint64 key = 0;
+        for (const QChartAxis* a : { l->axisX(), l->axisY() }) {
+            if (!a) { key = QChartAbstractLayer::contentHash(key, 0); continue; }
+            key = QChartAbstractLayer::contentHashReal(key, a->min());
+            key = QChartAbstractLayer::contentHashReal(key, a->max());
+            key = QChartAbstractLayer::contentHash(key, quint64(a->tickCount()));
+            key = QChartAbstractLayer::contentHash(key, quint64(a->subTickCount()));
+            key = QChartAbstractLayer::contentHash(key, a->isVisible() ? 1u : 2u);
+            key = QChartAbstractLayer::contentHash(key, quint64(a->color().rgba()));
+        }
+        key = QChartAbstractLayer::contentHash(key, l->isGridVisible() ? 1u : 2u);
+        key = QChartAbstractLayer::contentHash(key, quint64(l->gridColor().rgba()));
+        key = QChartAbstractLayer::contentHash(key, l->contentRevision());
+        l->setSceneContentState(key);
     }
 }
 

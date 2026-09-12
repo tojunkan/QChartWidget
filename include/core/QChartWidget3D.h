@@ -90,7 +90,12 @@ public:
     ///   autoFit 开 → 随后走既有 fit 路径（fitCameraConfig(plotArea, FixedFov)）重算 distance/近远面；
     ///   autoFit 关 → 保留用户手调参数（distance/fov/near/far 不变）。
     /// 说明：三维的 viewCube→三轴反算仍留后（见上），故交互后三轴范围不变（相机侧留后项）。
-    static qreal orbitYawDelta(qreal dxPixels)   { return dxPixels * 0.5; }    // °/px（纯计算）
+    // 手势→相机约定（4g 方向修正）：**拖动的是“内容”**——向右拖动 ⇒ 画面向右旋转 ⇒
+    //   相机必须向左绕行 ⇒ yaw 减小（QChartCamera3D 中 yaw 增大 = 相机往 +X 即右移 = 画面左转）。
+    //   仅在本手势映射层取反，不改 QChartCamera3D::orbit() 的既有语义。
+    //   上下方向既有行为正确（上拖 dy<0 ⇒ pitch 增大 ⇒ 相机下移 ⇒ 画面向上抬头感），保持不变。
+    static qreal orbitYawDelta(qreal dxPixels)   { return -dxPixels * 0.5; }   // °/px（右拖 → 负增量）
+
     static qreal orbitPitchDelta(qreal dyPixels) { return -dyPixels * 0.5; }   // °/px（屏幕向下 → 俯角减小）
     static qreal wheelDollyFactor(int angleDeltaY);                            // 120/格 → 1.10 倍
     int interactionFitCount() const { return m_interactionFitCount; }          // 诊断：滚轮触发的 fit 次数
@@ -125,6 +130,11 @@ private:
     Drag3D m_drag3D = Drag3D::None;
     QPointF m_lastPixel;
     int  m_interactionFitCount = 0;     // 4f 诊断：滚轮 dolly + autoFit 触发的 fit 次数
+
+    // 4g：渲染场景缓存（renderer 就地变换/裁剪，故缓存保留“已变换”状态）——
+    //     仅当层重收集（ensureSceneCollected() 为真）时刷新缓存并置 renderer viewDirty；
+    //     无变化则复用缓存（跳过重收集与变换）✓ 避免每帧强制更新。
+    QChartScene m_sceneCache;
 
     // ===== 旧实体恢复点（注释保留；归属阶段见各注）=====
     // std::unique_ptr<QChartCamera3D> m_camera3D;        —— 相机归 layer3D（批次 B2 移除）

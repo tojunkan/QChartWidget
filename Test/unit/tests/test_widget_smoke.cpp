@@ -51,6 +51,17 @@ void sendWheel(QWidget* w, const QPointF& pos, int deltaY)
     QApplication::sendEvent(w, &ev);
 }
 
+// 4g-fix（t58）：绘图区内像素级差异判定（轴/内容状态已变 ⇒ 图内必须变化）
+bool imagesDifferInPlot(const QImage& a, const QImage& b, const QRectF& plotArea)
+{
+    if (a.size() != b.size()) return true;
+    const QRect r = plotArea.toRect().intersected(a.rect());
+    for (int y = r.top(); y <= r.bottom(); ++y)
+        for (int x = r.left(); x <= r.right(); ++x)
+            if (a.pixel(x, y) != b.pixel(x, y)) return true;
+    return false;
+}
+
 int inkAll(const QImage& img)
 {
     return inkIn(img, QRect(0, 0, img.width(), img.height()));
@@ -629,4 +640,103 @@ void TestWidgetSmoke::mouseInteractionContract()
                              .arg(drag.x()).arg(drag.y()).arg(expect.x()).arg(expect.y())
                              .arg(panFit).arg(panBack).arg(f, 0, 'g', 6)
                              .arg(zoomFit).arg(zoomBack).arg(w.fitCount()).arg(w.backCalcCount());
+}
+
+// ===== 4g：脏模型契约（二维）——视图变化重收集 / 无变化跳过 / 数据变化仍重收集 =====
+void TestWidgetSmoke::dirtyModelContract()
+{
+    QChartWidget w;
+    QValueAxis ax(nullptr, Qt::AlignBottom), ay(nullptr, Qt::AlignLeft);
+    QChartLayer layer;
+    ax.setRange(-10, 10); ay.setRange(-10, 10);
+    w.addAxis(&ax); w.addAxis(&ay); w.addLayer(&layer);
+    w.resize(420, 340);
+    w.show();
+    QVERIFY2(QTest::qWaitForWindowExposed(&w), "offscreen 下窗口应暴露");
+    w.grab();                                     // 首帧（必然重收集）
+    layer.resetCollectCount();
+
+    auto maxNumX = [&layer]() {                   // 背景图元的 numeric 极值（变换只写 cart*，num* 保真）
+        qreal m = -1e30;
+        for (const QChartPrimitive& p : layer.scene().primitives) {
+            m = qMax(m, qreal(p.numA.x()));
+            if (p.type == QChartPrimitive::Type::Line) m = qMax(m, qreal(p.numB.x()));
+        }
+        return m;
+    };
+
+    // ① 无变化 → 跳过重收集（4g：不再每帧重建背景）
+    w.grab();
+    QCOMPARE(layer.collectCount(), 0);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 0);
+
+    // ② 视图变化（相机侧平移）→ 重收集 +1，且 renderer 重算变换（相机侧链：fit 0）
+    const int fit0 = w.fitCount();
+    w.panViewCartesian(1.0, 1.0);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 1);
+    QCOMPARE(w.fitCount(), fit0);
+
+    // ③ 数值侧驱动（轴范围 → 相机窗口）→ 重收集 +1，且背景网格随新范围重建
+    ax.setRange(0.0, 100.0);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 2);
+    const qreal e100a = maxNumX();
+    QVERIFY2(e100a > 90.0, qPrintable(QString("背景应重收集到新轴范围（numeric 极值应≈100，实为 %1）").arg(e100a)));
+
+    ax.setRange(-10.0, 10.0);                     // 回旧范围 → 图元随范围回退（对照）
+    w.grab();
+    QCOMPARE(layer.collectCount(), 3);
+    const qreal e10 = maxNumX();
+    QVERIFY2(e10 > 8.0 && e10 < 13.0,
+             qPrintable(QString("回旧范围后 numeric 极值应≈10，实为 %1").arg(e10)));
+    QVERIFY2(e100a > e10 + 50.0, "两个范围的背景几何必须明显不同（证明按范围重建，而非陈旧缓存）");
+
+    ax.setRange(0.0, 100.0);                      // 再回新范围 → 几何应与首次逐位一致（可复现重建）
+    w.grab();
+    QCOMPARE(layer.collectCount(), 4);
+    QVERIFY2(qAbs(maxNumX() - e100a) < 1e-9,
+             qPrintable(QString("同范围重建应逐位一致：首次 %1 vs 再次 %2").arg(e100a).arg(maxNumX())));
+
+    // ④ 数据变化（invalidateData）→ 仍会重收集
+    layer.invalidateData();
+    w.grab();
+    QCOMPARE(layer.collectCount(), 5);
+
+    // ⑤ 交互（滚轮缩放）→ 视图变化 → 重收集 +1
+    sendWheel(&w, w.plotArea().center(), 120);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 6);
+
+    // ⑥ t58 F1：轴样式（刻度数）变化 → 置脏重收集 + 绘图区内图像变化
+    const QImage imgBeforeTick = w.grab().toImage();
+    ax.setTickCount(17);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 7);
+    QVERIFY2(imagesDifferInPlot(imgBeforeTick, w.grab().toImage(), w.plotArea()),
+             "刻度数变化后绘图区内图像应变化（t58 F1 回归）");
+
+    // ⑦ t58 F2：退化轴范围（min==max，不 fit、相机不变）→ 仍须置脏重收集 + 图内图像随轴变化
+    const QImage imgBeforeDeg = w.grab().toImage();
+    ax.setRange(5.0, 5.0);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 8);
+    QVERIFY2(imagesDifferInPlot(imgBeforeDeg, w.grab().toImage(), w.plotArea()),
+             "退化轴范围后绘图区内图像应变化（t58 F2 回归：不得内外不一致）");
+    ax.setRange(-10.0, 10.0);                     // 恢复（重新 fit → 再收集一次）
+    w.grab();
+    QCOMPARE(layer.collectCount(), 9);
+
+    // ⑧ t58 F4：内容指纹覆盖网格样式（不依赖逐信号接线）
+    layer.setGridVisible(false);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 10);
+    layer.setGridVisible(true);
+    w.grab();
+    QCOMPARE(layer.collectCount(), 11);
+
+    qInfo().noquote() << QString("4g 2D 脏模型: 稳态跳过 ×2；平移/轴范围/回退/同范围重建/数据/滚轮/刻度数/退化范围/网格样式 → 重收集累计 %1 次"
+                                 "（背景 numeric 极值：范围 0..100 → %2，范围 -10..10 → %3，同范围重建逐位一致）")
+                             .arg(layer.collectCount()).arg(e100a).arg(e10);
 }

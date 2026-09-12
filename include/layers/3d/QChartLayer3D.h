@@ -68,7 +68,14 @@ public:
     const QChartAxes3D* axes3D() const { return m_axes3D.get(); }
 
     // 网格模式
-    void setGridMode(GridMode m) { m_gridMode = m; }
+    // 4g-fix（t58 F3）：网格模式直接影响收集内容 → setter 必须置脏（否则首帧后切换模式绘图区内保持陈旧）
+    void setGridMode(GridMode m)
+    {
+        if (m_gridMode == m) return;
+        m_gridMode = m;
+        invalidateData();
+        emit gridChanged();
+    }
     GridMode gridMode() const { return m_gridMode; }
 
     // 轴/网格数据盒（4b：不独立持有——写入 = 写三根轴的范围；读取 = 从三轴按需组装）

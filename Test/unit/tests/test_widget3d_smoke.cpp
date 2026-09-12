@@ -36,6 +36,17 @@ void sendWheel3D(QWidget* w, const QPointF& pos, int deltaY)
     QApplication::sendEvent(w, &ev);
 }
 
+// 4g-fix（t58）：绘图区内像素级差异判定（轴/内容状态已变 ⇒ 图内必须变化）
+bool imagesDifferInPlot3D(const QImage& a, const QImage& b, const QRectF& plotArea)
+{
+    if (a.size() != b.size()) return true;
+    const QRect r = plotArea.toRect().intersected(a.rect());
+    for (int y = r.top(); y <= r.bottom(); ++y)
+        for (int x = r.left(); x <= r.right(); ++x)
+            if (a.pixel(x, y) != b.pixel(x, y)) return true;
+    return false;
+}
+
 int inkTotal(const QImage& img)
 {
     int n = 0;
@@ -671,11 +682,28 @@ void TestWidget3DSmoke::mouseInteraction3DContract()
     sendMouse3D(&w, QEvent::MouseMove, p0 + d, Qt::NoButton);
     sendMouse3D(&w, QEvent::MouseButtonRelease, p0 + d, Qt::LeftButton);
     // 期望值用字面常量（t54 F2：不得用生产 helper 自证；helper 仅用于下方接线断言）
-    QVERIFY2(qAbs(cam->yaw() - (yaw0 + 20.0)) < 1e-9, "yaw 增量 = 40px × 0.5°/px = +20°");
+    // 4g：手势→相机约定 = 拖动内容（右拖 ⇒ yaw 减小 ⇒ 相机左移 ⇒ 画面右转）
+    QVERIFY2(qAbs(cam->yaw() - (yaw0 - 20.0)) < 1e-9, "yaw 增量 = 40px × (-0.5)°/px = -20°（4g 方向修正）");
     QVERIFY2(qAbs(cam->pitch() - (pitch0 - 15.0)) < 1e-9, "pitch 增量 = 30px × (-0.5)°/px = -15°");
-    QVERIFY2(qAbs(QChartWidget3D::orbitYawDelta(1.0) - 0.5) < 1e-12
+    QVERIFY2(qAbs(QChartWidget3D::orbitYawDelta(1.0) + 0.5) < 1e-12
                  && qAbs(QChartWidget3D::orbitPitchDelta(1.0) + 0.5) < 1e-12,
-             "接线断言：orbit 单位增量恰为 0.5 / -0.5 °/px（helper 对字面常量）");
+             "接线断言：orbit 单位增量恰为 -0.5 / -0.5 °/px（helper 对字面常量）");
+
+    // 4g 方向证据（与 t57 探针同判据）：右拖 ⇒ 画面右转 ⇒ 正对相机的面心屏幕 x 右移
+    {
+        cam->setYaw(0.0);
+        cam->setPitch(0.0);
+        const QVector3D front(0.0f, 0.0f, 3.0f);        // yaw=0 时相机沿 -Z 看 → 该点在画面中心
+        const qreal fx0 = cam->project(front, pa).screen.x();
+        sendMouse3D(&w, QEvent::MouseButtonPress, p0, Qt::LeftButton);
+        sendMouse3D(&w, QEvent::MouseMove, p0 + QPointF(20.0, 0.0), Qt::NoButton);
+        sendMouse3D(&w, QEvent::MouseButtonRelease, p0 + QPointF(20.0, 0.0), Qt::LeftButton);
+        const qreal fx1 = cam->project(front, pa).screen.x();
+        QVERIFY2(fx1 > fx0,
+                 qPrintable(QString("4g：右拖 20px → 正对面心屏幕 x 应右移（画面右转）：%1 → %2")
+                                .arg(fx0, 0, 'f', 3).arg(fx1, 0, 'f', 3)));
+        QVERIFY2(qAbs(cam->yaw() - (0.0 - 10.0)) < 1e-9, "右拖 20px → yaw -10°（映射层取反）");
+    }
 
     sendMouse3D(&w, QEvent::MouseButtonPress, p0, Qt::LeftButton);
     sendMouse3D(&w, QEvent::MouseMove, p0 + QPointF(0.0, 5000.0), Qt::NoButton);
@@ -748,6 +776,71 @@ void TestWidget3DSmoke::mouseInteraction3DContract()
     QVERIFY2(cam->viewCube() == vcOff, "开关关闭：视野盒不变");
     QCOMPARE(cam->distance(), dOff); QCOMPARE(cam->nearPlane(), nOff); QCOMPARE(cam->farPlane(), fOff);
     w.setInteractionEnabled(true);
+
+    // ---- 4g：脏模型计数（视图变化 → 重收集 +1；无变化 → 跳过；数据/轴范围变化 → 仍重收集）----
+    {
+        QChartLayer3D* l3 = w.layer3D();
+        QVERIFY2(l3 != nullptr, "layer3D 非空");
+        QChartWidget3D w2;                                  // 独立夹具（避免前段交互状态干扰）
+        QCartesianProjection3D proj2;
+        w2.setProjection3D(&proj2);
+        w2.setDomainBox(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));
+        w2.resize(720, 540);
+        w2.show();                                          // 需 show 才会真正走 paint → 渲染路径
+        QVERIFY2(QTest::qWaitForWindowExposed(&w2), "offscreen 下窗口应暴露");
+        w2.grab();                                          // 首帧（必然重收集）
+        QChartLayer3D* l = w2.layer3D();
+        QVERIFY(l != nullptr);
+        l->resetCollectCount();
+        w2.grab();                                          // 无变化 → 跳过重收集
+        QCOMPARE(l->collectCount(), 0);
+        QChartCamera3D* cam2 = w2.camera3D();
+        cam2->orbit(5.0, 0.0);                              // 视图变化（相机）
+        w2.grab();
+        QCOMPARE(l->collectCount(), 1);
+        w2.grab();                                          // 再次无变化
+        QCOMPARE(l->collectCount(), 1);
+        l->invalidateData();                                // 数据变化 → 仍重收集
+        w2.grab();
+        QCOMPARE(l->collectCount(), 2);
+        w2.axisX3D()->setRange(-4.0, 4.0);                  // 三维轴范围驱动 → 重收集
+        w2.grab();
+        QCOMPARE(l->collectCount(), 3);
+        w2.relayout();                                      // 同几何 → 指纹不变 → 幂等（不重收集）
+        QCOMPARE(l->collectCount(), 3);
+        w2.grab();
+        QCOMPARE(l->collectCount(), 3);
+
+        // 4g-fix（t58 F1）：三维轴样式（刻度数）→ 置脏重收集 + 图内图像变化
+        const QImage beforeTick = w2.grab().toImage();
+        w2.axisX3D()->setTickCount(17);
+        w2.grab();
+        QCOMPARE(l->collectCount(), 4);
+        QVERIFY2(imagesDifferInPlot3D(beforeTick, w2.grab().toImage(), w2.plotArea()),
+                 "三维刻度数变化后绘图区内图像应变化（t58 F1 回归）");
+
+        // 4g-fix（t58 F2）：三维退化轴范围 → 置脏重收集 + 图内图像变化
+        const QImage beforeDeg = w2.grab().toImage();
+        w2.axisX3D()->setRange(5.0, 5.0);
+        w2.grab();
+        QCOMPARE(l->collectCount(), 5);
+        QVERIFY2(imagesDifferInPlot3D(beforeDeg, w2.grab().toImage(), w2.plotArea()),
+                 "三维退化轴范围后绘图区内图像应变化（t58 F2 回归）");
+        w2.axisX3D()->setRange(-3.0, 3.0);
+        w2.grab();
+        QCOMPARE(l->collectCount(), 6);
+
+        // 4g-fix（t58 F3）：网格模式切换 → 置脏重收集 + 图元集变化（faceline → box）
+        const int primsBefore = l->scene3D().primitives.size();
+        w2.setGridMode3D(QChartLayer3D::GridMode::Box);
+        w2.grab();
+        QCOMPARE(l->collectCount(), 7);
+        QVERIFY2(l->scene3D().primitives.size() != primsBefore,
+                 qPrintable(QString("网格模式切换应改变图元集：faceline %1 → box %2")
+                                .arg(primsBefore).arg(l->scene3D().primitives.size())));
+        qInfo().noquote() << QString("4g 3D 脏模型: 稳态跳过；相机/数据/轴范围变化各 +1（累计 %1）")
+                                 .arg(l->collectCount());
+    }
 
     qInfo().noquote() << QString("4f 3D: orbit Δ=(%1°,%2°)/（%3,%4)px；滚轮 f(120)=%5（autoFit 开 fit=%6 / 关 fit=%7）；"
                                  "中键 pan Δ中心=(%8,%9)")
