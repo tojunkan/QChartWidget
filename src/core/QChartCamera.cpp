@@ -172,7 +172,13 @@ QMatrix4x4 QChartCamera::viewMatrix() const {
     // 旧写法“先 translate 后 scale”得到 M = T·S：作用顺序变成“先缩放、后平移”，平移量未被缩放 →
     // 视图中心非原点时几何被推出裁剪域（GL 整幅出画；CPU project() 是独立线性映射，故表现为 CPU/GL 不一致）。
     // 语义固定为 M = S·T：任意 viewRect 四角映射到 NDC ±1；中心为原点时 T 为零平移，与旧写法逐位一致。
-    mat.scale(2.0f / m_viewRect.width(), -2.0f / m_viewRect.height(), 1.0f);   // 缩放到 [-1,1]（Y 取反：世界 Y 向上）
+    // t72：Y 缩放**不得**再取负号。GL 视口的 NDC +Y 指向屏幕上方（窗口坐标 Y 向上），而本类 CPU 侧
+    // project() 的 py = plotArea.bottom() − ny·plotArea.height() 表示“viewRect.top（数值小端）在屏幕下方”。
+    // 若此处写 −2/h，viewRect.top 会被映射到 NDC +1（屏幕上方）⇒ GL 画面相对 CPU 呈**垂直镜像**
+    // （t71 诊断：整窗抓图行簇逐条镜像、范围上移时 GL 行号递减）。改用 +2/h 后：
+    //   viewRect.top → NDC −1 → 屏幕下方；viewRect.bottom → NDC +1 → 屏幕上方，与 project() 逐位同向。
+    // 判据（已入测试）：同一点经 viewMatrix→NDC→像素 与 project() 的像素差 < 1e-6，四角 NDC 符号显式断言。
+    mat.scale(2.0f / m_viewRect.width(), 2.0f / m_viewRect.height(), 1.0f);    // 缩放到 [-1,1]（Y 同向：NDC +1 = 数值大端 = 屏幕上方）
     mat.translate(-m_viewRect.center().x(), -m_viewRect.center().y(), 0.0f);  // 平移使 viewRect 中心位于原点
     return mat;
 }

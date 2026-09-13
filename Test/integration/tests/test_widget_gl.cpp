@@ -7,6 +7,10 @@
 #include <QtMath>
 #include <cmath>
 #include <QRegularExpression>
+#include <QLoggingCategory>
+#include <QApplication>   // t74：真实鼠标/滚轮事件 + 事件循环驱动
+#include <QMouseEvent>
+#include <QWheelEvent>
 #include <QGuiApplication>
 #include <QOpenGLWidget>
 #include <QOpenGLContext>
@@ -15,6 +19,7 @@
 
 #include "QChartWidget.h"
 #include "QChartLayer.h"
+#include "QChartCamera.h"   // t72：viewMatrix/project 朝向断言
 #include "QValueAxis.h"
 #include "QOpenGLChartRenderer.h"
 
@@ -44,6 +49,21 @@ void TestWidgetGl::initTestCase()
 
 void TestWidgetGl::glWidgetRenders()
 {
+    // t72：QtTest 有**全局**消息预算（默认 2000 条；超出后只打一行 "Maximum amount of warnings exceeded"
+    // 并**静默跳过本测试函数剩余的断言**）。本套件之前的轴矩阵用例已消耗约 1.7k 条 → 本函数（断言最多、
+    // 且含 t72 跨后端朝向断言与 4h-b 偏心回归）随时可能被截断。故在整个函数作用域内抑制高噪声的
+    // chart.axis*/layer/camera 调试类别；不影响断言语义：QTest::ignoreMessage 匹配的是无类别的
+    // qWarning（"No current OpenGL context!"）。函数退出（含 QVERIFY 提前 return）时由析构恢复默认规则。
+    struct DebugSilencer {
+        DebugSilencer()
+        {
+            QLoggingCategory::setFilterRules(QStringLiteral(
+                "chart.axis=false\nchart.axis.value=false\nchart.axis.category=false\n"
+                "chart.axis.datetime=false\nchart.axis.log=false\nchart.layer=false\nchart.camera=false"));
+        }
+        ~DebugSilencer() { QLoggingCategory::setFilterRules(QString()); }
+    } t72DebugSilencer;
+
     QChartWidget w;
     QValueAxis ax(nullptr, Qt::AlignBottom);
     QValueAxis ay(nullptr, Qt::AlignLeft);
@@ -435,5 +455,350 @@ void TestWidgetGl::glWidgetRenders()
         qInfo().noquote() << QString("4h-b 偏心视图落位: yTicks=%1 条，CPU/GL 逐条对齐=%2（容差 3px）")
                                  .arg(yTicks.size()).arg(matched);
         QVERIFY2(matched >= 3, "内部网格脊（≥3 条）应逐条 CPU/GL 对齐");
+    }
+
+    // ===== t72：跨后端朝向（非对称夹具 · **整窗抓图**逐特征对位 · 动态同号单调）=====
+    // 背景（t71 诊断）：2D viewMatrix 的 Y 缩放曾取负号 ⇒ GL 画面相对 CPU 关于 plotArea 中心**垂直镜像**。
+    // 既有测试全漏的根因：①夹具刻度集关于视图中心对称（等差刻度镜像后仍是同一集合 ⇒“镜像≡平移”）；
+    // ②GL 侧只做过墨迹计数/同代数探针（两边都调用 project()，从不读 GL 实测像素行）。
+    // 本段：非对称夹具（range[−13,7]，刻度{−12,−8,−4,0,4}）+ 真实 widget 合成抓图（QWidget::grab，
+    // 非裸 FBO）+ 逐特征行号对位 + 范围单调上移时“特征行号同号单调”。
+    {
+        struct AsymScene {
+            QChartWidget w;
+            QValueAxis ax{nullptr, Qt::AlignBottom};
+            QValueAxis ay{nullptr, Qt::AlignLeft};
+            QChartLayer layer;
+            explicit AsymScene(bool gl)
+            {
+                ax.setRange(-13.0, 7.0); ax.setTickCount(5); ax.setColor(Qt::black);
+                ay.setRange(-13.0, 7.0); ay.setTickCount(5); ay.setColor(Qt::black);
+                w.addAxis(&ax); w.addAxis(&ay); w.addLayer(&layer);
+                layer.setGridVisible(true);
+                layer.setGridColor(QColor(120, 120, 120));   // 深灰网格（isInk 阈值 25 可判）
+                if (gl) w.setRenderBackend(QChartAbstractWidget::RenderBackend::OpenGL);
+                w.resize(420, 340);
+                w.show();
+            }
+        };
+        // 水平网格线行簇：plotArea 内“最长连续墨迹游程 ≥ 50% 绘图区宽”的行（文字游程远短于此）
+        auto gridRowClusters = [](const QImage& img, const QRectF& pa, double s) {
+            QVector<int> rows;
+            const int y0 = qMax(0, int(std::floor(pa.top() * s)));
+            const int y1 = qMin(img.height() - 1, int(std::ceil((pa.top() + pa.height()) * s)));
+            const int x0 = qMax(0, int(std::floor(pa.left() * s)));
+            const int x1 = qMin(img.width() - 1, int(std::ceil((pa.left() + pa.width()) * s)));
+            const int need = int((x1 - x0 + 1) * 0.5);
+            for (int y = y0; y <= y1; ++y) {
+                int best = 0, run = 0;
+                for (int x = x0; x <= x1; ++x) {
+                    if (isInk(img.pixelColor(x, y))) { ++run; best = qMax(best, run); } else run = 0;
+                }
+                if (best >= need) rows.append(y);
+            }
+            QVector<qreal> centers;                 // 归并相邻行（抗锯齿允许 2px 间隙）为簇中心
+            int start = -1, prev = -2;
+            for (int r : rows) {
+                if (start < 0) { start = r; prev = r; continue; }
+                if (r - prev <= 2) { prev = r; continue; }
+                centers.append((start + prev) / 2.0 / s - pa.top());
+                start = r; prev = r;
+            }
+            if (start >= 0) centers.append((start + prev) / 2.0 / s - pa.top());
+            return centers;
+        };
+
+        AsymScene cs(false);                       // CPU 孪生
+        QVERIFY2(QTest::qWaitForWindowExposed(&cs.w), "非对称场景 CPU 窗口应暴露");
+        QTest::qWait(80);
+        AsymScene gs(true);                        // GL
+        QVERIFY2(QTest::qWaitForWindowExposed(&gs.w), "非对称场景 GL 窗口应暴露");
+        for (int i = 0; i < 20; ++i) { QTest::qWait(20); if (gs.w.plotArea().width() > 0) break; }
+        auto* hostA = qobject_cast<QOpenGLWidget*>(gs.w.glHostWidget());
+        QVERIFY2(hostA && hostA->isVisible(), "非对称场景应创建并显示 GL 宿主");
+        QTest::qWait(200);
+
+        const QRectF paA = cs.w.plotArea();
+        const QRectF paG = gs.w.plotArea();
+        QVERIFY2(paA.width() > 100.0 && paA.height() > 100.0, "CPU plotArea 应有效");
+        QVERIFY2(qAbs(paA.x() - paG.x()) < 1e-6 && qAbs(paA.y() - paG.y()) < 1e-6
+                     && qAbs(paA.width() - paG.width()) < 1e-6 && qAbs(paA.height() - paG.height()) < 1e-6,
+                 "CPU/GL 孪生场景 plotArea 应一致");
+
+        // ① 夹具自检：刻度行集**不关于视图中心对称**（防“镜像≡平移”自欺夹具）
+        {
+            const QChartCamera* camA = cs.layer.camera();
+            QVERIFY2(camA, "CPU 场景相机应有效");
+            const QRectF vr = camA->viewRect();
+            const QVector<qreal> tks = cs.ay.tickValues(qMin(vr.top(), vr.bottom()),
+                                                       qMax(vr.top(), vr.bottom()));
+            QVector<qreal> rows;
+            for (qreal v : tks)
+                rows.append(camA->project(QVector3D(0.0f, float(v), 0.0f), paA).screen.y());
+            QVERIFY2(rows.size() >= 4, "非对称夹具至少 4 条刻度行");
+            int mirrorHits = 0;
+            for (qreal r : rows) {
+                for (qreal r2 : rows) {
+                    if (qAbs((2.0 * paA.center().y() - r) - r2) <= 1.0) { ++mirrorHits; break; }
+                }
+            }
+            QVERIFY2(mirrorHits * 2 <= rows.size(),
+                     qPrintable(QString("夹具刻度行集必须不关于视图中心对称（镜像命中 %1/%2）")
+                                .arg(mirrorHits).arg(rows.size())));
+            qInfo().noquote() << QString("t72 夹具自检: yTicks=%1 条 行集={%2} 镜像命中=%3/%1（非对称）")
+                .arg(rows.size()).arg([&rows]() {
+                    QString s2; for (qreal r : rows) s2 += QString::number(r, 'f', 1) + " ";
+                    return s2.trimmed(); }()).arg(mirrorHits);
+        }
+
+        // ② 静态逐特征对位：整窗抓图（CPU 与 GL 各一张）的水平网格行簇必须**逐条一致（±1px）**
+        {
+            const QImage imgCpu = cs.w.grab().toImage();
+            const QImage imgGl  = gs.w.grab().toImage();
+            QVERIFY2(!imgCpu.isNull() && !imgGl.isNull(), "整窗抓图应成功");
+            const double sC = double(imgCpu.width()) / double(cs.w.width());
+            const double sG = double(imgGl.width()) / double(gs.w.width());
+            const QVector<qreal> rowsCpu = gridRowClusters(imgCpu, paA, sC);
+            const QVector<qreal> rowsGl  = gridRowClusters(imgGl,  paG, sG);
+            QString sc, sg;
+            for (qreal r : rowsCpu) sc += QString::number(r, 'f', 1) + " ";
+            for (qreal r : rowsGl)  sg += QString::number(r, 'f', 1) + " ";
+            qInfo().noquote() << QString("t72 整窗抓图行簇: CPU=[%1] GL=[%2]（plotArea 内逻辑行）")
+                                 .arg(sc.trimmed()).arg(sg.trimmed());
+            QVERIFY2(rowsCpu.size() >= 4, "CPU 整窗抓图应至少 4 条网格行");
+            QVERIFY2(rowsGl.size() == rowsCpu.size(),
+                     qPrintable(QString("GL 与 CPU 网格行数应一致：cpu=%1 gl=%2（镜像会改变集合大小）")
+                                .arg(rowsCpu.size()).arg(rowsGl.size())));
+            for (int i = 0; i < rowsCpu.size(); ++i) {
+                QVERIFY2(qAbs(rowsCpu[i] - rowsGl[i]) <= 1.0,
+                         qPrintable(QString("第 %1 条网格行 CPU/GL 应一致（±1px）：cpu=%2 gl=%3")
+                                    .arg(i).arg(rowsCpu[i]).arg(rowsGl[i])));
+            }
+            qInfo().noquote() << QString("t72 静态对位: %1/%1 条网格行 CPU↔GL 一致（±1px）").arg(rowsCpu.size());
+        }
+
+        // ③ 动态方向：范围单调上移 ≥5 步 ⇒ 同一特征（数值 0 的脊）行号 CPU 与 GL 必须**同号单调**
+        //    （t71 判据：范围上移 ⇒ 内容下移 ⇒ 行号增大；镜像时 GL 行号递减）
+        {
+            QVector<qreal> rowsCpuTrace, rowsGlTrace;
+            for (int step = 0; step < 6; ++step) {
+                if (step > 0) {
+                    cs.w.panViewCartesian(0.0, 2.0);      // 范围上移 2 个单位（两孪生同步）
+                    gs.w.panViewCartesian(0.0, 2.0);
+                    cs.w.repaint();
+                    gs.w.repaint();
+                    QTest::qWait(80);
+                }
+                const QImage iC = cs.w.grab().toImage();
+                const QImage iG = gs.w.grab().toImage();
+                const double sC = double(iC.width()) / double(cs.w.width());
+                const double sG = double(iG.width()) / double(gs.w.width());
+                const QVector<qreal> cCl = gridRowClusters(iC, paA, sC);
+                const QVector<qreal> gCl = gridRowClusters(iG, paG, sG);
+                // 特征 = 数值 0 的那条脊：预测行取自 CPU project()，再在实测簇里取最近者（窗口 ±8px）
+                const double pred = cs.layer.camera()
+                        ->project(QVector3D(0.0f, 0.0f, 0.0f), paA).screen.y() - paA.top();
+                auto nearest = [&pred](const QVector<qreal>& cl) {
+                    double best = 1e9;
+                    for (qreal c : cl) if (qAbs(c - pred) < qAbs(best - pred)) best = c;
+                    return best;
+                };
+                const double cRow = nearest(cCl);
+                const double gRow = nearest(gCl);
+                QVERIFY2(qAbs(cRow - pred) <= 8.0,
+                         qPrintable(QString("step %1：CPU 应能定位数值 0 的脊（预测行 %2，实测 %3）")
+                                    .arg(step).arg(pred).arg(cRow)));
+                QVERIFY2(qAbs(gRow - pred) <= 8.0,
+                         qPrintable(QString("step %1：GL 应能定位数值 0 的脊（预测行 %2，实测 %3）——"
+                                            "镜像时该脊落在中心另一侧，超出窗口")
+                                    .arg(step).arg(pred).arg(gRow)));
+                QVERIFY2(qAbs(cRow - gRow) <= 1.0,
+                         qPrintable(QString("step %1：CPU/GL 同一脊行号应一致（±1px）：cpu=%2 gl=%3")
+                                    .arg(step).arg(cRow).arg(gRow)));
+                rowsCpuTrace.append(cRow);
+                rowsGlTrace.append(gRow);
+            }
+            QString tc, tg;
+            for (qreal r : rowsCpuTrace) tc += QString::number(r, 'f', 1) + " ";
+            for (qreal r : rowsGlTrace)  tg += QString::number(r, 'f', 1) + " ";
+            qInfo().noquote() << QString("t72 动态轨道: CPU=[%1] GL=[%2]（范围每步上移 +2）")
+                                 .arg(tc.trimmed()).arg(tg.trimmed());
+            QVERIFY2(rowsCpuTrace.size() >= 6, "动态轨道应至少 6 步（≥5 步单调判据）");
+            int monoCpu = 0, monoGl = 0;
+            for (int i = 1; i < rowsCpuTrace.size(); ++i) {
+                if (rowsCpuTrace[i] > rowsCpuTrace[i - 1]) ++monoCpu;
+                if (rowsGlTrace[i] > rowsGlTrace[i - 1]) ++monoGl;
+            }
+            QVERIFY2(monoCpu == rowsCpuTrace.size() - 1,
+                     qPrintable(QString("CPU：范围上移 ⇒ 内容必须下移（行号递增），实测递增步 %1/%2")
+                                .arg(monoCpu).arg(rowsCpuTrace.size() - 1)));
+            QVERIFY2(monoGl == rowsGlTrace.size() - 1,
+                     qPrintable(QString("GL：必须与 CPU **同号单调**（递增），实测递增步 %1/%2（镜像时为 0）")
+                                .arg(monoGl).arg(rowsGlTrace.size() - 1)));
+            qInfo().noquote() << QString("t72 动态方向: CPU 递增 %1/%2，GL 递增 %3/%2（同号单调）")
+                                 .arg(monoCpu).arg(rowsCpuTrace.size() - 1).arg(monoGl);
+        }
+    }
+
+    // ===== t74：GL 模式下边框轴（plotArea 外）必须跟随视图变化更新 =====
+    // 症状（t70 §1）：GL 分支的 scheduleRepaint 只 update() GL 宿主，从不调度外层 widget ⇒
+    // plotArea 外的边框轴刻度/标签从第二帧起冻结（真实交互期间外层 Paint=0、GL 宿主 Paint=1）。
+    // 本段：真实 widget（GL/CPU 各一），用事件过滤器统计外层 widget 与 GL 宿主的 Paint 次数，
+    // 对四种视图变化（拖动平移 / 滚轮缩放 / 轴范围变更 / 绘图区尺寸变化）断言：
+    //   外层 Paint ≥ 1，且边框轴带像素差异 > 0、plotArea 内差异 > 0；
+    // 并断言空闲 20 帧内外层与宿主 Paint 均为 0（防每帧无条件重绘）。
+    {
+        struct T74Counters : public QObject {
+            QObject* outer = nullptr;
+            QObject* host = nullptr;
+            int outerCount = 0, hostCount = 0;
+            T74Counters(QObject* o, QObject* h) : outer(o), host(h) {}
+            bool eventFilter(QObject* obj, QEvent* e) override
+            {
+                if (e->type() == QEvent::Paint) {
+                    if (obj == outer) ++outerCount;
+                    else if (obj == host) ++hostCount;
+                }
+                return false;
+            }
+            void reset() { outerCount = hostCount = 0; }
+        };
+        auto diffIn = [](const QImage& a, const QImage& b, const QRect& r) {
+            const QRect rr = r.intersected(a.rect()).intersected(b.rect());
+            int n = 0;
+            for (int y = rr.top(); y <= rr.bottom(); ++y)
+                for (int x = rr.left(); x <= rr.right(); ++x)
+                    if (a.pixelColor(x, y) != b.pixelColor(x, y)) ++n;
+            return n;
+        };
+        auto sendPan2 = [](QWidget* ww, const QPointF& a, const QPointF& b) {
+            auto* p = new QMouseEvent(QEvent::MouseButtonPress, a, ww->mapToGlobal(a),
+                                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(ww, p); delete p;
+            auto* m = new QMouseEvent(QEvent::MouseMove, b, ww->mapToGlobal(b),
+                                      Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(ww, m); delete m;
+            auto* r = new QMouseEvent(QEvent::MouseButtonRelease, b, ww->mapToGlobal(b),
+                                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(ww, r); delete r;
+        };
+
+        struct T74Scene {
+            QChartWidget w;
+            QValueAxis ax{nullptr, Qt::AlignBottom};
+            QValueAxis ay{nullptr, Qt::AlignLeft};
+            QChartLayer layer;
+            explicit T74Scene(bool gl)
+            {
+                ax.setRange(-10.0, 10.0); ax.setTickCount(6); ax.setColor(Qt::black);
+                ay.setRange(-12.0, 8.0);  ay.setTickCount(6); ay.setColor(Qt::black);
+                w.addAxis(&ax); w.addAxis(&ay); w.addLayer(&layer);
+                layer.setGridVisible(true);
+                layer.setGridColor(QColor(150, 150, 150));
+                if (gl) w.setRenderBackend(QChartAbstractWidget::RenderBackend::OpenGL);
+                w.resize(720, 540);
+                w.show();
+            }
+        };
+
+        for (bool gl : {false, true}) {
+            const char* be = gl ? "GL" : "CPU";
+            T74Scene s(gl);
+            QVERIFY2(QTest::qWaitForWindowExposed(&s.w), qPrintable(QString("[%1] 窗口应暴露").arg(be)));
+            for (int i = 0; i < 20; ++i) { QTest::qWait(20); if (s.w.plotArea().width() > 0) break; }
+            auto* host = qobject_cast<QOpenGLWidget*>(s.w.glHostWidget());
+            if (gl) {
+                QVERIFY2(host && host->isVisible(), "GL 模式应创建并显示 GL 宿主");
+            }
+            T74Counters cnt(&s.w, host);
+            s.w.installEventFilter(&cnt);
+            if (host) host->installEventFilter(&cnt);
+
+            // 让首帧绘制彻底结束（此后计数才有意义）
+            QTest::qWait(400);
+            s.w.grab();
+            QTest::qWait(150);
+            QVERIFY2(cnt.outerCount >= 1, qPrintable(QString("[%1] 首帧后外层至少绘制过 1 次（计数通道自检）").arg(be)));
+
+            // ---- 空闲不重绘：连续 20 帧事件循环内，外层与宿主 Paint 都必须为 0 ----
+            cnt.reset();
+            for (int i = 0; i < 20; ++i) { QCoreApplication::processEvents(); QTest::qWait(10); }
+            qInfo().noquote() << QString("t74 [%1] 空闲 20 帧：外层 Paint=%2 宿主 Paint=%3")
+                                 .arg(be).arg(cnt.outerCount).arg(cnt.hostCount);
+            QVERIFY2(cnt.outerCount == 0 && cnt.hostCount == 0,
+                     qPrintable(QString("[%1] 空闲不得重绘（外层 %2 / 宿主 %3）——防每帧无条件重绘")
+                                .arg(be).arg(cnt.outerCount).arg(cnt.hostCount)));
+
+            struct Change { const char* tag; };
+            const Change changes[4] = { { "拖动平移" }, { "滚轮缩放" }, { "轴范围变更" }, { "绘图区尺寸变化" } };
+            for (int ci = 0; ci < 4; ++ci) {
+                const QRectF paBefore = s.w.plotArea();
+                const QImage before = s.w.grab().toImage();
+                cnt.reset();
+
+                switch (ci) {
+                case 0:
+                    sendPan2(&s.w, QPointF(360, 270), QPointF(250, 350));
+                    break;
+                case 1: {
+                    QWheelEvent we(QPointF(360, 270), s.w.mapToGlobal(QPointF(360, 270)),
+                                   QPoint(0, 0), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                                   Qt::NoScrollPhase, false);
+                    QApplication::sendEvent(&s.w, &we);
+                    break;
+                }
+                case 2:
+                    s.ax.setRange(-6.0, 14.0);
+                    break;
+                default:
+                    s.w.resize(760, 560);
+                    break;
+                }
+                // ★ 只跑事件循环（不 repaint/grab）——外层是否重绘完全由产品调度路径决定
+                for (int i = 0; i < 15; ++i) { QCoreApplication::processEvents(); QTest::qWait(20); }
+                const int outerPaints = cnt.outerCount, hostPaints = cnt.hostCount;
+                const QImage after = s.w.grab().toImage();
+
+                const QRectF paAfter = s.w.plotArea();
+                // 边框带：plotArea 之外、窗口之内的左带与下带；尺寸变化时取重叠区
+                const QRect overlap = before.rect().intersected(after.rect());
+                const QRect bandL(overlap.left(), overlap.top(),
+                                  qMax(0, int(qMin(paBefore.left(), paAfter.left())) - overlap.left()),
+                                  overlap.height());
+                const QRect bandB(overlap.left(),
+                                  qMax(overlap.top(), int(qMax(paBefore.bottom(), paAfter.bottom())) + 1),
+                                  overlap.width(),
+                                  qMax(0, overlap.bottom() - qMax(overlap.top(), int(qMax(paBefore.bottom(), paAfter.bottom())) + 1) + 1));
+                const int dL = diffIn(before, after, bandL);
+                const int dB = diffIn(before, after, bandB);
+                const int dIn = diffIn(before, after, paAfter.toRect().adjusted(2, 2, -2, -2).intersected(overlap));
+
+                qInfo().noquote()
+                    << QString("t74 [%1] %2：外层 Paint=%3 宿主 Paint=%4 | 左边框带 diff=%5 下边框带 diff=%6 plotArea 内 diff=%7 | plotArea %8x%9 → %10x%11")
+                           .arg(be).arg(changes[ci].tag).arg(outerPaints).arg(hostPaints)
+                           .arg(dL).arg(dB).arg(dIn)
+                           .arg(paBefore.width()).arg(paBefore.height())
+                           .arg(paAfter.width()).arg(paAfter.height());
+
+                QVERIFY2(outerPaints >= 1,
+                         qPrintable(QString("[%1] %2 后外层 widget 必须重绘（≥1）——GL 下边框轴不跟随的根因；实测 %3")
+                                        .arg(be).arg(changes[ci].tag).arg(outerPaints)));
+                QVERIFY2(dL > 0 || dB > 0,
+                         qPrintable(QString("[%1] %2 后边框轴带像素必须变化（左 %3 / 下 %4）")
+                                        .arg(be).arg(changes[ci].tag).arg(dL).arg(dB)));
+                QVERIFY2(dIn > 0,
+                         qPrintable(QString("[%1] %2 后 plotArea 内像素必须变化（实测 %3）")
+                                        .arg(be).arg(changes[ci].tag).arg(dIn)));
+            }
+
+            // 变化序列结束后再次校验空闲：不得留下"每次绘制再触发绘制"的隐性循环
+            cnt.reset();
+            for (int i = 0; i < 20; ++i) { QCoreApplication::processEvents(); QTest::qWait(10); }
+            qInfo().noquote() << QString("t74 [%1] 四次变化后再空闲 20 帧：外层 Paint=%2 宿主 Paint=%3")
+                                 .arg(be).arg(cnt.outerCount).arg(cnt.hostCount);
+            QVERIFY2(cnt.outerCount == 0 && cnt.hostCount == 0,
+                     qPrintable(QString("[%1] 变化序列后仍不得有空闲重绘（外层 %2 / 宿主 %3）")
+                                .arg(be).arg(cnt.outerCount).arg(cnt.hostCount)));
+        }
     }
 }

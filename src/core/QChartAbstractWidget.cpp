@@ -311,7 +311,17 @@ void QChartAbstractWidget::drawExternalContent(QPainter&)
 void QChartAbstractWidget::scheduleRepaint()
 {
     if (m_renderBackend == RenderBackend::OpenGL && m_glHost && m_glHost->isVisible()) {
+        // t74（①修复）：GL 模式下 plotArea **内**由 GL 宿主自绘，而 plotArea **外**的边框轴
+        // （drawAtEdge）/标题由**外层 widget** 用 QPainter 画（见 paintEvent 的 GPU 分支）。
+        // 旧实现只 update() 宿主、从不调度外层 ⇒ 边框轴刻度/标签从第二帧起冻结（t70 §1：
+        // 真实交互期间 外层 Paint=0 / GL 宿主 Paint=1，左侧边框带 1442px、下侧 1714px 的应有
+        // 差异从未出现）。此处补一次外层 update()：
+        //   · 只在**脏驱动调用点**（视图/内容/尺寸变化）执行 ⇒ 空闲时无人调用 ⇒ 空闲零重绘；
+        //   · 无定时器、无每帧无条件重绘；
+        //   · 不触碰 drawExternalContent / 边框轴绘制逻辑，外层重绘只画 plotArea 外内容，
+        //     GL 宿主位图复用（不重跑 paintGL），故无重复渲染。
         m_glHost->update();
+        update();
     } else {
         update();
     }

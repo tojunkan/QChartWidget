@@ -169,6 +169,10 @@ void QChartLayer::drawGrid(QChartScene& scene) {
             prim.penWidth = 1.0;
             prim.sourceId = groupId;
         }
+        // t75：本组标签也盖上同组号（稳定身份——标签避让迟滞按身份记忆所选边；
+        // 轴侧标签原为 sourceId=-1，Tickwise 路径同样受益）
+        for (int i = labelBefore; i < out.labels.size(); ++i)
+            if (out.labels[i].sourceId < 0) out.labels[i].sourceId = groupId;
         out.PrimitiveIdPrefixSum.push_back(out.primitives.size());
 
         // 单标签改写仅对"单标签"策略生效：

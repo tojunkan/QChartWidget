@@ -3,6 +3,9 @@
 
 #include <QtTest>
 #include <QGuiApplication>
+#include <QApplication>      // t73：真实拖动事件（sendEvent）
+#include <QMouseEvent>
+#include <QMap>
 #include <QImage>
 #include <QColor>
 #include <QOpenGLWidget>
@@ -272,6 +275,8 @@ QString comboName(ProjectionKind kind, bool grid, bool labels)
 // ===== CPU：8 组合全跑（offscreen ctest 常驻）=====
 // 4h-a：真实 widget 路径验证（定义见文件后部）
 void checkWidgetBorderAxisMatchesGridSpines();
+// t73：真实 widget 路径——连续多帧（含非整像素拖动）逐组断言"可见标签数 == 脊数"
+void checkGridLabelGroupVisibilityAcrossFrames();
 
 void TestAxisMatrixCpu::cpuMatrix()
 {
@@ -412,6 +417,7 @@ void TestAxisMatrixCpu::cpuMatrix()
     }
 
     checkWidgetBorderAxisMatchesGridSpines();   // 4h-a：真实 widget 路径验证（左侧边框轴 ↔ 网格脊）
+    checkGridLabelGroupVisibilityAcrossFrames(); // t73：连续多帧逐组可见标签数 == 脊数
 }
 
 // ===== GL：真实环境 8 组合 =====
@@ -515,6 +521,194 @@ void checkWidgetBorderAxisMatchesGridSpines()
     }
     qInfo().noquote() << QString("4h-a widget 路径：水平脊 %1 条 / 左侧标签带 %2 个，逐一对齐（plotArea=%3x%4）")
                              .arg(spineY.size()).arg(bands.size()).arg(pa.width()).arg(pa.height());
+}
+
+// ===== t73：真实 widget 路径——连续多帧（含真实拖动）逐组断言"可见标签数 == 脊数" =====
+// 症状（t70 §3a）：4i 之后二维网格脊成为两顶点直线，自由标签的组尾锚点取自**首端点**且恰落在
+// 视图边界（实测 67.999988 vs plotArea.left()=68.000000），绘制期的二次 plotArea 包含判定把
+// 整组标签丢掉，且哪一组丢由浮点噪声决定（时横时纵：静止帧恰好都判在界内，拖动一次后 H 组全丢）。
+// 本段复刻 t70 的复现配方（真实鼠标拖动 (300,250)→(300-40i,250+25i)），每帧用 CPU 渲染器在
+// **场景拷贝**上解析标签可见性，逐组统计"脊数 / 可见标签数"，水平组与垂直组分别断言；
+// 不可见标签数必须为 0。
+void checkGridLabelGroupVisibilityAcrossFrames()
+{
+    QChartWidget w;
+    QValueAxis ax(nullptr, Qt::AlignBottom), ay(nullptr, Qt::AlignLeft);
+    QChartLayer layer;
+    ax.setRange(0.0, 10.0);
+    ay.setRange(-5.0, 45.0);                 // 非对称范围（对称夹具是"边界恰落"噪声的掩体）
+    ax.setTickCount(6);
+    ay.setTickCount(6);
+    ax.setColor(Qt::black);
+    ay.setColor(Qt::black);
+    layer.setGridVisible(true);
+    layer.setGridColor(QColor(200, 200, 200));
+    w.addAxis(&ax);
+    w.addAxis(&ay);
+    w.addLayer(&layer);
+    w.resize(720, 540);
+    w.show();
+    QVERIFY2(QTest::qWaitForWindowExposed(&w), "offscreen/wayland 下窗口应暴露");
+
+    // 真实鼠标拖动（与 t70 探针同一配方）：按下→移动到目标→释放
+    auto sendPan = [](QWidget* ww, const QPointF& a, const QPointF& b) {
+        auto* p = new QMouseEvent(QEvent::MouseButtonPress, a, ww->mapToGlobal(a),
+                                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(ww, p);
+        delete p;
+        auto* m = new QMouseEvent(QEvent::MouseMove, b, ww->mapToGlobal(b),
+                                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(ww, m);
+        delete m;
+        auto* r = new QMouseEvent(QEvent::MouseButtonRelease, b, ww->mapToGlobal(b),
+                                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(ww, r);
+        delete r;
+    };
+
+    QString trace;
+    for (int frame = 0; frame < 6; ++frame) {
+        if (frame > 0) {
+            // 每帧拖动一段（t70：拖动后轴范围经反算写回，与相机窗口在末位比特上不再逐位相等
+            // ⇒ 脊首端点投影落到 plotArea 左/下边界外 1e-5 px 量级）
+            const int k = ((frame - 1) % 3) + 1;
+            sendPan(&w, QPointF(300, 250), QPointF(300 - 40 * k, 250 + 25 * k));
+            w.repaint();
+            QTest::qWait(40);
+        }
+        w.grab();                                       // 真实渲染：脏模型驱动重收集
+
+        QChartScene sc = layer.scene();                 // 拷贝：渲染器在拷贝上解析 label.visible
+        QImage img(700, 600, QImage::Format_ARGB32_Premultiplied);
+        img.fill(Qt::white);
+        QPainterChartRenderer renderer;
+        renderer.render(sc, &img);
+
+        // 脊 = 网格组图元（同 sourceId；4i 后为两顶点 Line）
+        QMap<int, bool> groupHorizontal;               // sourceId → 是否水平脊
+        int spines = 0, hSpines = 0, vSpines = 0;
+        for (const QChartPrimitive& p : sc.primitives) {
+            if (p.sourceId < 0) continue;
+            if (p.type != QChartPrimitive::Type::Line) continue;
+            if (groupHorizontal.contains(p.sourceId)) continue;
+            const bool horizontal = qAbs(qreal(p.numA.y()) - qreal(p.numB.y())) < 1e-9;
+            groupHorizontal.insert(p.sourceId, horizontal);
+            ++spines;
+            (horizontal ? hSpines : vSpines) += 1;
+        }
+
+        int visible = 0, invisible = 0, hVisible = 0, vVisible = 0;
+        for (const QChartTextLabel& l : sc.labels) {
+            if (l.sourceId < 0 || !groupHorizontal.contains(l.sourceId)) continue;
+            if (l.visible) {
+                ++visible;
+                (groupHorizontal.value(l.sourceId) ? hVisible : vVisible) += 1;
+            } else {
+                ++invisible;
+            }
+        }
+
+        // ★ 逐组"真的画出来了吗"：把场景拷贝裁剪到**单组标签**，渲染到透明设备后看绘图区内是否有
+        //   字形墨迹。这是唯一能抓住本缺陷的判据——旧实现在 drawLabels 里 `continue` 掉整组，
+        //   label.visible 仍为 true（可见性字段骗人），只有像素能证明"没画"。
+        int drawn = 0, missing = 0, hDrawn = 0, vDrawn = 0;
+        QString missingTag;
+        for (auto it = groupHorizontal.constBegin(); it != groupHorizontal.constEnd(); ++it) {
+            const int sid = it.key();
+            QChartScene one = sc;
+            for (int i = one.labels.size() - 1; i >= 0; --i)
+                if (one.labels[i].sourceId != sid) one.labels.removeAt(i);
+            // 图元全部改透明笔色：隔离出**标签字形**墨迹（否则脊线本身的墨迹会掩盖"标签没画"）
+            for (QChartPrimitive& p : one.primitives) {
+                p.color = QColor(0, 0, 0, 0);
+                p.fillColor = QColor(0, 0, 0, 0);
+            }
+            QImage dev(760, 600, QImage::Format_ARGB32_Premultiplied);
+            dev.fill(Qt::transparent);
+            QPainterChartRenderer solo;
+            solo.render(one, &dev);
+            int ink = 0;
+            const QRect roi = one.plotArea.toRect().intersected(dev.rect());
+            for (int y = roi.top(); y <= roi.bottom() && ink == 0; ++y)
+                for (int x = roi.left(); x <= roi.right(); ++x)
+                    if (dev.pixelColor(x, y).alpha() > 0) { ++ink; break; }
+            if (ink > 0) {
+                ++drawn;
+                (it.value() ? hDrawn : vDrawn) += 1;
+            } else {
+                ++missing;
+                if (missingTag.isEmpty())
+                    missingTag = QString("sid=%1(%2)").arg(sid).arg(it.value() ? "H" : "V");
+                // 诊断（临时）：漏画组的标签字段 + 锚点像素 + 全图 alpha 计数
+                int inkAll = 0;
+                for (int y = 0; y < dev.height(); ++y)
+                    for (int x = 0; x < dev.width(); ++x)
+                        if (dev.pixelColor(x, y).alpha() > 0) ++inkAll;
+                if (!one.labels.isEmpty()) {
+                    const QChartTextLabel& l0 = one.labels.first();
+                    const QPointF px0 = one.camera->project(l0.cartesianAnchor, one.plotArea).screen;
+                    qInfo().noquote()
+                        << QString("t73 漏画诊断: sid=%1(%2) text=%3 vis=%4 explicit=%5 numeric=(%6,%7) anchor=(%8,%9) px=(%10,%11) inPA=%12 inkAll=%13")
+                               .arg(sid).arg(it.value() ? "H" : "V").arg(l0.text).arg(l0.visible ? 1 : 0)
+                               .arg(l0.hasExplicitAnchor() ? 1 : 0)
+                               .arg(l0.numericAnchor.x(), 0, 'f', 3).arg(l0.numericAnchor.y(), 0, 'f', 3)
+                               .arg(l0.cartesianAnchor.x(), 0, 'f', 6).arg(l0.cartesianAnchor.y(), 0, 'f', 6)
+                               .arg(px0.x(), 0, 'f', 6).arg(px0.y(), 0, 'f', 6)
+                               .arg(one.plotArea.contains(px0) ? 1 : 0).arg(inkAll);
+                } else {
+                    qInfo().noquote() << QString("t73 漏画诊断: sid=%1(%2) 该组无标签").arg(sid).arg(it.value() ? "H" : "V");
+                }
+            }
+        }
+
+        // 诊断（无条件 QINFO，一帧一行）：首条水平/垂直脊的**首端点/尾端点**投影像素与 plotArea 的
+        // 包含关系——旧实现组尾锚点 = cartA（首端点），恰落边界时 1e-5 px 级差即丢整组（t70 §3a）。
+        {
+            const QRectF paF = sc.plotArea;
+            QString diag;
+            for (bool horizontal : {true, false}) {
+                for (const QChartPrimitive& p : sc.primitives) {
+                    if (p.type != QChartPrimitive::Type::Line || p.sourceId < 0) continue;
+                    const bool h = qAbs(qreal(p.numA.y()) - qreal(p.numB.y())) < 1e-9;
+                    if (h != horizontal) continue;
+                    const QPointF pxA = sc.camera->project(p.cartA, paF).screen;
+                    const QPointF pxB = sc.camera->project(p.cartB, paF).screen;
+                    diag += QString("%1 pxA=(%2,%3)in=%4 pxB=(%5,%6)in=%7 | ")
+                                .arg(horizontal ? "H" : "V")
+                                .arg(pxA.x(), 0, 'f', 6).arg(pxA.y(), 0, 'f', 6)
+                                .arg(paF.contains(pxA) ? 1 : 0)
+                                .arg(pxB.x(), 0, 'f', 6).arg(pxB.y(), 0, 'f', 6)
+                                .arg(paF.contains(pxB) ? 1 : 0);
+                    break;
+                }
+            }
+            qInfo().noquote() << QString("t73 边界诊断 f%1: %2").arg(frame).arg(diag.trimmed());
+        }
+        trace += QString("[f%1 脊=%2(横%3/纵%4) 实画标签=%5(横%6/纵%7) 漏画=%8%9 | visible 标志 可见=%10 不可见=%11] ")
+                     .arg(frame).arg(spines).arg(hSpines).arg(vSpines)
+                     .arg(drawn).arg(hDrawn).arg(vDrawn).arg(missing)
+                     .arg(missingTag.isEmpty() ? QString() : QString("(%1)").arg(missingTag))
+                     .arg(visible).arg(invisible);
+
+        // 逐帧逐组断言：**实画**标签数 == 脊数（水平组、垂直组分别对齐），漏画必须为 0
+        QVERIFY2(spines >= 4, qPrintable(QString("frame %1：网格脊应 ≥4 条，实为 %2").arg(frame).arg(spines)));
+        QVERIFY2(hSpines >= 1 && vSpines >= 1,
+                 qPrintable(QString("frame %1：水平/垂直两组都应存在（横 %2/纵 %3）")
+                                .arg(frame).arg(hSpines).arg(vSpines)));
+        QVERIFY2(missing == 0,
+                 qPrintable(QString("frame %1：不得有整组标签被丢弃（漏画 %2 组，首例 %3；旧实现按边界浮点噪声丢组）")
+                                .arg(frame).arg(missing).arg(missingTag)));
+        QVERIFY2(drawn == spines,
+                 qPrintable(QString("frame %1：实画标签数应等于脊数（实画 %2 vs 脊 %3）")
+                                .arg(frame).arg(drawn).arg(spines)));
+        QVERIFY2(hDrawn == hSpines,
+                 qPrintable(QString("frame %1：水平脊实画标签数应与水平脊数一致（%2 vs %3）")
+                                .arg(frame).arg(hDrawn).arg(hSpines)));
+        QVERIFY2(vDrawn == vSpines,
+                 qPrintable(QString("frame %1：垂直脊实画标签数应与垂直脊数一致（%2 vs %3）")
+                                .arg(frame).arg(vDrawn).arg(vSpines)));
+    }
+    qInfo().noquote() << QString("t73 逐帧逐组：%1").arg(trace.trimmed());
 }
 
 void TestAxisMatrixGl::initTestCase()

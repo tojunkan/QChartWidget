@@ -4,7 +4,55 @@
 #include "QChartAbstractProjection.h"
 #include <QRectF>
 #include <QPainter>
+#include <QVector>
+#include <algorithm>
 #include <cmath>
+
+// ============================================================================
+// t75：标签自动避让（"最空一边"启发式）常量——契约见 include/core/QChartRenderer.h
+// ============================================================================
+namespace {
+constexpr qreal kAvoidTieEpsPx      = 1.0;    // ① 打平判定：**绝对容差**（像素）
+constexpr qreal kAvoidHysteresisPx  = 8.0;    // ③ 迟滞：另一侧余量需超出这么多像素才切换
+constexpr int   kAvoidMaxEntries    = 256;    // 状态表 LRU 上限（防无界增长）
+} // namespace
+
+QString QChartRenderer::labelAvoidKey(const QString& text, qreal fontSize)
+{
+    // 稳定身份：标签每帧重建，故以"内容 + 字号"作键（同一场景内同一刻度文字恒定）。
+    // ★ 图层已按契约把组号盖进 label.sourceId（二维 addSpine / 三维 addLine），待标签绘制调用点
+    //   （QPainterChartRenderer::drawLabels2D/3D、QOpenGLChartRenderer::drawLabels）进入可改范围时，
+    //   把组号透传进来替换本代理键即可（一处改动，语义不变）。
+    return QString::number(fontSize, 'g', 6) + QLatin1Char('|') + text;
+}
+
+int QChartRenderer::labelAvoidSide(const QString& key) const
+{
+    const auto it = m_labelAvoid.constFind(key);
+    return (it == m_labelAvoid.constEnd()) ? -1 : it->side;
+}
+
+int QChartRenderer::labelAvoidStateCount() const
+{
+    return m_labelAvoid.size();
+}
+
+void QChartRenderer::pruneAvoidState()
+{
+    // LRU 裁剪：超过上限时丢弃最久未更新的条目（标签消失/场景重建不会无界增长）
+    if (m_labelAvoid.size() <= kAvoidMaxEntries) return;
+
+    QVector<QPair<quint64, QString>> ages;
+    ages.reserve(m_labelAvoid.size());
+    for (auto it = m_labelAvoid.constBegin(); it != m_labelAvoid.constEnd(); ++it)
+        ages.append(qMakePair(it->seq, it.key()));
+    std::sort(ages.begin(), ages.end(),
+              [](const QPair<quint64, QString>& a, const QPair<quint64, QString>& b) {
+                  return a.first < b.first;
+              });
+    const int drop = m_labelAvoid.size() - kAvoidMaxEntries;
+    for (int i = 0; i < drop; ++i) m_labelAvoid.remove(ages[i].second);
+}
 
 void QChartRenderer::render(QChartScene& scene, QPaintDevice* device)
 {
@@ -53,9 +101,16 @@ bool QChartRenderer::anchorVisibleInPlotArea(const QChartScene& scene, const QVe
 // 既定契约 = GL 不渲染自由标签；本组代码是 t29 验证过的"CPU 前置 projection+裁剪"实现
 // 的收拢存放处，默认不被任何正常渲染路径调用（属旁路 / 死代码，grep "hybrid" 可定位）。
 // ============================================================================
-namespace {
-/// hybrid 预研旁路内部辅助：组尾图元的数值锚点（Point=numA；顶点型=末顶点；Rect/Ellipse=中心）
-QVector3D hybridGroupTailNumeric(const QChartPrimitive& p)
+// ============================================================================
+// 组尾锚点助手（t73）：自由标签（同 sourceId 组）与 tier2 绑定标签的锚点取"组的末段代表点"，
+// 按图元类型分类——与 t29 hybrid 旁路既有分类一致，并由二维 CPU 后端（tier2/tier3）与 GL 后端
+// （tier2）共用同一实现，避免两后端语义分叉：
+//   Point → 自身；Line → **尾端**（numB/cartB）；Path/Polygon/三角族 → 末顶点；Rect/Ellipse → 中心
+// 背景：4i 直线化后二维网格脊只剩一个两顶点 Line，旧实现一律取 cartA（**首端点**）恰落视图边界，
+// 绘制期的二次包含判定（见下方 drawLabels）会因 1e-5 px 级浮点噪声丢掉整组标签（t70 §3a）。
+// 说明：头文件不在本批 inScope，故两处调用方以相同签名的前置声明共用（定义唯一）。
+// ============================================================================
+QVector3D qchartGroupTailAnchorNumeric(const QChartPrimitive& p)
 {
     switch (p.type) {
     case QChartPrimitive::Type::Point:
@@ -75,7 +130,28 @@ QVector3D hybridGroupTailNumeric(const QChartPrimitive& p)
     }
     return p.numA;
 }
-} // namespace
+
+/// Cartesian 空间同义分类（CPU 后端在 transformNumericToCartesian 之后解析标签）
+QVector3D qchartGroupTailAnchorCartesian(const QChartPrimitive& p)
+{
+    switch (p.type) {
+    case QChartPrimitive::Type::Point:
+        return p.cartA;
+    case QChartPrimitive::Type::Line:
+        return p.cartB;
+    case QChartPrimitive::Type::Polygon:
+    case QChartPrimitive::Type::Path:
+    case QChartPrimitive::Type::TriangleMesh:
+    case QChartPrimitive::Type::TriangleFan:
+    case QChartPrimitive::Type::TriangleStrip:
+        return p.cartVerts.isEmpty() ? p.cartA : p.cartVerts.last();
+    case QChartPrimitive::Type::Rect:
+    case QChartPrimitive::Type::Ellipse:
+        return QVector3D(static_cast<float>(p.cartRect.center().x()),
+                         static_cast<float>(p.cartRect.center().y()), 0.0f);
+    }
+    return p.cartA;
+}
 
 bool QChartRenderer::hybridResolveFreeLabelAnchor(const QChartScene& scene,
                                                  QChartTextLabel& label) const
@@ -93,7 +169,7 @@ bool QChartRenderer::hybridResolveFreeLabelAnchor(const QChartScene& scene,
         if (scene.primitives[i].sourceId == label.sourceId) tail = i;
     if (tail < 0) return false;
 
-    label.cartesianAnchor = proj->toCartesian(hybridGroupTailNumeric(scene.primitives[tail]));
+    label.cartesianAnchor = proj->toCartesian(qchartGroupTailAnchorNumeric(scene.primitives[tail]));
     label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
     return true;
 }
@@ -123,23 +199,41 @@ void QChartRenderer::drawLabel(QPainter& painter,
     bool autoAvoid = (alignment == Qt::AlignCenter);
 
     if (autoAvoid) {
-        qreal distLeft   = pixelAnchor.x() - plotArea.left();
-        qreal distRight  = plotArea.right() - pixelAnchor.x();
-        qreal distTop    = pixelAnchor.y() - plotArea.top();
-        qreal distBottom = plotArea.bottom() - pixelAnchor.y();
+        const qreal distLeft   = pixelAnchor.x() - plotArea.left();
+        const qreal distRight  = plotArea.right() - pixelAnchor.x();
+        const qreal distTop    = pixelAnchor.y() - plotArea.top();
+        const qreal distBottom = plotArea.bottom() - pixelAnchor.y();
 
-        enum Dir { Left, Right, Top, Bottom };
-        Dir dir = Left;
-        qreal maxDist = distLeft;
-        if (distRight > maxDist) { maxDist = distRight; dir = Right; }
-        if (distTop > maxDist)   { maxDist = distTop;   dir = Top; }
-        if (distBottom > maxDist){ maxDist = distBottom; dir = Bottom; }
+        // t75 契约（见 include/core/QChartRenderer.h）：索引 0=Right 1=Bottom 2=Left 3=Top
+        //   ① 绝对容差 ε=1px 判平（旧实现用严格 `>`，打平时结果由比较顺序隐式决定）
+        //   ② 打平走写死优先序：右 → 下 → 左 → 上
+        //   ③ 迟滞：上一帧的边若未"明显更差"（差值 ≤ 8px）则保持，避免边缘处来回摆
+        const qreal margins[4] = { distRight, distBottom, distLeft, distTop };   // 索引即优先序
+        qreal maxMargin = margins[0];
+        for (int i = 1; i < 4; ++i) maxMargin = qMax(maxMargin, margins[i]);
+        int best = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (margins[i] >= maxMargin - kAvoidTieEpsPx) { best = i; break; }   // 优先序内首个"打平"者
+        }
 
-        switch (dir) {
-        case Left:  textPos = pixelAnchor + QPointF(-textSize.width() - pad, -textSize.height()/2); break;
-        case Right: textPos = pixelAnchor + QPointF(pad, -textSize.height()/2); break;
-        case Top:   textPos = pixelAnchor + QPointF(-textSize.width()/2, -textSize.height() - pad); break;
-        case Bottom:textPos = pixelAnchor + QPointF(-textSize.width()/2, pad); break;
+        const QString avoidKey = labelAvoidKey(text, fontSize);
+        int chosen = best;
+        const auto prevIt = m_labelAvoid.constFind(avoidKey);
+        if (prevIt != m_labelAvoid.constEnd() && prevIt->side >= 0
+            && margins[prevIt->side] >= margins[best] - kAvoidHysteresisPx) {
+            chosen = prevIt->side;   // 迟滞生效：另一侧未"明显更大"（≤8px）→ 保持上一帧的边
+        }
+
+        LabelAvoidState& st = m_labelAvoid[avoidKey];
+        st.side = chosen;
+        st.seq = ++m_labelAvoidSeq;
+        pruneAvoidState();           // ③ 状态有界：LRU 上限（标签消失/场景重建不会无界增长）
+
+        switch (chosen) {
+        case 0: textPos = pixelAnchor + QPointF(pad, -textSize.height()/2); break;              // Right
+        case 1: textPos = pixelAnchor + QPointF(-textSize.width()/2, pad); break;                // Bottom
+        case 2: textPos = pixelAnchor + QPointF(-textSize.width() - pad, -textSize.height()/2); break; // Left
+        default: textPos = pixelAnchor + QPointF(-textSize.width()/2, -textSize.height() - pad); break; // Top
         }
     } else {
         if (alignment & Qt::AlignLeft) {
@@ -192,7 +286,14 @@ void QChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
         if (!label.visible) continue;
 
         QChartProjectedPoint pp = camera->project(label.cartesianAnchor, plotArea);//Cartesian -> Pixel
-        if (!plotArea.contains(pp.screen)) continue;
+
+        // t73②：二次包含判定**只对 tier1（显式锚点）保留** —— drawLabel 会把文字框钳制进绘图区，
+        // 若不判定，落在视图外的显式标签会被"挤"到边缘说谎。tier2/tier3 的可见性已由**同帧**裁剪
+        // 结果导出（visibility[] / 同组组尾可见性），此处再判一次会因锚点恰落边界（1e-5 px 级浮点噪声）
+        // 把整组标签丢掉（t70 §3a）。按用户裁定不加容差（fit 已保证视图内元素落在绘图区内）。
+        // ★ 生效路径：二维 CPU = QPainterChartRenderer::drawLabels2D；GL = QOpenGLChartRenderer::drawLabels
+        //   （两者均已同步同一策略；本基类实现为"未覆写 drawLabels 的子类"兜底，语义保持一致）。
+        if (label.hasExplicitAnchor() && !plotArea.contains(pp.screen)) continue;
 
         drawLabel(painter, plotArea, pp.screen, label.text, label.color,
                   label.fontSize, label.alignment);

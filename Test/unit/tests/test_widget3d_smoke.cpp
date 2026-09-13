@@ -16,6 +16,12 @@
 #include "QChartCamera3D.h"
 #include "QCartesianProjection3D.h"
 #include "QSphericalProjection3D.h"
+#include "QChartRenderer.h"            // t75：labelAvoidKey/labelAvoidSide（避让状态只读查询）
+#include "QPainterChartRenderer.h"     // t75：CPU 渲染器
+#include "QOpenGLChartRenderer.h"      // t75：GL 渲染器（无上下文时仅走标签覆盖层）
+#include "QChartScene.h"
+#include "QCube.h"
+#include "QValueAxis.h"
 
 namespace {
 bool isInk(const QColor& c)
@@ -156,6 +162,85 @@ void TestWidget3DSmoke::cpuWidget3DGridModes()
     QCOMPARE(layer->scene3D().primitives.size(), face.first);
     QCOMPARE(static_cast<int>(w.gridMode3D()),
              static_cast<int>(QChartLayer3D::GridMode::Box));
+
+    // ===== t75：标签避让确定性——FaceLine 的 0 刻度标签，2°/步 × 24 步，相邻帧避让边不得翻转 =====
+    // 症状（t70 §3b）：四边余量打平时旧实现无固定优先序/无迟滞 ⇒ 24 步里相邻帧翻转 6 次（左右摆动）。
+    // 本段用真实三维管线（layer3D 收集 → 渲染器）逐帧读取**产品侧**避让状态（labelAvoidSide），
+    // CPU 与 GL 两个渲染器同型（GL 无上下文时只走标签覆盖层绘制，正是避让逻辑所在）。
+    {
+        struct Rig {
+            QCartesianProjection3D proj;
+            QChartLayer3D layer;
+            QValueAxis ax{nullptr, Qt::AlignBottom};
+            QValueAxis ay{nullptr, Qt::AlignLeft};
+            QValueAxis az{nullptr, Qt::AlignBottom};
+            QChartCamera3D* cam = nullptr;
+            Rig()
+            {
+                ax.setRange(-3, 3); ay.setRange(-3, 3); az.setRange(-3, 3);
+                ax.setTickCount(5); ay.setTickCount(5); az.setTickCount(5);
+                ax.setColor(Qt::black); ay.setColor(Qt::black); az.setColor(Qt::black);
+                layer.setAxisX(&ax); layer.setAxisY(&ay); layer.setAxisZ(&az);
+                layer.setProjection3D(&proj);
+                layer.setDataBounds(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
+                layer.setGridMode(QChartLayer3D::GridMode::FaceLine);
+                cam = layer.camera3D();
+                cam->setViewCube(QCube(QVector3D(-4, -4, -4), QVector3D(4, 4, 4)));
+                cam->setYaw(45.0); cam->setPitch(30.0); cam->setRoll(0.0);
+                layer.setScene3DProjection(&proj);
+                layer.setScene3DPlotArea(QRectF(0, 0, 400, 400));
+                layer.setScene3DBackground(Qt::white);
+            }
+        };
+        for (bool glBackend : {false, true}) {
+            const char* be = glBackend ? "GL" : "CPU";
+            Rig rig;
+            QPainterChartRenderer cpuR;
+            QOpenGLChartRenderer glR;
+            int flips = 0, prevSide = -1, seen = 0;
+            QString table;
+            for (int step = 0; step <= 24; ++step) {
+                if (step > 0) rig.cam->setYaw(rig.cam->yaw() + 2.0);
+                rig.layer.collectPrimitives();               // 每帧重建场景/标签（真实路径）
+                QChartScene sc = rig.layer.scene3D();
+                QImage img(400, 400, QImage::Format_ARGB32_Premultiplied);
+                img.fill(Qt::white);
+                int side = -1;
+                if (!glBackend) {
+                    cpuR.invalidateView();
+                    cpuR.render(sc, &img);
+                } else {
+                    QTest::ignoreMessage(QtWarningMsg, "No current OpenGL context!");
+                    glR.invalidateView();
+                    glR.render(sc, &img);
+                }
+                // 取文本为 "0" 的标签（FaceLine 的 0 刻度）的**产品侧**避让边
+                const QChartTextLabel* zero = nullptr;
+                for (const QChartTextLabel& l : sc.labels)
+                    if (l.text.trimmed() == QLatin1String("0") && l.visible) { zero = &l; break; }
+                QVERIFY2(zero != nullptr, qPrintable(QString("[%1] step %2：应存在可见的 \"0\" 刻度标签")
+                                                         .arg(QLatin1String(be)).arg(step)));
+                const QString key = QChartRenderer::labelAvoidKey(zero->text.trimmed(),
+                                                                  qreal(zero->fontSize));
+                side = glBackend ? glR.labelAvoidSide(key) : cpuR.labelAvoidSide(key);
+                QVERIFY2(side >= 0, qPrintable(QString("[%1] step %2：避让边应有记录（键 %3）")
+                                                   .arg(QLatin1String(be)).arg(step).arg(key)));
+                ++seen;
+                if (prevSide >= 0 && side != prevSide) ++flips;
+                if (step % 4 == 0 || (prevSide >= 0 && side != prevSide))
+                    table += QString("[s%1 yaw=%2 边=%3%4] ")
+                                 .arg(step).arg(qRound(rig.cam->yaw())).arg(side)
+                                 .arg(prevSide >= 0 && side != prevSide ? "★翻转" : "");
+                prevSide = side;
+            }
+            qInfo().noquote() << QString("t75 旋转稳定性 [%1]：24 步（2°/步）避让边翻转=%2；轨迹 %3")
+                                 .arg(QLatin1String(be)).arg(flips).arg(table.trimmed());
+            QVERIFY2(seen == 25, "应逐步取得 25 帧避让边记录");
+            QVERIFY2(flips == 0,
+                     qPrintable(QString("[%1] 相邻帧避让边不得翻转（实为 %2 次；修复前为 6 次）")
+                                    .arg(QLatin1String(be)).arg(flips)));
+        }
+    }
 }
 
 // ===== 4b：三维数据盒不再独立持有——由三根轴范围组装（数值断言，与 4a 基线一致）=====

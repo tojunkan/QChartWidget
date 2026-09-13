@@ -620,6 +620,98 @@ void TestAxisPipeline::anchorVisibilityRules()
     resolveCpu(f);
     QVERIFY2(f.label(ir).visible, "源8 图元移入视窗后自由标签应可见（证明③判的是可见性而非 sourceId）");
     QVERIFY(vecNear(f.label(ir).cartesianAnchor, QVector3D(1, 1, 0)));
+
+    // ===== t73①：组尾锚点按图元类型分类（自由标签 = 同组组尾可见图元的锚点）=====
+    // 旧实现一律取 cartA（首端点）：二维网格脊在 4i 后成为两顶点直线，首端恰在视图边界上，
+    // 再经绘制期的 plotArea 包含判定 ⇒ 整组标签按浮点噪声时隐时现。分类后：Point→自身、
+    // Line→**尾端**、顶点型→末顶点、Rect/Ellipse→中心（与 hybrid 旁路既有分类一致）。
+    {
+        struct AnchorCase {
+            QChartPrimitive::Type type;
+            QVector3D expect;          // 期望锚点（Cartesian 与 Numeric 同值：本夹具为恒等投影）
+            bool mustDifferFromHead;   // 直线：不得再落在首端
+            const char* tag;
+        };
+        const AnchorCase cases[6] = {
+            { QChartPrimitive::Type::Point,   QVector3D(3, 4, 0), false, "Point→自身" },
+            { QChartPrimitive::Type::Line,    QVector3D(6, 4, 0), true,  "Line→尾端 numB" },
+            { QChartPrimitive::Type::Path,    QVector3D(7, 4, 0), false, "Path→末顶点" },
+            { QChartPrimitive::Type::Polygon, QVector3D(7, 4, 0), false, "Polygon→末顶点" },
+            { QChartPrimitive::Type::Rect,    QVector3D(5, 5, 0), false, "Rect→中心" },
+            { QChartPrimitive::Type::Ellipse, QVector3D(5, 5, 0), false, "Ellipse→中心" },
+        };
+        for (const AnchorCase& c : cases) {
+            LabelFixture g;
+            QChartPrimitive prim;
+            prim.type = c.type;
+            prim.color = Qt::black;
+            prim.sourceId = 7;
+            prim.numA = QVector3D(3, 4, 0);                       // 首端（旧实现取此值）
+            prim.numB = QVector3D(6, 4, 0);                       // 尾端
+            prim.numVerts = { QVector3D(3, 4, 0), QVector3D(7, 4, 0) };
+            prim.numRect = QRectF(4, 4, 2, 2);                    // 中心 (5,5)
+            g.scene.primitives.append(prim);
+            g.scene.maxSourceId = qMax(g.scene.maxSourceId, 7);
+
+            QChartTextLabel freeLbl;
+            freeLbl.text = QStringLiteral("g");
+            freeLbl.refPrimitiveId = -1;
+            freeLbl.sourceId = 7;
+            const int li = g.addLabel(freeLbl);
+            resolveCpu(g);
+
+            QVERIFY2(g.label(li).visible, qPrintable(QString("%1：同组自由标签应可见").arg(c.tag)));
+            const QVector3D got = g.label(li).cartesianAnchor;
+            QVERIFY2(vecNear(got, c.expect),
+                     qPrintable(QString("%1：锚点应为 (%2,%3,0)，实为 (%4,%5,%6)")
+                                .arg(c.tag).arg(c.expect.x()).arg(c.expect.y())
+                                .arg(got.x()).arg(got.y()).arg(got.z())));
+            if (c.mustDifferFromHead) {
+                QVERIFY2(!vecNear(got, QVector3D(3, 4, 0)),
+                         "Line：锚点不得再落在**首端**（旧实现取 cartA 的行为已作废）");
+                QVERIFY2((got - QVector3D(6, 4, 0)).length() < (got - QVector3D(3, 4, 0)).length(),
+                         "Line：锚点应更靠近尾端而非首端");
+            }
+        }
+    }
+
+    // ===== t73②：tier2/tier3 不再做冗余二次包含判定；tier1 显式锚点判定保留（不加容差）=====
+    {
+        LabelFixture g;
+        QChartPrimitive line;                       // 横穿视窗：两端点都在窗外，图元经同帧裁剪可见
+        line.type = QChartPrimitive::Type::Line;
+        line.numA = QVector3D(-20, 5, 0);           // 首端窗外
+        line.numB = QVector3D(20, 5, 0);            // 尾端亦窗外（像素落绘图区外）
+        line.color = Qt::black;
+        line.sourceId = 9;
+        g.scene.primitives.append(line);
+        g.scene.maxSourceId = qMax(g.scene.maxSourceId, 9);
+
+        QChartTextLabel freeLbl;                    // tier3 自由标签（组尾 = 该直线）
+        freeLbl.text = QStringLiteral("span");
+        freeLbl.refPrimitiveId = -1;
+        freeLbl.sourceId = 9;
+        const int li = g.addLabel(freeLbl);
+
+        QChartTextLabel bound;                      // tier2 绑定图元
+        bound.text = QStringLiteral("bound");
+        bound.refPrimitiveId = 0;
+        const int bi = g.addLabel(bound);
+
+        QChartTextLabel farAway;                    // tier1 显式锚点，远在绘图区外
+        farAway.text = QStringLiteral("far");
+        farAway.numericAnchor = QVector3D(50, 0, 0);
+        const int fi = g.addLabel(farAway);
+
+        resolveCpu(g);
+        QVERIFY2(g.label(li).visible,
+                 "tier3：组尾锚点像素落绘图区外，但该组图元同帧裁剪可见 ⇒ 标签不得被二次包含判定丢掉");
+        QVERIFY(vecNear(g.label(li).cartesianAnchor, QVector3D(20, 5, 0)));
+        QVERIFY2(g.label(bi).visible, "tier2：绑定图元可见 ⇒ 标签可见（不受锚点像素位置二次判定）");
+        QVERIFY(vecNear(g.label(bi).cartesianAnchor, QVector3D(20, 5, 0)));
+        QVERIFY2(!g.label(fi).visible,
+                 "tier1：显式锚点落在绘图区外仍必须不可见（判定只对 tier1 保留，不得删过头、不加容差）");
+    }
 }
 
 // ===== #8 GL 后端步骤 2：锚点三级优先级同契约（离屏 ctest 常驻） =====
@@ -671,6 +763,70 @@ void TestAxisPipeline::glAnchorTierResolution()
     QVERIFY2(vecNear(freeInProbe.cartesianAnchor, QVector3D(2, 4, 0)),
              "hybrid 旁路：锚点=同 sourceId 组尾图元（源7 组尾 (2,4,0)）");
     QVERIFY2(freeInProbe.visible, "hybrid 旁路：锚点像素落在 plotArea 内 → 可见（预研语义）");
+
+    // ===== t75：标签避让确定性（绝对容差 ε + 写死优先序 右→下→左→上 + 迟滞 + 状态有界）=====
+    // 契约见 include/core/QChartRenderer.h。索引：0=Right 1=Bottom 2=Left 3=Top。
+    // 夹具：显式锚点标签（tier1），锚点像素由 world→pixel 精确控制（plotArea 400×400、viewRect [-10,10]²
+    // ⇒ 像素 = 200 + 20·x）。四边余量：L=x、R=400−x、T=y、B=400−y；选边 = "余量最大的一侧"（标签朝空旷侧摆）。
+    {
+        LabelFixture g;
+        QChartTextLabel lb;
+        lb.text = QStringLiteral("0");
+        lb.numericAnchor = QVector3D(0, 0, 0);
+        const int li = g.addLabel(lb);
+        QPainterChartRenderer r;
+
+        auto placeAndRender = [&](qreal pixelX, qreal pixelY, const QString& text) -> int {
+            g.scene.labels[li].text = text;
+            g.scene.labels[li].numericAnchor =
+                QVector3D(float((pixelX - 200.0) / 20.0), float((200.0 - pixelY) / 20.0), 0.0f);
+            resolveCpu(g);
+            if (!g.label(li).visible) return -2;      // 锚点被裁掉（不应发生）
+            // resolveCpu 内部是临时 renderer；避让状态需同一实例 ⇒ 再用同一 renderer 渲染一次
+            QImage img(kSize, kSize, QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::white);
+            r.render(g.scene, &img);
+            return r.labelAvoidSide(QChartRenderer::labelAvoidKey(text, 10.0));
+        };
+        const QString kMain = QStringLiteral("0");   // 迟滞序列用同一身份（键 = 字号|文字）
+
+        // ① 打平（正中：四边余量全 200）⇒ 写死优先序取 Right(0)
+        QCOMPARE(placeAndRender(200.0, 200.0, kMain), 0);
+        // ② 绝对容差 ε 的签名：另起身份，Left 仅比 Right 大 0.5px（< ε=1px）⇒ 判平 ⇒ Right(0)
+        //    （旧实现的严格 `>` 会取 Left(2)）
+        QCOMPARE(placeAndRender(200.25, 200.0, QStringLiteral("eps")), 0);
+        // ③ 反向守卫之一：锚点明显靠右 ⇒ 空旷侧在左，差 300px ≫ ε ⇒ 必须取 Left(2)
+        QCOMPARE(placeAndRender(350.0, 200.0, kMain), 2);
+        // ④ 迟滞：另一侧（Right）仅大 5px（< 8px 阈值）⇒ 保持 Left(2)
+        QCOMPARE(placeAndRender(197.5, 200.0, kMain), 2);
+        // ⑤ 反向守卫（迟滞不得把标签钉死）：另一侧大 200px（≫ 8px）⇒ 必须切换为 Right(0)
+        QCOMPARE(placeAndRender(100.0, 200.0, kMain), 0);
+        // ⑥ 下/上两侧（索引 1/3）：锚点贴下缘 ⇒ 空旷侧在上 ⇒ Top(3)；贴上缘 ⇒ Bottom(1)
+        QCOMPARE(placeAndRender(200.0, 395.0, kMain), 3);
+        QCOMPARE(placeAndRender(200.0, 5.0, kMain), 1);
+        qInfo().noquote() << QString("t75 避让契约：正中→Right、+0.5px→Right（ε 判平）、明显靠右→Left、"
+                                     "另一侧+5px→Left（迟滞）、另一侧+200px→Right（守卫）、帖下缘→Top、贴上缘→Bottom");
+
+        // ⑦ 状态有界（标签消失/场景重建不得无界增长）：一次渲染 300 个不同文字的标签 ⇒ 条目 ≤ 上限 256
+        {
+            LabelFixture big;
+            for (int i = 0; i < 300; ++i) {
+                QChartTextLabel l;
+                l.text = QStringLiteral("t%1").arg(i);
+                l.numericAnchor = QVector3D(0, 0, 0);
+                big.addLabel(l);
+            }
+            QPainterChartRenderer rb;
+            QImage img(kSize, kSize, QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::white);
+            rb.render(big.scene, &img);
+            qInfo().noquote() << QString("t75 避让状态有界：300 个不同标签 ⇒ 条目数=%1（上限 256）")
+                                 .arg(rb.labelAvoidStateCount());
+            QVERIFY2(rb.labelAvoidStateCount() <= 256,
+                     qPrintable(QString("避让状态必须按 LRU 上限裁剪（实为 %1）").arg(rb.labelAvoidStateCount())));
+            QVERIFY2(rb.labelAvoidStateCount() > 0, "300 个标签应留下状态条目（上限内）");
+        }
+    }
 }
 
 // ===== 批次2 C③：NaN 规则锁定（未设置必须写 NaN；{0,0,0} = 显式坐标（原点））=====

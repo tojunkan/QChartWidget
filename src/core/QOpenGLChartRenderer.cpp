@@ -23,6 +23,10 @@ qreal s_glPixelRatio = 1.0;
 void qchartSetGLPixelRatio(qreal r) { if (r > 0.0) s_glPixelRatio = r; }
 qreal qchartGLPixelRatio() { return s_glPixelRatio; }
 
+// t73：组尾锚点助手（与二维 CPU 后端共用同一分类：Point→自身 / Line→尾端 numB / 顶点型→末顶点 /
+// Rect·Ellipse→中心）。定义在 QChartRenderer.cpp；头文件不在本批 inScope，故在此前置声明共用。
+QVector3D qchartGroupTailAnchorNumeric(const QChartPrimitive& p);
+
 
 // 构造 / 析构
 
@@ -60,11 +64,13 @@ void QOpenGLChartRenderer::cullAndResolveLabels(QChartScene& scene)
             continue;
         }
 
-        // tier2：锚点全 NaN 且绑定图元 → 用该图元 numA 算 Cartesian 锚点；
+        // tier2：锚点全 NaN 且绑定图元 → 用该图元的**组尾锚点**（t73：与二维 CPU 后端同一分类，
+        // Line 取 numB，避免两后端锚点语义分叉）算 Cartesian 锚点；
         // 图元可见性归 GPU 裁剪（本后端粗裁 = 全可见）
         if (label.refPrimitiveId >= 0) {
             if (label.refPrimitiveId < N) {
-                const QVector3D& num = scene.primitives[label.refPrimitiveId].numA;
+                const QVector3D num =
+                    qchartGroupTailAnchorNumeric(scene.primitives[label.refPrimitiveId]);
                 label.cartesianAnchor = proj->toCartesian(num);
                 label.visible = true;
             } else {
@@ -133,7 +139,9 @@ void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
         QChartProjectedPoint pp = camera->project(label.cartesianAnchor, plotArea);
         const QPointF pixelPos = pp.screen;
 
-        if (!plotArea.contains(pixelPos)) continue;
+        // t73②：与二维 CPU 后端同策略——二次包含判定只对 tier1（显式锚点）保留；
+        // tier2 的可见性来自图元裁剪（本后端粗裁=可见），锚点恰落边界时不应整组丢弃。
+        if (label.hasExplicitAnchor() && !plotArea.contains(pixelPos)) continue;
 
         // 与 CPU 后端共用同一标签排版逻辑（对齐/避让/钳制）
         drawLabel(painter, plotArea, pixelPos, label.text, label.color,

@@ -225,15 +225,21 @@ void QChartLayer3D::collectPrimitives() {
             if (!axis) return;
             // int segments = m_projection3D ? m_projection3D->samplingSegmentsHint() : 72;
             int cnt = m_scene.primitives.size();
+            const int labelCnt = m_scene.labels.size();     // t75：本组标签起点
             m_scene.maxSourceId++;
+            const int groupId = m_scene.maxSourceId;
             axis->drawAtPosition(dimMin, dimMax, off0, off1, dimIndex,
                                  m_scene, segments, labelMode);
             for (int i = cnt; i < m_scene.primitives.size(); ++i) {
                 auto& prim = m_scene.primitives[i];
                 prim.color = color;
                 prim.penWidth = penWidth;
-                prim.sourceId = m_scene.maxSourceId;
+                prim.sourceId = groupId;
             }
+            // t75：本组标签也盖上同组号（稳定身份——标签避让迟滞按身份记忆所选边；
+            // 轴侧标签原为 sourceId=-1）
+            for (int i = labelCnt; i < m_scene.labels.size(); ++i)
+                if (m_scene.labels[i].sourceId < 0) m_scene.labels[i].sourceId = groupId;
             m_scene.PrimitiveIdPrefixSum.push_back(m_scene.primitives.size());
         };
 

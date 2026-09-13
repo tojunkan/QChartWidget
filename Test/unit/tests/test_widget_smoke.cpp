@@ -8,6 +8,8 @@
 #include <QSignalSpy>
 #include <QImage>
 #include <QColor>
+#include <QMatrix4x4>     // t72：viewMatrix 朝向约定断言
+#include <QVector4D>
 #include <cmath>
 
 #include <QApplication>
@@ -16,6 +18,7 @@
 
 #include "QChartWidget.h"
 #include "QChartLayer.h"
+#include "QChartCamera.h"    // t72：viewMatrix()/project() 双路径一致性
 #include "QValueAxis.h"
 #include "QPainterChartRenderer.h"
 #include "QCartesianProjection.h"
@@ -252,9 +255,21 @@ void TestWidgetSmoke::gridSingleLabelPerSpine()
             if (f.scene.primitives[i].sourceId == l.sourceId) tail = i;
         QVERIFY2(tail >= 0, "每条网格脊应有图元组");
         QVERIFY2(l.visible, "网格脊标签应可见（组内存在可见图元）");
-        QVERIFY2(l.cartesianAnchor.x() == f.scene.primitives[tail].cartA.x()
-                     && l.cartesianAnchor.y() == f.scene.primitives[tail].cartA.y(),
-                 "自由标签锚点应等于本组组尾图元 cartA");
+        // t73（越界最小修正，已在提交中向队长声明）：组尾锚点改为**按图元类型分类**——直线取尾端
+        // cartB（旧实现一律取 cartA(首端点)，恰落视图边界时会被绘制期二次包含判定按浮点噪声丢掉
+        // 整组，见 t70 §3a 与 t73 修复）。本夹具组尾为网格脊（4i 后 = 两顶点 Line）⇒ 期望 cartB。
+        const QChartPrimitive& tp = f.scene.primitives[tail];
+        QVector3D want = tp.cartA;
+        if (tp.type == QChartPrimitive::Type::Line) {
+            want = tp.cartB;
+        } else if (tp.type == QChartPrimitive::Type::Path || tp.type == QChartPrimitive::Type::Polygon
+                   || tp.type == QChartPrimitive::Type::TriangleMesh
+                   || tp.type == QChartPrimitive::Type::TriangleFan
+                   || tp.type == QChartPrimitive::Type::TriangleStrip) {
+            if (!tp.cartVerts.isEmpty()) want = tp.cartVerts.last();
+        }
+        QVERIFY2(l.cartesianAnchor.x() == want.x() && l.cartesianAnchor.y() == want.y(),
+                 "自由标签锚点应等于本组组尾图元的**组尾锚点**（t73 分类：Line→cartB，其余→cartA/末顶点）");
     }
 
     // ⑥ 标签真实出墨：同一场景去掉标签后墨迹更少
@@ -558,6 +573,106 @@ void TestWidgetSmoke::driveChainContract()
                                      "（轴被写为实际可见范围 %3..%4）")
                                  .arg(wp.fitCount()).arg(wp.backCalcCount())
                                  .arg(px.min(), 0, 'g', 6).arg(px.max(), 0, 'g', 6);
+    }
+
+    // ===== t72：二维相机朝向约定（viewMatrix 与 project() 必须是**同一个**映射）=====
+    // 背景（t71 诊断）：GL 曾相对 CPU 整幅垂直镜像——viewMatrix 的 Y 缩放取负号，把 NDC 的
+    // “+Y = 视口上方”误当成数值大端；而 CPU project() 的 py = bottom − ny·h 表示“数值小端在屏幕下方”。
+    // 本段把两条路径的一致性钉死在**已登记进构建**的本文件里（legacy 的 test_qchartcamera.cpp 不参与构建）。
+    {
+        QChartWidget wo;
+        QValueAxis ox(nullptr, Qt::AlignBottom), oy(nullptr, Qt::AlignLeft);
+        QChartLayer lo;
+        ox.setRange(-13.0, 7.0);          // ★ 非对称范围（中心 −3）：nice 刻度 = {−12,−8,−4,0,4}
+        oy.setRange(-13.0, 7.0);
+        ox.setTickCount(5); oy.setTickCount(5);
+        wo.addAxis(&ox); wo.addAxis(&oy); wo.addLayer(&lo);
+        wo.resize(420, 340);
+        wo.show();
+        QVERIFY2(QTest::qWaitForWindowExposed(&wo), "offscreen 下窗口应暴露");
+        wo.grab();
+        const QRectF pa = wo.plotArea();
+        const QChartCamera* cam = lo.camera();
+        QVERIFY2(cam && pa.width() > 100.0 && pa.height() > 100.0, "plotArea 与相机应有效");
+        const QRectF vr = cam->viewRect();
+        const QMatrix4x4 vm = cam->viewMatrix();
+
+        auto ndcOf = [&vm](qreal x, qreal y) {
+            const QVector4D v = vm * QVector4D(float(x), float(y), 0.0f, 1.0f);
+            return QVector3D(v.x() / v.w(), v.y() / v.w(), 0.0f);
+        };
+        // NDC → 像素（GL 视口约定：NDC +Y 朝屏幕上方；Qt 像素行号向下递增）
+        auto ndcToPixel = [&pa](const QVector3D& ndc) {
+            return QPointF(pa.left() + (ndc.x() + 1.0) * 0.5 * pa.width(),
+                           pa.top()  + (1.0 - ndc.y()) * 0.5 * pa.height());
+        };
+
+        // ① viewRect 四角：NDC 符号 + 与 project() 像素映射一致（同一 Cartesian 点两路径差 < 1e-6）
+        struct Corner { qreal x, y, ndcY; const char* tag; };
+        const Corner corners[4] = {
+            { vr.left(),  vr.top(),    -1.0, "left-top（数值小端 Y）" },
+            { vr.right(), vr.top(),    -1.0, "right-top（数值小端 Y）" },
+            { vr.left(),  vr.bottom(), +1.0, "left-bottom（数值大端 Y）" },
+            { vr.right(), vr.bottom(), +1.0, "right-bottom（数值大端 Y）" },
+        };
+        for (const Corner& c : corners) {
+            const QVector3D ndc = ndcOf(c.x, c.y);
+            QVERIFY2(qAbs(ndc.y() - c.ndcY) < 1e-6,
+                     qPrintable(QString("角 %1 的 NDC y 应为 %2，实为 %3")
+                                .arg(c.tag).arg(c.ndcY).arg(ndc.y())));
+            QVERIFY2(qAbs(qAbs(ndc.x()) - 1.0) < 1e-6,
+                     qPrintable(QString("角 %1 的 NDC x 应为 ±1，实为 %2").arg(c.tag).arg(ndc.x())));
+            const QPointF viaNdc = ndcToPixel(ndc);
+            const QPointF viaProj = cam->project(QVector3D(float(c.x), float(c.y), 0.0f), pa).screen;
+            QVERIFY2(qAbs(viaNdc.x() - viaProj.x()) < 1e-6 && qAbs(viaNdc.y() - viaProj.y()) < 1e-6,
+                     qPrintable(QString("角 %1：viewMatrix→NDC→像素 %2,%3 与 project() %4,%5 应一致")
+                                .arg(c.tag).arg(viaNdc.x()).arg(viaNdc.y())
+                                .arg(viaProj.x()).arg(viaProj.y())));
+        }
+        // ② 内部偏心点同样一致（横/纵各 5 等分，含视图中心）
+        int interiorChecked = 0;
+        for (int i = 1; i <= 4; ++i) {
+            const qreal t = i / 4.0;
+            const qreal xv = vr.left() + t * vr.width();
+            const qreal yv = vr.top()  + t * vr.height();
+            const qreal xs[2] = { xv, vr.center().x() };
+            const qreal ys[2] = { vr.center().y(), yv };
+            for (int k = 0; k < 2; ++k) {
+                const QVector3D ndc = ndcOf(xs[k], ys[k]);
+                const QPointF viaNdc = ndcToPixel(ndc);
+                const QPointF viaProj = cam->project(QVector3D(float(xs[k]), float(ys[k]), 0.0f), pa).screen;
+                QVERIFY2(qAbs(viaNdc.x() - viaProj.x()) < 1e-6 && qAbs(viaNdc.y() - viaProj.y()) < 1e-6,
+                         qPrintable(QString("内部点 (%1,%2)：NDC→像素 %3,%4 与 project() %5,%6 应一致")
+                                    .arg(xs[k]).arg(ys[k]).arg(viaNdc.x()).arg(viaNdc.y())
+                                    .arg(viaProj.x()).arg(viaProj.y())));
+                ++interiorChecked;
+            }
+        }
+        // ③ 屏幕方向（显式）：数值大端的像素行号必须**更小**（在屏幕上方）
+        const QPointF pLo = cam->project(QVector3D(float(vr.center().x()), float(vr.top()), 0.0f), pa).screen;
+        const QPointF pHi = cam->project(QVector3D(float(vr.center().x()), float(vr.bottom()), 0.0f), pa).screen;
+        QVERIFY2(pHi.y() < pLo.y() - 1.0,
+                 qPrintable(QString("数值大端应在上方：y=top→行%1，y=bottom→行%2").arg(pLo.y()).arg(pHi.y())));
+        // ④ 夹具自检（防“镜像≡平移”自欺）：刻度行集关于中心行镜像后**不得**整体重合
+        const QVector<qreal> oyTicks = oy.tickValues(qMin(vr.top(), vr.bottom()),
+                                                     qMax(vr.top(), vr.bottom()));
+        QVector<qreal> tickRows;
+        for (qreal v : oyTicks)
+            tickRows.append(cam->project(QVector3D(0.0f, float(v), 0.0f), pa).screen.y());
+        QVERIFY2(tickRows.size() >= 4, "非对称夹具至少 4 条刻度行");
+        int mirrorHits = 0;
+        for (qreal r : tickRows) {
+            for (qreal r2 : tickRows) {
+                if (qAbs((2.0 * pa.center().y() - r) - r2) <= 1.0) { ++mirrorHits; break; }
+            }
+        }
+        QVERIFY2(mirrorHits * 2 <= tickRows.size(),
+                 qPrintable(QString("刻度行集必须不关于视图中心对称（镜像命中 %1/%2）；否则镜像不可观测")
+                            .arg(mirrorHits).arg(tickRows.size())));
+        qInfo().noquote() << QString("t72 朝向约定: 四角+%1 内部点 NDC↔project 一致（<1e-6px）；"
+                                     "数值大端行 %2 < 小端行 %3；刻度行 %4 条、镜像命中 %5")
+                                 .arg(interiorChecked).arg(pHi.y()).arg(pLo.y())
+                                 .arg(tickRows.size()).arg(mirrorHits);
     }
 
     qInfo().noquote() << QString("4e 2D: 数值侧 fit=%1 相机侧反算=%2；闩锁已由方向状态取代")

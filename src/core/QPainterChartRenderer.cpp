@@ -10,6 +10,11 @@
 
 Q_LOGGING_CATEGORY(logPainter, "chart.render.painter")
 
+// t73：组尾锚点助手（按图元类型分类：Point→自身 / Line→尾端 / 顶点型→末顶点 / Rect·Ellipse→中心）。
+// 定义在 QChartRenderer.cpp（与 GL 后端共用同一实现，避免两后端语义分叉）；头文件不在本批 inScope，
+// 故此处以相同签名的前置声明共用。
+QVector3D qchartGroupTailAnchorCartesian(const QChartPrimitive& p);
+
 // 步骤 2a：Numeric → Cartesian 变换
 
 void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
@@ -106,10 +111,12 @@ void QPainterChartRenderer::cullAndResolveLabels(QChartScene& scene)
             continue;
         }
 
-        // tier2：锚点全 NaN 且绑定图元 → 继承该图元 cartesianAnchor 与可见性
+        // tier2：锚点全 NaN 且绑定图元 → 继承该图元**组尾锚点**（t73：按类型分类，Line 取 cartB）
+        // 与可见性
         if (label.refPrimitiveId >= 0) {
             if (label.refPrimitiveId < N) {
-                label.cartesianAnchor = scene.primitives[label.refPrimitiveId].cartA;
+                label.cartesianAnchor =
+                    qchartGroupTailAnchorCartesian(scene.primitives[label.refPrimitiveId]);
                 label.visible = visibility[label.refPrimitiveId];
             } else {
                 label.visible = false;   // 越界绑定：无对应图元 → 不可见
@@ -117,13 +124,15 @@ void QPainterChartRenderer::cullAndResolveLabels(QChartScene& scene)
             continue;
         }
 
-        // tier3：自由标签（refPrimitiveId == -1）→ 同 sourceId 组尾最后可见图元（机制不变）
+        // tier3：自由标签（refPrimitiveId == -1）→ 同 sourceId 组尾最后可见图元（机制不变；
+        // t73：锚点改取该图元的**组尾锚点**——Line 用尾端 cartB，旧实现取 cartA（首端点）
+        // 恰落视图边界，配合绘制期二次包含判定会按浮点噪声丢掉整组标签，见 t70 §3a）
         if (label.refPrimitiveId == -1) {
             const int sid = label.sourceId;
             if (sid >= 0 && sid < lastVisibleIndex.size()) {
                 const int idx = lastVisibleIndex[sid];
                 if (idx != -1) {
-                    label.cartesianAnchor = scene.primitives[idx].cartA;
+                    label.cartesianAnchor = qchartGroupTailAnchorCartesian(scene.primitives[idx]);
                     label.visible = true;
                     continue;
                 }
@@ -440,7 +449,14 @@ void QPainterChartRenderer::drawLabels2D(QPainter& painter,
         if (!label.visible) continue;
 
         QChartProjectedPoint pp = cam2d->project(label.cartesianAnchor, plotArea);
-        if (!plotArea.contains(pp.screen)) continue;
+
+        // t73②（★二维 CPU 生效路径）：二次包含判定**只对 tier1（显式锚点）保留**——
+        // drawLabel 会把文字框钳制进绘图区，不判定则视图外的显式标签会被"挤"到边缘说谎。
+        // tier2/tier3 的可见性由**同帧**裁剪结果导出（visibility[] / 同组组尾可见性），此处再判一次
+        // 会因锚点恰落边界（实测 700.000018 vs plotArea.right()=700、67.999988 vs left=68，
+        // 1e-5~2e-5 px 级浮点噪声）把整组网格标签丢掉（t70 §3a，用户可见"时横时纵整组消失"）。
+        // 用户裁定：不加容差（fit 已保证视图内元素落在绘图区内，不做容差式绕过）。
+        if (label.hasExplicitAnchor() && !plotArea.contains(pp.screen)) continue;
 
         drawLabel(painter, plotArea, pp.screen, label.text, label.color,
                   label.fontSize, label.alignment);
@@ -448,6 +464,7 @@ void QPainterChartRenderer::drawLabels2D(QPainter& painter,
 }
 
 // 批次 B1 恢复：drawLabels3D（3D 标签：非有限投影/plotArea 外跳过）
+// 注：3D 标签锚点来自图元自身（tier2），本次 t73 只改二维 CPU 路径（任务边界），3D 判定保持原样。
 void QPainterChartRenderer::drawLabels3D(QPainter& painter,
                                          const QChartScene& scene,
                                          const QChartCamera3D* cam3d)

@@ -6,6 +6,7 @@
 #define QCHARTRENDERER_H
 
 #include <QColor>
+#include <QHash>
 #include <QList>
 #include <QPointF>
 #include <QRectF>
@@ -68,6 +69,15 @@ public:
     /// 本阶段为**粗粒度 viewDirty = 全量更新（重收集 + 变换 + 裁剪）**，背景/前景分级留待后续批次。
     void invalidateView() { m_viewDirty = true; }
 
+    // ===== t75：标签自动避让状态（迟滞）只读查询（测试/诊断入口；契约见下方 drawLabel 注释）=====
+    /// 标签稳定身份键（当前实现 = 字号 + 文字；图层已按契约把组号盖进 label.sourceId，
+    /// 待标签绘制调用点进入可改范围后可直接切换为 sourceId 键）
+    static QString labelAvoidKey(const QString& text, qreal fontSize = 10.0);
+    /// 该身份上一次选中的避让边（0=Right 1=Bottom 2=Left 3=Top；-1 = 无记录）
+    int labelAvoidSide(const QString& key) const;
+    /// 当前迟滞状态条目数（有界性断言用；上限 kAvoidMaxEntries=256，LRU 裁剪）
+    int labelAvoidStateCount() const;
+
 protected:
     
     // 子类必须实现
@@ -88,13 +98,30 @@ protected:
     virtual void drawLabels(QChartScene& scene,
                             QPaintDevice* device) = 0;
 
-    static void drawLabel(QPainter& painter,
-                          const QRectF& plotArea,
-                          const QPointF& pixelAnchor,
-                          const QString& text,
-                          const QColor& color,
-                          qreal fontSize,
-                          Qt::Alignment alignment);
+    // ===== t75：标签自动避让（drawLabel 的"最空一边"启发式）契约 =====
+    // 症状（t70 §3b）：三维 FaceLine 的 0 刻度标签旋转相机时左右摆动——旧实现对四边余量
+    // （锚点到绘图区四边的像素距离）做严格 `>` 取最大，**打平时无固定顺序、无迟滞**；
+    // 锚点恰在绘图区中心时四边余量完全打平（实测 L/R/T/B = 316.0/316.0/239.0/239.0），
+    // 24 步 2° 旋转里相邻帧翻转 6 次。
+    // 契约（三层，缺一不可；常量见 .cpp 顶部 kAvoid*）：
+    //   ① **绝对容差判平**：余量相差 ≤ ε = 1px 视为打平（**不使用 qFuzzyCompare**——它是相对
+    //      容差，在接近 0 的像素余量上不可用）；
+    //   ② **写死优先序**：打平时按 **右 → 下 → 左 → 上** 取（索引 0=Right、1=Bottom、2=Left、3=Top）；
+    //   ③ **迟滞**：记住该标签上一次选中的边，除非另一边的余量**明显更大**（差值 > 8px）才切换。
+    // 状态归属：标签每帧重建，故状态存放在**渲染器实例**上（CPU/GL 各一份），键为标签稳定身份
+    // （labelAvoidKey()，当前 = 文字 + 字号；图层已按契约把组号盖进 label.sourceId，待标签绘制
+    // 调用点进入可改范围后可直接切换为 sourceId 键）。表按 LRU 上限 kAvoidMaxEntries=256 条裁剪，
+    // 标签消失/场景重建不会无界增长。
+
+    /// 单标签排版（对齐/避让/钳制）。
+    /// t75：由 static 改为**实例方法**（四个调用点均为子类成员函数，源兼容）——迟滞状态需要实例归属。
+    void drawLabel(QPainter& painter,
+                   const QRectF& plotArea,
+                   const QPointF& pixelAnchor,
+                   const QString& text,
+                   const QColor& color,
+                   qreal fontSize,
+                   Qt::Alignment alignment);
 
     /// 标签锚点像素可见性判定（批次2 收尾：由 QPainterChartRenderer / QOpenGLChartRenderer
     /// 中的两份副本搬入基类，单一实现、两后端共用——禁止再留副本）：
@@ -133,6 +160,17 @@ protected:
     // 粗粒度全量更新语义见 invalidateView() 注释（背景/前景分级留待后续批次）。
     bool m_viewDirty = true;
     QVector<bool> m_visibilityCache;  // 与 scene.primitives 一一对应
+
+    /// t75：避让状态 LRU 裁剪（超过 kAvoidMaxEntries 时丢弃最久未更新条目）
+    void pruneAvoidState();
+
+    // t75：标签避让迟滞状态（键 = labelAvoidKey()；LRU 上限见 .cpp 的 kAvoidMaxEntries）
+    struct LabelAvoidState {
+        int side = -1;        // 0=Right 1=Bottom 2=Left 3=Top
+        quint64 seq = 0;      // 最近更新序号（LRU 裁剪用）
+    };
+    QHash<QString, LabelAvoidState> m_labelAvoid;
+    quint64 m_labelAvoidSeq = 0;
 };
 
 #endif // QCHARTRENDERER_H
