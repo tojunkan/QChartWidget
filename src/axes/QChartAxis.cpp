@@ -120,15 +120,21 @@ void QChartAxis::drawAtEdge(QPainter* painter,
     f.setPointSize(f.pointSize());
     painter->setFont(f);
 
-    // ── 确定本轴对应的 Numeric 维度范围 ──
+    // ── 确定本轴对应的 Numeric 维度范围（4h-a：按**区间**规范化读取）──
+    // ctx.dataBounds 是 widget 组装的 legacy 取向 QRectF：dim0 = left(min)..right(max)、
+    // dim1 = bottom(min)..top(max)，因此 height() 常为负（冻结断言见 TestWidgetSmoke：
+    // QRectF(-10,10,20,-20)）。此处必须取 qMin/qMax 规范化区间，**不得**写死 top()=min /
+    // top()+height()=max 的朝向——否则非生产朝向的输入会被反向读取（tickValues 收到反向区间 →
+    // niceStep 退化兜底成 9 等分），左侧边框轴刻度与网格脊错位（f113d09 起的长期错配）。
+    // 范围来源保持 ctx.dataBounds 不变（交互真值是 viewRect，轴范围由 viewRect 反算更新）。
     bool isHoriz = (m_alignment == Qt::AlignBottom || m_alignment == Qt::AlignTop);
     qreal numericMin, numericMax;
     if (isHoriz) {
-        numericMin = ctx.dataBounds.left();
-        numericMax = ctx.dataBounds.left() + ctx.dataBounds.width();
+        numericMin = qMin(ctx.dataBounds.left(), ctx.dataBounds.right());
+        numericMax = qMax(ctx.dataBounds.left(), ctx.dataBounds.right());
     } else {
-        numericMin = ctx.dataBounds.top();
-        numericMax = ctx.dataBounds.top() + ctx.dataBounds.height();
+        numericMin = qMin(ctx.dataBounds.top(), ctx.dataBounds.bottom());
+        numericMax = qMax(ctx.dataBounds.top(), ctx.dataBounds.bottom());
     }
 
     // ── 方向参数 ──
@@ -269,18 +275,32 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
     }
     QVector<QVector3D> dirs = { axisDir, -axisDir, dir1, -dir1, dir2, -dir2 };
 
-    // 3. 生成轴线（Path 图元）
+    // 3. 生成脊线（4i：恒等投影下直线化）
+    //    判据 = scene.projection->isIdentityMapping()（今日 true ⇔ QCartesianProjection / QCartesianProjection3D）：
+    //      恒等 ⇒ 直接提交 2 顶点直线（Type::Line + numA/numB；CPU 2D/3D 与 GL 三路均已支持 Line）；
+    //      非恒等 ⇒ 保持按 segments 采样的 Path（Polar / Functional / 插值投影等）。
+    //    ★禁止用 projection->type() 判直线：QInterpolatedProjection::type() 返回**目标**投影类型，
+    //      投影切换动画中途按 type() 判会令仍在弯曲的脊线突然变直。
+    const bool identityMapping = (scene.projection && scene.projection->isIdentityMapping());
+    auto spinePoint = [&](qreal val) {
+        switch (dimIndex) {
+        case 0: return QVector3D(val, offset0, offset1);
+        case 1: return QVector3D(offset0, val, offset1);
+        default: return QVector3D(offset0, offset1, val);
+        }
+    };
     QChartPrimitive axisLine;
-    axisLine.type = QChartPrimitive::Type::Path;
     axisLine.color = axisColor;
     axisLine.penWidth = 1.0;
-    for (int i = 0; i <= segments; ++i) {
-        qreal t = static_cast<qreal>(i) / segments;
-        qreal val = dimMin + t * (dimMax - dimMin);
-        switch (dimIndex) {
-        case 0: axisLine.numVerts.append(QVector3D(val, offset0, offset1)); break;
-        case 1: axisLine.numVerts.append(QVector3D(offset0, val, offset1)); break;
-        case 2: axisLine.numVerts.append(QVector3D(offset0, offset1, val)); break;
+    if (identityMapping) {
+        axisLine.type = QChartPrimitive::Type::Line;   // 2 顶点直线
+        axisLine.numA = spinePoint(dimMin);
+        axisLine.numB = spinePoint(dimMax);
+    } else {
+        axisLine.type = QChartPrimitive::Type::Path;   // 采样折线
+        for (int i = 0; i <= segments; ++i) {
+            const qreal t = static_cast<qreal>(i) / segments;
+            axisLine.numVerts.append(spinePoint(dimMin + t * (dimMax - dimMin)));
         }
     }
     outPrims->append(axisLine);
@@ -295,24 +315,27 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         case 2: pos = QVector3D(offset0, offset1, tickVal); break;
         }
 
-        // 4b. 7 个点图元（中心 + 6 个方向）
-        const int centerIdx = outPrims->size();   // 中心点将落在此下标（先于 6 个方向点）
-        QChartPrimitive center;
-        center.type = QChartPrimitive::Type::Point;
-        center.numA = pos;
-        center.color = axisColor;
-        center.markerSize = 2.0;
-        outPrims->append(center);
+        // 4b. 7 个点图元（中心 + 6 个方向）——4i：**仅 Tickwise 脊生成**（Single/None 不出装饰；
+        //     二维网格脊恒为 Single ⇒ 每帧 1694 个装饰点归零；三维主轴脊为 Tickwise ⇒ 保留）
+        const bool decorate = (labelMode == LabelMode::Tickwise);
+        const int centerIdx = decorate ? outPrims->size() : -1;   // 仅装饰存在时才有中心点下标
+        if (decorate) {
+            QChartPrimitive center;
+            center.type = QChartPrimitive::Type::Point;
+            center.numA = pos;
+            center.color = axisColor;
+            center.markerSize = 2.0;
+            outPrims->append(center);
 
-        qreal tickLen = (dimMax - dimMin) * TICK_LENGTH;
-
-        for (const QVector3D& d : dirs) {
-            QChartPrimitive point;
-            point.type = QChartPrimitive::Type::Point;
-            point.numA = pos + d * tickLen;
-            point.color = axisColor;
-            point.markerSize = 2.0;
-            outPrims->append(point);
+            const qreal tickLen = (dimMax - dimMin) * TICK_LENGTH;
+            for (const QVector3D& d : dirs) {
+                QChartPrimitive point;
+                point.type = QChartPrimitive::Type::Point;
+                point.numA = pos + d * tickLen;
+                point.color = axisColor;
+                point.markerSize = 2.0;
+                outPrims->append(point);
+            }
         }
 
         // 4c. 标签（锚点指向刻度位置，方向由 Renderer 决定）
@@ -327,7 +350,9 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
             label.alignment = Qt::AlignCenter;
             label.numericAnchor = pos;
             label.sourceId = -1;
-            label.refPrimitiveId = centerIdx;
+            // 4i：装饰被跳过（Single/None）时不得留下悬空下标 → refPrimitiveId = -1（显式锚点仍有效）；
+            //     Tickwise 保持绑定到本刻度中心点图元（tier2 回退）。
+            label.refPrimitiveId = decorate ? centerIdx : -1;
             outLabels->append(label);
         }
     }

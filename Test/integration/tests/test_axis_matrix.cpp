@@ -15,6 +15,8 @@
 #include "QOpenGLChartRenderer.h"
 #include "QChartGL.h"
 #include "QValueAxis.h"
+#include "QChartWidget.h"      // 4h-a：真实 widget 路径验证
+#include "QChartLayer.h"
 #include "QChartScene.h"
 #include "QChartCamera.h"
 #include "QCartesianProjection.h"
@@ -117,6 +119,27 @@ int inkCountAll(const QImage& img)
     return n;
 }
 
+/// 4h-a：绘图区左外带的“标签行带”中心（连续有墨行合并为一带；scale 为设备像素比）
+QVector<int> labelRowBands(const QImage& img, const QRectF& plot, qreal scale, int bandWidth = 55)
+{
+    QVector<int> bands;
+    const int x0 = qMax(0, int(plot.left() * scale) - bandWidth);
+    const int x1 = qMin(img.width() - 1, int(plot.left() * scale) - 1);
+    // 仅扫 plotArea 纵向范围：排除上/下边框轴自身的标签带（否则会被多计一带）
+    const int y0 = qMax(0, int(plot.top() * scale));
+    const int y1 = qMin(img.height() - 1, int(plot.bottom() * scale));
+    int runStart = -1;
+    for (int y = y0; y <= y1; ++y) {
+        bool ink = false;
+        for (int x = x0; x <= x1 && !ink; ++x)
+            if (isInk(img.pixelColor(x, y))) ink = true;
+        if (ink && runStart < 0) runStart = y;
+        if (!ink && runStart >= 0) { bands.append((runStart + y - 1) / 2); runStart = -1; }
+    }
+    if (runStart >= 0) bands.append((runStart + y1) / 2);
+    return bands;
+}
+
 int inkInRect(const QImage& img, const QRect& r)
 {
     int n = 0;
@@ -155,9 +178,12 @@ void verifyCombo(const QImage& img, ProjectionKind kind, bool grid, bool labels,
         QVERIFY2(inkCount(img, px.x(), px.y(), 4) > 0,
                  qPrintable(QString("[%1] X 轴脊应落屏").arg(backend)));
 
-        // F2 刻度点邻域断言：drawAtPosition 每个主刻度产生 7 点（中心+6 臂）。
-        // 臂点离轴脊线 6px（cart ±0.3），2px 点光栅 ±1px 取整 → 半径 2 邻域采样，
-        // 不做单像素精确断言。grid=on 时垂直网格线也过该列，但 grid=off 行可独立证明点光栅。
+        // F2 刻度点邻域断言（4i 改造）：drawAtPosition 的 7 点装饰（中心+6 臂）**只在 Tickwise 脊**生成。
+        // 臂点离轴脊线 6px（cart ±0.3），2px 点光栅 ±1px 取整 → 半径 2 邻域采样，不做单像素精确断言。
+        //   · labels=true（Tickwise）⇒ 臂点必须有墨（与 4i 前一致）；
+        //   · labels=false（None）⇒ 装饰被跳过，臂点必须**无墨**；注意 grid=on 时垂直网格脊本身
+        //     穿过该列（x=-4），故“无墨”只在 grid=off 组合下成立并可判（grid=on 由 cpuMatrix 的
+        //     图元类型/计数断言覆盖：网格脊为 None ⇒ 0 个 Point 图元）。
         const QPoint arms[4] = {
             pixOf(-4.0,  0.3),   // X 刻度 x=-4 的 ±y 臂
             pixOf(-4.0, -0.3),
@@ -165,9 +191,15 @@ void verifyCombo(const QImage& img, ProjectionKind kind, bool grid, bool labels,
             pixOf(-0.3,  4.0),
         };
         for (const QPoint& arm : arms) {
-            QVERIFY2(inkCount(img, arm.x(), arm.y(), 2) > 0,
-                     qPrintable(QString("[%1] 刻度点臂未出墨 @%2,%3")
-                                .arg(backend).arg(arm.x()).arg(arm.y())));
+            if (labels) {
+                QVERIFY2(inkCount(img, arm.x(), arm.y(), 2) > 0,
+                         qPrintable(QString("[%1] Tickwise 刻度点臂未出墨 @%2,%3")
+                                    .arg(backend).arg(arm.x()).arg(arm.y())));
+            } else if (!grid) {
+                QVERIFY2(inkCount(img, arm.x(), arm.y(), 2) == 0,
+                         qPrintable(QString("[%1] None 脊不应有刻度装饰墨迹 @%2,%3")
+                                    .arg(backend).arg(arm.x()).arg(arm.y())));
+            }
         }
     } else {
         const QPoint pr = pixOf(2.0, 0.0);
@@ -176,6 +208,28 @@ void verifyCombo(const QImage& img, ProjectionKind kind, bool grid, bool labels,
         const QPoint po = pixOf(7.0710678, 7.0710678);
         QVERIFY2(inkCount(img, po.x(), po.y(), 5) > 0,
                  qPrintable(QString("[%1] 极坐标外环应落屏").arg(backend)));
+
+        // 4i：极坐标装饰对照（探针 = θ=80 主刻度的径向内臂 → r=10−5.4=4.6、θ=80°
+        //     → cart(0.7989, 4.5295)）。tickValues(0,360)+tickCount5 → niceStep 80 ⇒ 环轴主刻度
+        //     恰为 {0,80,160,240,320}，θ=80 是其中之一。
+        //     注意 grid=on 时 θ=80 的辐条脊（网格脊本身）正好穿过该探针 ⇒ 无墨判定只在 grid=off 成立；
+        //     grid=on 组合由 cpuMatrix 的图元类型/计数断言覆盖（网格脊 None ⇒ 0 个 Point）。
+        //     ★后端差异（既有，非 4i 引入）：GL 后端在该点不落墨——变异副本（4i 前=装饰无条件生成）
+        //       在 wayland 下同样报红（t67_mut/intg_wayland.log），故“装饰可见”正向断言只对 CPU 成立；
+        //       GL 侧的装饰门控由 cpuMatrix 的图元计数断言与 None 无墨断言覆盖。
+        const QPoint parm = pixOf(0.7989385, 4.5295340);
+        const bool isCpu = (QLatin1String(backend) == QLatin1String("CPU"));
+        if (labels) {
+            if (isCpu) {
+                QVERIFY2(inkCount(img, parm.x(), parm.y(), 2) > 0,
+                         qPrintable(QString("[%1] Polar|Tickwise 刻度装饰（径向内臂）应有墨 @%2,%3")
+                                    .arg(backend).arg(parm.x()).arg(parm.y())));
+            }
+        } else if (!grid) {
+            QVERIFY2(inkCount(img, parm.x(), parm.y(), 2) == 0,
+                     qPrintable(QString("[%1] Polar|None 脊不应有刻度装饰墨迹 @%2,%3")
+                                .arg(backend).arg(parm.x()).arg(parm.y())));
+        }
     }
 
     // 网格开关：采样点离轴脊/标签足够远
@@ -216,6 +270,9 @@ QString comboName(ProjectionKind kind, bool grid, bool labels)
 } // namespace
 
 // ===== CPU：8 组合全跑（offscreen ctest 常驻）=====
+// 4h-a：真实 widget 路径验证（定义见文件后部）
+void checkWidgetBorderAxisMatchesGridSpines();
+
 void TestAxisMatrixCpu::cpuMatrix()
 {
     for (ProjectionKind kind : {ProjectionKind::Cartesian, ProjectionKind::Polar}) {
@@ -225,6 +282,41 @@ void TestAxisMatrixCpu::cpuMatrix()
                 f.build(grid, labels);
                 const int expectLabels = (kind == ProjectionKind::Cartesian) ? 10 : 11;
                 QCOMPARE(f.scene.labels.size(), labels ? expectLabels : 0);
+
+                // ── 4i 契约（字面量 + 构成）────────────────────────────────────────────
+                // 脊线表示：Cartesian 为恒等投影 ⇒ 全部 Type::Line（2 顶点，numA/numB）；
+                //           Polar 为非恒等投影 ⇒ 保持 Type::Path 采样（顶点数 > 2）。
+                // 装饰点：只在 Tickwise 脊上（本夹具 labels=true ⇔ 两条主轴脊 Tickwise，网格脊恒为 None）。
+                //   脊数 = 主轴 2 + 网格 8（笛卡尔：x/y 各 4 条非零刻度；极坐标：4 环 + 4 辐条）
+                //   装饰点 = labels ? 主轴刻度数×7 : 0（笛卡尔 2×5×7=70；极坐标 5θ×7 + 6r×7=77）
+                int nLine = 0, nPoint = 0, nPath = 0;
+                for (const QChartPrimitive& p : f.scene.primitives) {
+                    switch (p.type) {
+                    case QChartPrimitive::Type::Line: ++nLine; break;
+                    case QChartPrimitive::Type::Point: ++nPoint; break;
+                    case QChartPrimitive::Type::Path: ++nPath; break;
+                    default: break;
+                    }
+                }
+                const int expectSpines = grid ? 10 : 2;
+                const int expectPoints = labels ? ((kind == ProjectionKind::Cartesian) ? 70 : 77) : 0;
+                if (kind == ProjectionKind::Cartesian) {
+                    QCOMPARE(nLine, expectSpines);
+                    QCOMPARE(nPath, 0);
+                    for (const QChartPrimitive& p : f.scene.primitives) {
+                        if (p.type != QChartPrimitive::Type::Line) continue;
+                        QVERIFY2(p.numVerts.isEmpty() && p.numA != p.numB,
+                                 "恒等投影的脊线应为 2 顶点 Line（numA/numB，无采样顶点）");
+                    }
+                } else {
+                    QCOMPARE(nPath, expectSpines);
+                    QCOMPARE(nLine, 0);
+                }
+                QCOMPARE(nPoint, expectPoints);
+                QCOMPARE(f.scene.primitives.size(), expectSpines + expectPoints);
+                qInfo().noquote() << QString("[4i CPU] %1 prims=%2 (Line=%3 Path=%4 Point=%5) labels=%6")
+                    .arg(comboName(kind, grid, labels)).arg(f.scene.primitives.size())
+                    .arg(nLine).arg(nPath).arg(nPoint).arg(f.scene.labels.size());
 
                 const QImage img = renderCpu(f);
 
@@ -263,7 +355,9 @@ void TestAxisMatrixCpu::cpuMatrix()
                 // 边框轴（Bottom + Left）画在 plotArea 外侧边距
                 DrawContext ctx;
                 ctx.plotArea = pa;
-                ctx.dataBounds = QRectF(kViewLo, kViewLo, kViewHi - kViewLo, kViewHi - kViewLo);
+                // 4h-a：改为**生产朝向**（legacy：dim0=left..right、dim1=bottom..top，height<0），
+                // 数值范围不变（仍 kViewLo..kViewHi）——旧夹具喂数学式朝向，与生产相反故测不出反向读取。
+                ctx.dataBounds = QRectF(kViewLo, kViewHi, kViewHi - kViewLo, -(kViewHi - kViewLo));
                 ctx.viewRect = ctx.dataBounds;
                 ctx.projection = f.projection.get();
                 {
@@ -271,6 +365,21 @@ void TestAxisMatrixCpu::cpuMatrix()
                     f.dim0Axis.drawAtEdge(&p, ctx, true, true, true);
                     f.dim1Axis.drawAtEdge(&p, ctx, true, true, true);
                     p.end();
+                }
+                // 4h-a 对向朝向对照：同数值范围改喂数学式朝向 → 渲染结果必须逐位一致
+                {
+                    QImage imgMirror = img;
+                    imgMirror.fill(Qt::white);
+                    QPainterChartRenderer r2;
+                    r2.render(f.scene, &imgMirror);
+                    DrawContext ctxM = ctx;
+                    ctxM.dataBounds = QRectF(kViewLo, kViewLo, kViewHi - kViewLo, kViewHi - kViewLo);
+                    ctxM.viewRect = ctxM.dataBounds;
+                    QPainter p(&imgMirror);
+                    f.dim0Axis.drawAtEdge(&p, ctxM, true, true, true);
+                    f.dim1Axis.drawAtEdge(&p, ctxM, true, true, true);
+                    p.end();
+                    QVERIFY2(imgMirror == img, "4h-a：边框轴两种 dataBounds 朝向的像素输出必须一致");
                 }
                 const int leftBand = inkInRect(img, QRect(0, 20, 20, 400));
                 const int bottomBand = inkInRect(img, QRect(20, 420, 400, 20));
@@ -301,9 +410,113 @@ void TestAxisMatrixCpu::cpuMatrix()
             }
         }
     }
+
+    checkWidgetBorderAxisMatchesGridSpines();   // 4h-a：真实 widget 路径验证（左侧边框轴 ↔ 网格脊）
 }
 
 // ===== GL：真实环境 8 组合 =====
+// ===== 4h-a：真实 widget 路径——左侧边框轴标签行带与该层网格脊固定坐标一一对应 =====
+void checkWidgetBorderAxisMatchesGridSpines()
+{
+    QChartWidget w;
+    QValueAxis ax(nullptr, Qt::AlignBottom), ay(nullptr, Qt::AlignLeft);
+    QChartLayer layer;
+    ax.setRange(0.0, 10.0);
+    ay.setRange(-5.0, 45.0);            // 非对称范围（反向读取时会退化为 9 等分兜底）
+    ax.setTickCount(5);
+    ay.setTickCount(5);
+    ax.setColor(Qt::black);
+    ay.setColor(Qt::black);
+    layer.setGridVisible(true);
+    layer.setGridColor(QColor(200, 200, 200));
+    w.addAxis(&ax);
+    w.addAxis(&ay);
+    w.addLayer(&layer);
+    w.resize(420, 340);
+    w.show();
+    QVERIFY2(QTest::qWaitForWindowExposed(&w), "offscreen/wayland 下窗口应暴露");
+    const QImage shot = w.grab().toImage();
+    const qreal s = qreal(shot.width()) / w.width();
+    const QRectF pa = w.plotArea();
+    QVERIFY2(pa.width() > 100.0 && pa.height() > 100.0, "plotArea 应有效");
+
+    // 网格脊固定坐标：水平脊 = 脊线图元且**所有顶点 y 相同**（x 方向扫动）
+    // 4i：恒等投影（Cartesian）下脊线提交为 2 顶点 Type::Line（numA/numB）；此处两种表示都接受，
+    //      判据保持“所有端点 y 相同”这一几何语义（不因表示变化而放宽/改变判定对象）。
+    QVector<qreal> spineY;
+    for (const QChartPrimitive& p : layer.scene().primitives) {
+        if (p.type == QChartPrimitive::Type::Line) {
+            if (qAbs(qreal(p.numA.y()) - qreal(p.numB.y())) > 1e-9) continue;
+            spineY.append(qreal(p.numA.y()));
+        } else if (p.type == QChartPrimitive::Type::Path && p.numVerts.size() >= 2) {
+            const qreal y0 = qreal(p.numVerts.first().y());
+            bool horiz = true;
+            for (const QVector3D& v : p.numVerts)
+                if (qAbs(qreal(v.y()) - y0) > 1e-9) { horiz = false; break; }
+            if (horiz) spineY.append(y0);
+        }
+    }
+    QVERIFY2(spineY.size() == 5,
+             qPrintable(QString("水平网格脊应为 5 条（nice 刻度，非 9 等分兜底），实为 %1").arg(spineY.size())));
+
+    // ── 4i 契约（真实 widget 路径 · 字面量 + 构成）─────────────────────────────────
+    // 该 widget：ax 0..10 tickCount5 → step 2 ⇒ 竖向脊 6 条（x=0,2,4,6,8,10）；
+    //            ay -5..45 tickCount5 → step 10 ⇒ 横向脊 5 条（y=0,10,20,30,40）→ 共 11 条脊。
+    // 二维网格脊恒为 LabelMode::Single（QChartLayer.h:116）⇒ 4i 起不再生成 7 点装饰（原每脊每刻度 7 点）；
+    // Cartesian 为恒等投影 ⇒ 11 条脊全部为 2 顶点 Line。每脊另有 1 个代表标签 ⇒ 11 个标签。
+    {
+        int nLine = 0, nPoint = 0, nPath = 0;
+        for (const QChartPrimitive& p : layer.scene().primitives) {
+            switch (p.type) {
+            case QChartPrimitive::Type::Line: ++nLine; break;
+            case QChartPrimitive::Type::Point: ++nPoint; break;
+            case QChartPrimitive::Type::Path: ++nPath; break;
+            default: break;
+            }
+        }
+        QCOMPARE(nLine, 11);
+        QCOMPARE(nPoint, 0);
+        QCOMPARE(nPath, 0);
+        QCOMPARE(int(layer.scene().labels.size()), 11);
+        QVERIFY2(layer.scene().primitives.size() <= 50,
+                 qPrintable(QString("2D 网格每帧图元总数应 ≤ 50（4i 前为 11 脊 × 33 顶点 Path + 装饰点），实为 %1")
+                            .arg(layer.scene().primitives.size())));
+        // 装饰被跳过（Single）⇒ 标签不得留下悬空 refPrimitiveId
+        for (const QChartTextLabel& l : layer.scene().labels)
+            QCOMPARE(l.refPrimitiveId, -1);
+        qInfo().noquote() << QString("4i widget 路径：脊 %1 条（Line=%2 Path=%3，其中横向脊 %4 条）/ 装饰点=%5 / 标签=%6 / 图元总数=%7")
+                                 .arg(nLine + nPath).arg(nLine).arg(nPath).arg(spineY.size()).arg(nPoint)
+                                 .arg(layer.scene().labels.size()).arg(layer.scene().primitives.size());
+    }
+
+    // 左侧边框轴标签行带（抓图设备像素）
+    const QVector<int> bands = labelRowBands(shot, pa, s);
+    {
+        QString b, sp;
+        for (int x : bands) b += QString::number(x) + " ";
+        for (qreal y : spineY) sp += QString::number(y, 'g', 4) + " ";
+        qInfo().noquote() << QString("4h-a 诊断：标签行带=[%1] 脊固定值=[%2]").arg(b.trimmed()).arg(sp.trimmed());
+    }
+    QVERIFY2(bands.size() == spineY.size(),
+             qPrintable(QString("左侧边框轴标签数(%1)应与网格脊数(%2)一致（9 等分退化会显著不一致）")
+                            .arg(bands.size()).arg(spineY.size())));
+
+    // 每条脊的投影行必须能找到对应标签行带（值/位置一致）
+    for (qreal y : spineY) {
+        const qreal row = layer.camera()->project(QVector3D(0.0f, float(y), 0.0f), pa).screen.y() * s;
+        bool found = false;
+        for (int band : bands)
+            if (qAbs(band - row) <= 3.0) found = true;
+        QVERIFY2(found,
+                 qPrintable(QString("网格脊 y=%1（投影行 %2）应在左侧边框轴标签行带中找到对应（带：%3）")
+                                .arg(y).arg(row).arg([&bands]() {
+                                    QString s2; for (int b : bands) s2 += QString::number(b) + " ";
+                                    return s2; }())));
+    }
+    qInfo().noquote() << QString("4h-a widget 路径：水平脊 %1 条 / 左侧标签带 %2 个，逐一对齐（plotArea=%3x%4）")
+                             .arg(spineY.size()).arg(bands.size()).arg(pa.width()).arg(pa.height());
+}
+
 void TestAxisMatrixGl::initTestCase()
 {
     // §验收：offscreen 平台无真实 GL → 整类 QSKIP（记录环境缺失；转 wayland/xcb 或 Windows 侧）

@@ -133,27 +133,72 @@ void TestAxes3DSmoke::cpuThreeGridModes()
     const int latPrims = fLat.scene.primitives.size();
     const int latLabels = fLat.scene.labels.size();
 
-    qInfo().noquote() << QString("3D smoke: Box prims=%1 labels=%2 ink=%3 tiles=%4 | "
-                                 "FaceLine prims=%5 labels=%6 ink=%7 | Lattice prims=%8 labels=%9 ink=%10 tiles=%11")
-        .arg(boxPrims).arg(boxLabels).arg(inkAll(imgBox)).arg(inkTiles(imgBox))
-        .arg(facePrims).arg(faceLabels).arg(inkAll(imgFace))
-        .arg(latPrims).arg(latLabels).arg(inkAll(imgLat)).arg(inkTiles(imgLat));
+    // 4i：图元类型构成（3D 恒等投影 = QCartesianProjection3D ⇒ 脊线全部为 2 顶点 Line；
+    //     7 点装饰只在 LabelMode::Tickwise 的脊上生成）
+    const auto countType = [](const QChartScene& s, QChartPrimitive::Type t) {
+        int n = 0;
+        for (const QChartPrimitive& p : s.primitives) if (p.type == t) ++n;
+        return n;
+    };
+    const auto allLinesAreTwoPoint = [](const QChartScene& s) {
+        for (const QChartPrimitive& p : s.primitives) {
+            if (p.type != QChartPrimitive::Type::Line) continue;
+            if (!p.numVerts.isEmpty() || p.numA == p.numB) return false;   // Line 语义 = numA/numB 两端点
+        }
+        return true;
+    };
+    const int boxLine = countType(fBox.scene, QChartPrimitive::Type::Line);
+    const int boxPoint = countType(fBox.scene, QChartPrimitive::Type::Point);
+    const int boxPath = countType(fBox.scene, QChartPrimitive::Type::Path);
+    const int faceLine = countType(fFace.scene, QChartPrimitive::Type::Line);
+    const int facePoint = countType(fFace.scene, QChartPrimitive::Type::Point);
+    const int facePath = countType(fFace.scene, QChartPrimitive::Type::Path);
+    const int latLine = countType(fLat.scene, QChartPrimitive::Type::Line);
+    const int latPoint = countType(fLat.scene, QChartPrimitive::Type::Point);
+    const int latPath = countType(fLat.scene, QChartPrimitive::Type::Path);
+
+    qInfo().noquote() << QString("3D smoke: Box prims=%1 (Line=%2 Point=%3 Path=%4) labels=%5 ink=%6 tiles=%7 | "
+                                 "FaceLine prims=%8 (Line=%9 Point=%10 Path=%11) labels=%12 ink=%13 | "
+                                 "Lattice prims=%14 (Line=%15 Point=%16 Path=%17) labels=%18 ink=%19 tiles=%20")
+        .arg(boxPrims).arg(boxLine).arg(boxPoint).arg(boxPath).arg(boxLabels)
+        .arg(inkAll(imgBox)).arg(inkTiles(imgBox))
+        .arg(facePrims).arg(faceLine).arg(facePoint).arg(facePath).arg(faceLabels).arg(inkAll(imgFace))
+        .arg(latPrims).arg(latLine).arg(latPoint).arg(latPath).arg(latLabels)
+        .arg(inkAll(imgLat)).arg(inkTiles(imgLat));
 
     // ① 盒模式：现有盒几何（12 边 + 底面网格 + 三主轴脊）+ 三主轴 Tickwise 标签
-    QVERIFY2(boxPrims > 40, "盒模式应生成盒边/脊/刻度/网格图元");
-    QVERIFY2(boxLabels > 0, "盒模式：三条主轴应按刻度逐个生成标签");
+    //    4i 字面量：176 = 29 Line + 147 Point + 0 Path；labels = 21
+    //      · Point 147 = 3 条主轴脊 × 7 刻度 × 7 点（主轴脊为 Tickwise ⇒ 装饰保留）
+    //      · Line 29 = 3 主轴脊 + 12 盒边 + 14 底面网格线；非主轴盒边/网格线用 LabelMode::None
+    //        ⇒ 4i 起不再生成装饰（旧口径：每条这样的脊每刻度也出 7 点）
+    //      · Path 0：Cartesian3D 为恒等投影 ⇒ 脊线直线化（2 顶点 Line，numA/numB）
+    QCOMPARE(boxPrims, 176);
+    QCOMPARE(boxLine, 29);
+    QCOMPARE(boxPoint, 147);
+    QCOMPARE(boxPath, 0);
+    QVERIFY2(allLinesAreTwoPoint(fBox.scene), "恒等投影下脊线应为 2 顶点 Line（numA/numB 两端点，无采样顶点）");
+    QCOMPARE(boxLabels, 21);
     QVERIFY2(inkAll(imgBox) > 200, "盒模式应产生大量墨迹");
     QVERIFY2(inkTiles(imgBox) >= 4, "盒模式应铺开多个画面区域");
 
     // ② 面线模式：只画那条退化安全的轴线（+刻度点/刻度标签）；无盒边、无网格
-    QVERIFY2(facePrims > 0, "面线模式应画出安全轴线");
+    //    4i 字面量：50 = 1 Line（安全轴线）+ 49 Point（1 轴 × 7 刻度 × 7 点）+ 0 Path；labels = 7
+    QCOMPARE(facePrims, 50);
+    QCOMPARE(faceLine, 1);
+    QCOMPARE(facePoint, 49);
+    QCOMPARE(facePath, 0);
+    QCOMPARE(faceLabels, 7);
     QVERIFY2(facePrims < boxPrims, "面线模式只画一条轴线（图元应远少于盒模式）");
-    QVERIFY2(faceLabels > 0, "面线模式：轴应按刻度逐个标注（Tickwise）");
     QVERIFY2(inkAll(imgFace) > 30, "面线模式应出墨（轴线 + 刻度标签）");
 
-    // ③ 晶格模式：只画线，LabelMode::None —— 无任何文字
-    QVERIFY2(latLabels == 0, "晶格模式不得生成任何标签（LabelMode::None）");
-    QVERIFY2(latPrims > 40, "晶格模式应生成三主轴 + 三族网格 + 盒边");
+    // ③ 晶格模式：只画线，LabelMode::None —— 无任何文字，且 4i 起无任何 7 点装饰
+    //    4i 字面量：162 = 162 Line（3 主轴脊 + 三族网格 + 盒边）+ 0 Point + 0 Path；labels = 0
+    QCOMPARE(latLabels, 0);
+    QCOMPARE(latPrims, 162);
+    QCOMPARE(latLine, 162);
+    QCOMPARE(latPoint, 0);
+    QCOMPARE(latPath, 0);
+    QVERIFY2(allLinesAreTwoPoint(fLat.scene), "晶格全为恒等投影直线化脊线（2 顶点 Line）");
     QVERIFY2(inkAll(imgLat) > inkAll(imgBox) + 100,
              "晶格（3 族网格）墨迹应显著多于盒（底面 2 族）");
 

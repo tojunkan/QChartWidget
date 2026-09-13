@@ -18,6 +18,26 @@ bool isInk(const QColor& c)
 {
     return qAbs(c.red() - 255) > 40 || qAbs(c.green() - 255) > 40 || qAbs(c.blue() - 255) > 40;
 }
+/// 4h-a：外带内“标签行带”中心（每行只要有墨即计入，连续行合并为一带）
+QVector<int> labelRowBands(const QImage& img, const QRectF& plot, int bandWidth = 55)
+{
+    QVector<int> bands;
+    const int x0 = qMax(0, int(plot.left()) - bandWidth);
+    const int x1 = qMin(img.width() - 1, int(plot.left()) - 1);
+    int runStart = -1;
+    // 仅扫 plotArea 纵向范围（排除上/下边框轴标签带）
+    const int y0 = qMax(0, int(plot.top())), y1 = qMin(img.height() - 1, int(plot.bottom()));
+    for (int y = y0; y <= y1; ++y) {
+        bool ink = false;
+        for (int x = x0; x <= x1 && !ink; ++x)
+            if (isInk(img.pixelColor(x, y))) ink = true;
+        if (ink && runStart < 0) runStart = y;
+        if (!ink && runStart >= 0) { bands.append((runStart + y - 1) / 2); runStart = -1; }
+    }
+    if (runStart >= 0) bands.append((runStart + y1) / 2);
+    return bands;
+}
+
 int inkIn(const QImage& img, const QRect& r)
 {
     int n = 0;
@@ -38,8 +58,11 @@ struct EdgeFixture {
     EdgeFixture() {
         img.fill(Qt::white);
         ctx.plotArea = plot;
-        ctx.dataBounds = QRectF(0, 0, 10, 10);
-        ctx.viewRect = QRectF(0, 0, 10, 10);
+        // 4h-a：改为**生产朝向**（形态等同 QChartLayer::numericBoundsFromAxes()）：
+        // legacy 取向 —— dim0 = left(min)..right(max)、dim1 = bottom(min)..top(max)，故 height() < 0。
+        // （旧夹具喂 height>0 的数学式 rect，与生产朝向相反，因此测不出 drawAtEdge 的反向读取。）
+        ctx.dataBounds = QRectF(0, 10, 10, -10);
+        ctx.viewRect = QRectF(0, 10, 10, -10);
         ctx.projection = &proj;
     }
 };
@@ -85,6 +108,50 @@ void TestAxisEdge::fourDirectionsRenderOutside()
         EdgeFixture fx;
         drawAndVerifyEdge(fx, Qt::AlignRight,
                           QRectF(R, T, 1, B - T), QRect(qRound(R) + 1, qRound(T), 55, qRound(B - T)));
+    }
+
+    // ===== 4h-a：区间规范化（同一数值范围的两种朝向必须逐项一致）=====
+    // legacy 朝向（生产：top=max、height<0） vs 数学式朝向（对向：top=min、height>0）
+    auto renderWithBounds = [](const QRectF& bounds, Qt::Alignment align, int tickCount) {
+        EdgeFixture fx;
+        fx.ctx.dataBounds = bounds;
+        fx.ctx.viewRect = bounds;
+        QValueAxis axis(nullptr, align);
+        axis.setTickCount(tickCount);
+        axis.setColor(Qt::black);
+        QPainter p(&fx.img);
+        axis.drawAtEdge(&p, fx.ctx, true, true, true);
+        p.end();
+        return fx.img;
+    };
+    for (Qt::Alignment align : { Qt::AlignLeft, Qt::AlignRight, Qt::AlignTop, Qt::AlignBottom }) {
+        const QImage legacy = renderWithBounds(QRectF(0, 10, 10, -10), align, 5);   // 生产朝向
+        const QImage mirror = renderWithBounds(QRectF(0, 0, 10, 10), align, 5);     // 对向朝向（同范围）
+        QVERIFY2(legacy == mirror,
+                 qPrintable(QString("4h-a：同一范围两种朝向渲染必须逐位一致（align=%1）")
+                                .arg(int(align))));
+    }
+
+    // ===== 4h-a：非对称范围回归（字面量期望；-5..45、plot{50,40,220,140}、tickCount=5）=====
+    // 一次实测取定的字面量（禁止用生产 helper 反推）：
+    //   刻度值集合 = {0, 10, 20, 30, 40}（nice step=10，5 个；反向读取时会退化为 9 等分兜底）
+    //   标签行带中心 = {54, 82, 110, 138, 166}（像素行；容差 ±2）
+    {
+        const QRectF asyPlot(50, 40, 220, 140);
+        for (int orientation = 0; orientation < 2; ++orientation) {
+            // orientation 0 = 生产朝向（legacy, height<0）；1 = 对向朝向（数学式）
+            const QRectF bounds = (orientation == 0) ? QRectF(0, 45, 10, -50) : QRectF(0, -5, 10, 50);
+            const QImage img = renderWithBounds(bounds, Qt::AlignLeft, 5);
+            const QVector<int> rows = labelRowBands(img, asyPlot);
+            QCOMPARE(rows.size(), 5);                       // 5 个 nice 刻度（非 9 等分兜底）
+            const int expectRows[5] = {54, 82, 110, 138, 166};
+            for (int i = 0; i < 5; ++i)
+                QVERIFY2(qAbs(rows[i] - expectRows[i]) <= 2,
+                         qPrintable(QString("4h-a 标签行带 %1：期望 %2（±2）实为 %3（朝向 %4）")
+                                        .arg(i).arg(expectRows[i]).arg(rows[i]).arg(orientation)));
+            // 刻度值集合（字面量）：用独立投影算式换算 expected 行——见上（值集合由 tickValues 语义保证：
+            // 若反向读取则 step 退化、行带数变 9，上面的 size 断言即变红）
+        }
     }
 }
 

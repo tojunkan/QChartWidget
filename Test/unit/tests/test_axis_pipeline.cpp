@@ -12,6 +12,7 @@
 #include "QPainterChartRenderer.h"
 #include "QOpenGLChartRenderer.h"
 #include "QValueAxis.h"
+#include "QInterpolatedProjection.h"   // 4i：判据对照（isIdentityMapping vs type）
 #include "QChartScene.h"
 #include "QChartCamera.h"
 #include "QCartesianProjection.h"
@@ -155,7 +156,15 @@ void TestAxisPipeline::cartesianSpineTicksRender()
     AxisFixture f(ProjectionKind::Cartesian);
     f.build(/*grid=*/false, /*labels=*/false);
 
-    QVERIFY2(f.scene.primitives.size() > 10, "drawAtPosition 应提交轴脊与刻度图元");
+    // 4i 契约（字面量）：恒等投影（Cartesian）⇒ 脊线为 **2 顶点 Line**；labels=false（None）⇒ **无 7 点装饰**
+    // 构成：2 条主轴脊 × 1 条 Line = 2 个图元
+    //（4i 前：2 条 Path（各 73 顶点）+ 2 轴 × 5 刻度 × 7 点 = 72）
+    QCOMPARE(f.scene.primitives.size(), 2);
+    for (const QChartPrimitive& p : f.scene.primitives) {
+        QCOMPARE(int(p.type), int(QChartPrimitive::Type::Line));
+        QVERIFY2(p.numVerts.isEmpty(), "Line 图元不携带采样顶点（numA/numB 即两端点）");
+        QVERIFY2(p.numA != p.numB, "Line 两端点应不同（numA/numB 语义）");
+    }
     QCOMPARE(f.scene.labels.size(), 0);
 
     const QImage img = renderCpu(f);
@@ -173,15 +182,31 @@ void TestAxisPipeline::cartesianSpineTicksRender()
     const QPoint pt = pixOf(4.0, 0.0);
     QVERIFY2(inkCount(img, pt.x(), pt.y(), 3) > 0,
              qPrintable(QString("X 轴主刻度点未落屏 @%1,%2").arg(pt.x()).arg(pt.y())));
-    // 刻度点必须“超出”轴脊单线才算真验到 7 点刻度图元（轴脊墨迹会覆盖刻度中心，
-    // 仅查中心点无法区分）→ 抽查垂直臂 ±6px（0.3 数据单位 = TICK_LENGTH×轴长 20）
+    // 4i 契约（反向）：本夹具 labels=false ⇒ LabelMode::None ⇒ **跳过 7 点装饰**，
+    // 故刻度垂直臂位置（原装饰所在）必须**无墨**。臂长 = (dimMax−dimMin)×TICK_LENGTH
+    // = 20×0.015 = 0.3 数据单位 = 6px（视窗 [-10,10]² → 20px/单位）。
     const QPoint ptArmA(pt.x(), pt.y() - 6);
     const QPoint ptArmB(pt.x(), pt.y() + 6);
-    QVERIFY2(inkCount(img, ptArmA.x(), ptArmA.y(), 2) > 0,
-             qPrintable(QString("X 轴刻度垂直臂未落屏（疑似刻度点图元缺失）@%1,%2")
+    QVERIFY2(inkCount(img, ptArmA.x(), ptArmA.y(), 2) == 0,
+             qPrintable(QString("None 脊不应有刻度装饰墨迹 @%1,%2")
                         .arg(ptArmA.x()).arg(ptArmA.y())));
-    QVERIFY2(inkCount(img, ptArmB.x(), ptArmB.y(), 2) > 0,
-             qPrintable(QString("X 轴刻度垂直臂未落屏（疑似刻度点图元缺失）@%1,%2")
+    QVERIFY2(inkCount(img, ptArmB.x(), ptArmB.y(), 2) == 0,
+             qPrintable(QString("None 脊不应有刻度装饰墨迹 @%1,%2")
+                        .arg(ptArmB.x()).arg(ptArmB.y())));
+
+    // 对照（同一探针坐标）：Tickwise 下装饰保留 ⇒ 垂直臂必须有墨——证明上面的“无墨”来自
+    // 标签模式门控，而非装饰被整体删除（否则本测试会被“永远不出装饰”的坏实现骗过）。
+    // 构成：2 条主轴脊 × (1 条 Line + 5 刻度 × 7 点) = 72 图元；标签 2 轴 × 5 = 10
+    AxisFixture fTick(ProjectionKind::Cartesian);
+    fTick.build(/*grid=*/false, /*labels=*/true);
+    QCOMPARE(fTick.scene.primitives.size(), 72);
+    QCOMPARE(fTick.scene.labels.size(), 10);
+    const QImage imgTick = renderCpu(fTick);
+    QVERIFY2(inkCount(imgTick, ptArmA.x(), ptArmA.y(), 2) > 0,
+             qPrintable(QString("Tickwise 脊的刻度垂直臂应有墨 @%1,%2")
+                        .arg(ptArmA.x()).arg(ptArmA.y())));
+    QVERIFY2(inkCount(imgTick, ptArmB.x(), ptArmB.y(), 2) > 0,
+             qPrintable(QString("Tickwise 脊的刻度垂直臂应有墨 @%1,%2")
                         .arg(ptArmB.x()).arg(ptArmB.y())));
 }
 
@@ -227,7 +252,13 @@ void TestAxisPipeline::polarSpineTicksRender()
     AxisFixture f(ProjectionKind::Polar);
     f.build(/*grid=*/false, /*labels=*/false);
 
-    QVERIFY2(f.scene.primitives.size() > 40, "drawAtPosition 应提交外环/径向脊图元");
+    // 4i 契约（字面量）：非恒等投影（Polar）⇒ **保持采样 Path** 且顶点数 > 2
+    // 构成：dim0 外环（segments=90 → 91 顶点）+ dim1 径向脊（segments=8 → 9 顶点）= 2 个 Path 图元
+    QCOMPARE(f.scene.primitives.size(), 2);
+    QCOMPARE(int(f.scene.primitives[0].type), int(QChartPrimitive::Type::Path));
+    QCOMPARE(int(f.scene.primitives[1].type), int(QChartPrimitive::Type::Path));
+    QCOMPARE(f.scene.primitives[0].numVerts.size(), 91);
+    QCOMPARE(f.scene.primitives[1].numVerts.size(), 9);
     QCOMPARE(f.scene.labels.size(), 0);
 
     const QImage img = renderCpu(f);
@@ -241,11 +272,26 @@ void TestAxisPipeline::polarSpineTicksRender()
     const QPoint po = pixOf(7.0710678, 7.0710678);
     QVERIFY2(inkCount(img, po.x(), po.y(), 4) > 0,
              qPrintable(QString("外环未落屏 @%1,%2").arg(po.x()).arg(po.y())));
-    // 环轴 θ 刻度点图元（θ=80 主刻度，7 点形态的径向内臂落在 r=10−5.4=4.6、
-    // θ=80° → cart(0.799, 4.530) → (216,109)）：远离外环/径向脊，能区分刻度点与脊线
+    // 4i 契约（反向）：labels=false ⇒ None ⇒ 环轴 7 点装饰被跳过 ⇒ 原径向内臂探针（θ=80 主刻度，
+    // 臂长 = (dimMax−dimMin)×TICK_LENGTH = 360×0.015 = 5.4 个 θ 单位 ⇒ r = 10−5.4 = 4.6、
+    // θ=80° → cart(0.7989, 4.5295) → 像素 (216,109)）必须**无墨**；非恒等投影的脊线本身仍是 Path。
     const QPoint ptArm = pixOf(0.7989385, 4.5295340);
-    QVERIFY2(inkCount(img, ptArm.x(), ptArm.y(), 2) > 0,
-             qPrintable(QString("极坐标环轴刻度点未落屏（疑似刻度点图元缺失）@%1,%2")
+    QVERIFY2(inkCount(img, ptArm.x(), ptArm.y(), 2) == 0,
+             qPrintable(QString("Polar|None 脊不应有刻度装饰墨迹 @%1,%2")
+                        .arg(ptArm.x()).arg(ptArm.y())));
+
+    // 对照（同一探针坐标）：Polar|Tickwise 下装饰保留（判据只关“投影是否恒等”，与投影类型无关）。
+    // 构成：2 条脊 Path（环 91 顶点 + 径向 9 顶点）+ 环轴 5 刻度×7 点 + 径向轴 6 刻度×7 点
+    //       = 2 + 35 + 42 = 79 图元；标签 5 + 6 = 11
+    AxisFixture fTick(ProjectionKind::Polar);
+    fTick.build(/*grid=*/false, /*labels=*/true);
+    QCOMPARE(fTick.scene.primitives.size(), 79);
+    QCOMPARE(int(fTick.scene.primitives[0].type), int(QChartPrimitive::Type::Path));
+    QCOMPARE(fTick.scene.primitives[0].numVerts.size(), 91);
+    QCOMPARE(fTick.scene.labels.size(), 11);
+    const QImage imgTick = renderCpu(fTick);
+    QVERIFY2(inkCount(imgTick, ptArm.x(), ptArm.y(), 2) > 0,
+             qPrintable(QString("Polar|Tickwise 环轴刻度装饰（径向内臂）应有墨 @%1,%2")
                         .arg(ptArm.x()).arg(ptArm.y())));
 }
 
@@ -402,12 +448,58 @@ void TestAxisPipeline::labelModeThreeStates()
     QVERIFY2(vecNear(f.scene.labels[0].numericAnchor, QVector3D(0, 0, 0)),
              "Single 标签锚点应为中间刻度 (0,0,0)");
 
-    // None 只关标签，不改图元（1 条轴脊 Path + 每刻度 7 点 = 36）
+    // 4i：None 既关标签、也跳过 7 点装饰（旧口径“1 条轴脊 Path + 每刻度 7 点 = 36”已作废）
     AxisFixture fNone(ProjectionKind::Cartesian);
     fNone.dim0Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 0, fNone.scene, 72,
                                   QChartAxis::LabelMode::None);
     QCOMPARE(fNone.scene.labels.size(), 0);
-    QCOMPARE(fNone.scene.primitives.size(), 1 + 7 * 5);
+    // 4i 契约（字面量）：None ⇒ 仅 1 条脊（Line），**无装饰**（原为 1 + 7×5 = 36）
+    QCOMPARE(fNone.scene.primitives.size(), 1);
+    QCOMPARE(int(fNone.scene.primitives[0].type), int(QChartPrimitive::Type::Line));
+    // Single ⇒ 同样 1 条脊、无装饰；其代表标签不得留下悬空 refPrimitiveId
+    {
+        AxisFixture fSingle(ProjectionKind::Cartesian);
+        fSingle.dim0Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 0, fSingle.scene, 72,
+                                        QChartAxis::LabelMode::Single);
+        QCOMPARE(fSingle.scene.primitives.size(), 1);
+        QCOMPARE(fSingle.scene.labels.size(), 1);
+        QCOMPARE(fSingle.scene.labels[0].refPrimitiveId, -1);
+    }
+    // Tickwise ⇒ 1 + 7×5 = 36（装饰保留），逐标签断言 refPrimitiveId 指向自身中心点且下标有效
+    {
+        AxisFixture fTick(ProjectionKind::Cartesian);
+        fTick.dim0Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 0, fTick.scene, 72,
+                                      QChartAxis::LabelMode::Tickwise);
+        QCOMPARE(fTick.scene.primitives.size(), 36);
+        QCOMPARE(fTick.scene.labels.size(), 5);
+        for (const QChartTextLabel& l : fTick.scene.labels) {
+            const int rid = l.refPrimitiveId;
+            QVERIFY2(rid >= 0 && rid < fTick.scene.primitives.size(),
+                     qPrintable(QString("Tickwise 标签 refPrimitiveId 应在场景内：%1（size=%2）")
+                                    .arg(rid).arg(fTick.scene.primitives.size())));
+            const QChartPrimitive& c = fTick.scene.primitives[rid];
+            QCOMPARE(int(c.type), int(QChartPrimitive::Type::Point));
+            QVERIFY2(vecNear(c.numA, l.numericAnchor), "Tickwise 标签应绑定自身刻度的中心点");
+        }
+    }
+    // 4i：判据必须用 isIdentityMapping() 而非 type()——插值投影 type() 返回**目标**类型，
+    //     若按 type() 判会令仍在弯曲的脊线突然变直。此处 a=Polar、b=Cartesian ⇒ type()==Cartesian
+    //     但 isIdentityMapping()==false ⇒ 脊线仍必须是采样 Path（顶点数 > 2）。
+    {
+        QPolarProjection polar;
+        QCartesianProjection cart;
+        QInterpolatedProjection interp(&polar, &cart);
+        interp.setBlend(0.5);
+        QCOMPARE(int(interp.type()), int(QChartAbstractProjection::CoordinateSystem::Cartesian));   // 目标类型
+        QVERIFY2(!interp.isIdentityMapping(), "插值投影不是恒等映射");
+        AxisFixture fInterp(ProjectionKind::Cartesian);
+        fInterp.scene.projection = &interp;
+        fInterp.dim0Axis.drawAtPosition(kViewLo, kViewHi, 0.0, 0.0, 0, fInterp.scene, 72,
+                                        QChartAxis::LabelMode::None);
+        QCOMPARE(fInterp.scene.primitives.size(), 1);
+        QCOMPARE(int(fInterp.scene.primitives[0].type), int(QChartPrimitive::Type::Path));
+        QCOMPARE(fInterp.scene.primitives[0].numVerts.size(), 73);   // 72 段 → 73 顶点（未被直线化）
+    }
 
     // ★ "单标签"取值口径冻结：刻度列表下标 size/2（元素个数为偶数时取偏上的中位）；
     //   该位置文字为空则不生成标签。跨 tickCount 验证（含偶数刻度数场景）。

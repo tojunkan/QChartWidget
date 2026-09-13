@@ -1,7 +1,7 @@
 # QChartCamera Documentation
 
 ## Brief Introduction:
-QChartCamera 是 **2D 相机**（继承 QChartAbstractCamera；重构后 2D 相机唯一实现，旧 `QChartCamera2D` 职责并入本类），掌管 **View Cartesian ↔ Pixel 线性映射**：`project` 沿 viewRect → plotArea 线性映射（Y 翻转），矩阵接口退化——`viewMatrix` 平移+缩放输出标准 NDC（Y 取反），`projectionMatrix` 为单位阵。提供 viewRect/center/zoom 三种视图状态（Q_PROPERTY，均 NOTIFY viewChanged）、pan/zoom 交互操作、`fitToPlotArea`（fit 模式 × fit 策略 × scale 附加缩放）。五空间链中相机不参与 Data/Numeric/Cartesian 映射，只做 Cartesian→Pixel 末两环（含 ViewNorm 概念上的 NDC 化）。
+QChartCamera 是 **2D 相机**（继承 QChartAbstractCamera；重构后 2D 相机唯一实现，旧 `QChartCamera2D` 职责并入本类），掌管 **View Cartesian ↔ Pixel 线性映射**：`project` 沿 viewRect → plotArea 线性映射（Y 翻转），矩阵接口退化——`viewMatrix` 平移+缩放输出标准 NDC（Y 取反；**4h-b 语义固定 M = S·T**，平移量必须被缩放），`projectionMatrix` 为单位阵。提供 viewRect/center/zoom 三种视图状态（Q_PROPERTY，均 NOTIFY viewChanged）、pan/zoom 交互操作、`fitToPlotArea`（fit 模式 × fit 策略 × scale 附加缩放）。五空间链中相机不参与 Data/Numeric/Cartesian 映射，只做 Cartesian→Pixel 末两环（含 ViewNorm 概念上的 NDC 化）。
 
 ## Constant Variables:
 None.（同头文件定义两个枚举，非类成员：`ViewRectFitMode{Stretch, Expand, Crop, Preserve}` 与 `FitStrategy{KeepCenter, KeepTopLeft, KeepTopRight, KeepBottomLeft, KeepBottomRight, KeepTop, KeepBottom, KeepLeft, KeepRight}`）
@@ -35,7 +35,7 @@ None.（同头文件定义两个枚举，非类成员：`ViewRectFitMode{Stretch
 | `FitStrategy` | `fitStrategy` | 策略访问器（内联） | 无 | public | `FitStrategy` | 测试 | — |
 | `void` | `setScale` | 设置附加缩放（内联） | `qreal ratio` | public | — | Widget/用户 | — |
 | `qreal` | `scale` | 缩放访问器（内联） | 无 | public | `qreal` | 测试 | — |
-| `QMatrix4x4` | `viewMatrix` | 覆写：平移使 viewRect 中心到原点 + 缩放 `(2/w, -2/h, 1)`（Y 取反 → NDC） | 无 | public | `QMatrix4x4` | GL `viewProjectionMatrix` 链 | — |
+| `QMatrix4x4` | `viewMatrix` | 覆写：**M = S·T**（4h-b）——`QMatrix4x4::translate/scale` 均为后乘，故调用顺序为 `scale(2/w, -2/h, 1)` 后 `translate(-viewRect.center())`；作用到顶点顺序 = 先把视图中心平移到原点、再缩放到 NDC（Y 取反），**平移量必须被缩放** | 无 | public | `QMatrix4x4` | GL `viewProjectionMatrix` 链 | — |
 | `QMatrix4x4` | `projectionMatrix` | 覆写：单位阵（2D 视图矩阵已输出 NDC；aspect 忽略） | `qreal aspect` | public | `QMatrix4x4` | GL `viewProjectionMatrix` 链 | — |
 | `QChartProjectedPoint` | `project` | 覆写：viewRect → plotArea 线性映射（x 同向、y 翻转 `bottom - ny*h`）；depth=0；cart 原样回传 | `const QVector3D& cart, const QRectF& plotArea` | public | `QChartProjectedPoint` | `QPainterChartRenderer::drawPrimitives2D/drawLabels2D`、GL `drawLabels` | — |
 | `Ray` | `unproject` | 覆写：像素 → 世界（Y 翻转逆映射，z=0 平面）；direction=+z 单位向量 | `const QPointF& pixel, const QRectF& plotArea` | public | `Ray` | S0 无（拾取阶段恢复） | — |
@@ -44,6 +44,8 @@ Notes:
 - Q_PROPERTY：viewRect/center/zoom（NOTIFY 均 viewChanged）。
 - fit 语义补充：同 aspect 时直接进入 Preserve/scale 分支；Preserve 模式下 m_scale 不生效（面积守恒优先）。
 - S0 实测用法：测试以栈/值成员 `QChartCamera camera` + `camera.setViewRect([-10,10]²)`，随后 `scene.camera=&camera` 交渲染器；CPU 路径经 `dynamic_cast<const QChartCamera*>` 走 2D 分支。
+- **viewMatrix 契约（4h-b，审查 t66 verdict=pass：`build-linux/review_t66/t66_review.md`）**：viewRect 四角映射到 NDC **±1**（任意 viewRect，含偏心与非整数值），viewRect 中心映射到 (0,0)；**视图中心为原点时与旧实现（M = T·S）逐位等价**（零平移）。旧顺序 M = T·S 的作用顺序为"先缩放、后平移"，平移量未被缩放 ⇒ 视图中心非原点时 GL 几何被推出裁剪域（整幅出画）。
+- **CPU/GL 一致性判据**：CPU 侧 `project()`（独立线性映射）与矩阵路线对**同一 Cartesian 点必须给出同一像素位置**；4h-b 前的矩阵错序正表现为"GL 出画 / CPU 正常"的二者不一致。
 
 ## Overrided Qt Events:
 无（QObject 非 QWidget；本类无 Qt 事件覆写）。

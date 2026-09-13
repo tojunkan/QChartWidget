@@ -166,10 +166,14 @@ bool QChartCamera::fitToPlotArea(const QRectF& plotArea) {
 
 QMatrix4x4 QChartCamera::viewMatrix() const {
     QMatrix4x4 mat;
-    // 平移使 viewRect 中心位于原点
-    mat.translate(-m_viewRect.center().x(), -m_viewRect.center().y(), 0.0f);
-    // 缩放映射到 [-1, 1]，Y 轴取反使世界 Y 向上与 NDC 一致
-    mat.scale(2.0f / m_viewRect.width(), -2.0f / m_viewRect.height(), 1.0f);
+    // 4h-b：QMatrix4x4::translate/scale 均为**后乘**，故调用顺序与“作用到顶点的顺序”相反：
+    //   mat.scale(...)    → mat = I·S
+    //   mat.translate(...) → mat = S·T   ⇒ 顶点先平移（把 viewRect 中心移到原点），再缩放（映射到 NDC ±1）
+    // 旧写法“先 translate 后 scale”得到 M = T·S：作用顺序变成“先缩放、后平移”，平移量未被缩放 →
+    // 视图中心非原点时几何被推出裁剪域（GL 整幅出画；CPU project() 是独立线性映射，故表现为 CPU/GL 不一致）。
+    // 语义固定为 M = S·T：任意 viewRect 四角映射到 NDC ±1；中心为原点时 T 为零平移，与旧写法逐位一致。
+    mat.scale(2.0f / m_viewRect.width(), -2.0f / m_viewRect.height(), 1.0f);   // 缩放到 [-1,1]（Y 取反：世界 Y 向上）
+    mat.translate(-m_viewRect.center().x(), -m_viewRect.center().y(), 0.0f);  // 平移使 viewRect 中心位于原点
     return mat;
 }
 

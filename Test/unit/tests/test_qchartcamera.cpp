@@ -9,6 +9,52 @@
 // ============================================================
 
 void TestQChartCamera2D::cartesianToPixel_roundtrip() {
+    // ===== 4h-b：viewMatrix 矩阵侧断言（此前零覆盖；使“乘法顺序”错误无法再漏过）=====
+    // 注：本文件其余用例仍引用 S0 重构时删除的 QChartCamera2D 静态接口（legacy，未纳入构建清单）；
+    //     以下断言只依赖现存 API（QChartCamera::viewMatrix/project），随该文件重建即生效。
+    {
+        const QRectF plot(68.0, 20.0, 332.0, 278.0);
+        for (const QRectF& vr : { QRectF(-10.0, -10.0, 20.0, 20.0),      // 中心在原点
+                                  QRectF(100.0, -80.0, 40.0, 60.0),      // 偏心：中心 (120,-50)
+                                  QRectF(-320.5, 210.25, 60.0, 90.0) }) {  // 偏心 + 非整
+            QChartCamera cam;
+            cam.setViewRect(vr);
+            const QMatrix4x4 m = cam.viewMatrix();
+            // ① 四角 → NDC ±1（1e-6 内）——乘法顺序错误（T·S）时平移量被当作缩放用，四角显著出界
+            const QVector3D corners[4] = {
+                QVector3D(float(vr.left()),  float(vr.top()),    0.0f),
+                QVector3D(float(vr.right()), float(vr.top()),    0.0f),
+                QVector3D(float(vr.left()),  float(vr.bottom()), 0.0f),
+                QVector3D(float(vr.right()), float(vr.bottom()), 0.0f),
+            };
+            for (const QVector3D& c : corners) {
+                const QVector3D ndc = m.map(c);
+                QVERIFY2(qAbs(qAbs(qreal(ndc.x())) - 1.0) < 1e-6 && qAbs(qAbs(qreal(ndc.y())) - 1.0) < 1e-6,
+                         qPrintable(QString("4h-b viewRect %1,%2 %3x%4：四角应映射到 NDC ±1，实为 (%5,%6)")
+                                        .arg(vr.left()).arg(vr.top()).arg(vr.width()).arg(vr.height())
+                                        .arg(ndc.x()).arg(ndc.y())));
+            }
+            // ② 与 project() 的像素映射一致（同代数探针）：NDC → plotArea 像素 = center + ndc·size/2，
+            //    X/Y 均同向、逐位一致（GL 侧视口/回读约定与之自洽，已由 test_widget_gl 偏心用例实证）。
+            for (int i = 0; i <= 4; ++i) {
+                for (int j = 0; j <= 4; ++j) {
+                    const qreal cx = vr.left() + vr.width() * i / 4.0;
+                    const qreal cy = vr.top() + vr.height() * j / 4.0;
+                    const QVector3D ndc = m.map(QVector3D(float(cx), float(cy), 0.0f));
+                    const QPointF pxFromM(plot.center().x() + qreal(ndc.x()) * plot.width() / 2.0,
+                                          plot.center().y() + qreal(ndc.y()) * plot.height() / 2.0);
+                    const QPointF ref = cam.project(QVector3D(float(cx), float(cy), 0.0f), plot).screen;
+                    QVERIFY2(qAbs(pxFromM.x() - ref.x()) < 1e-6,
+                             qPrintable(QString("4h-b 矩阵↔project X 应一致：%1 vs %2")
+                                            .arg(pxFromM.x()).arg(ref.x())));
+                    QVERIFY2(qAbs(pxFromM.y() - ref.y()) < 1e-6,
+                             qPrintable(QString("4h-b 矩阵↔project Y 应一致：%1 vs %2")
+                                            .arg(pxFromM.y()).arg(ref.y())));
+                }
+            }
+        }
+    }
+
     const QRectF viewRects[] = {
         QRectF(0, 0, 10, 10),
         QRectF(-5, -5, 10, 10),

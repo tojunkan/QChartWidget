@@ -33,7 +33,8 @@ None.
 | `void` | `setSceneProjection/PlotArea/Background` | 场景上下文注入（内联） | 指针/`QRectF`/`QColor` | public | — | `QChartAbstractWidget::pushContextToLayers` | — |
 | `void` | `setNumericBounds` | 设 Numeric 范围（直接写 m_dataBounds）并同步绑定轴语法糖 setRange（X: left→right 需 left≤right；Y: bottom→top 需 bottom≤top；→ rangeChanged+styleChanged） | `const QRectF& bounds` | public | — | QChartWidget::recomputeDataBounds/onBeforePaint（广播） | `QChartAxis` |
 | `const QChartScene&`/`QChartScene&` | `scene` | 快照访问器（collectPrimitives 之后使用） | 无 | public | — | QChartAbstractWidget::renderLayers（render 入参）、测试 | — |
-| `void` | `drawGrid` | 画网格数据主脊：gridVisible/轴空守卫；segments=m_scene.projection 的 samplingSegmentsHint（无投影 72）；addLine 语义见引言（两方向 tick 脊带标签） | `QChartScene& scene` | public | — | `collectPrimitives` 内部 | `QChartAxis` |
+| `void` | `drawGrid` | 画网格数据主脊：gridVisible/轴空守卫；segments=m_scene.projection 的 samplingSegmentsHint（无投影 72）；脊标签模式 = `gridSpineLabelMode()`（默认 `LabelMode::Single`）；addLine 语义见引言（两方向 tick 脊带标签） | `QChartScene& scene` | public | — | `collectPrimitives` 内部 | `QChartAxis` |
+| `virtual QChartAxis::LabelMode` | `gridSpineLabelMode` | （protected）**网格脊标签策略**：默认全部网格脊 `LabelMode::Single`（每脊 1 个自由标签；GL 后端不渲染自由标签为既定契约）；子类可覆写使部分/全部脊 `None` 或按刻度 `Tickwise` | 无 | protected | `QChartAxis::LabelMode` | `drawGrid`（脊标签模式唯一入口） | `QChartAxis` |
 | `void` | `collectPrimitives` | 收集本层图元到 m_scene：**每帧复位负载**（primitives/labels/maxSourceId=0/前缀和{0}）→ drawGrid(m_scene)（S0 只网格；drawAllSeries 届时恢复） | 无 | public | — | `QChartAbstractWidget::renderLayers/renderLayersGL`、测试直接调用 | — |
 | `void` | `invalidateData` | 数据脏标记置位（内联） | 无 | public | — | 构造自连接（gridChanged 槽） | — |
 | `bool` | `isGridVisible` | 访问器（内联） | 无 | public | `true`/`false` | 测试 | — |
@@ -51,6 +52,8 @@ Notes:
 - Q_PROPERTY：gridVisible/gridColor（NOTIFY gridChanged）。
 - 2D 渲染链实测：容器 paintEvent → pushContextToLayers（幂等）→ renderLayers：每层 collectPrimitives + renderer.invalidateView（每层场景各自重算）+ render(layer->scene(), device)；场景含 plotArea 对齐（GL 容器经 renderLayersGL 时 device=labelDev QImage，标签锚点经 renderer translate 落局部坐标）。
 - S0 实例化方：demo_axis（new QChartLayer(w) + setGridVisible + w->addAxis×2 + w->addLayer）、测试（轴矩阵以直接 drawAtPosition 复刻 drawGrid 语义 + TestWidgetSmoke 经容器）。
+- **网格脊标注模式**：`gridSpineLabelMode()` 默认 `QChartAxis::LabelMode::Single`——它决定二维网格脊（含极坐标投影）的标注模式，也是 4i 装饰门控的实际触发条件（网格脊恒为 Single）。
+- **4i 影响（有意渲染变更，登记见阶段记录 §9.2；审查 t68 verdict=pass：`build-linux/review_t68/t68_review.md`）**：Single 脊不再生成 7 点装饰；恒等投影脊线由 `segments` 采样 Path 改为 2 顶点 Line。一例（2D 网格 grid=on、tickCount=9，含极坐标投影）：每帧图元由 **1716**（其中 Point=**1694**）降为 **22**（Point=0、Line=22）。
 
 ## Overrided Qt Events:
 无（QObject 非 QWidget；本类无 Qt 事件覆写）。

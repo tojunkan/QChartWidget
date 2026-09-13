@@ -3,7 +3,7 @@
 > 阶段：轴渲染阶段（v2 合并记录）
 > 范围：原 S0（CPU 轴）+ S1（GPU 轴）**合并为一个轴渲染阶段**（用户决策），并纳入 widget 容器化首改（批次 A）与 3D 轴渲染（批次 B1–B2）、测试矩阵补齐（批次 B3）、阶段 demo（批次 B4）。
 > 取代：本文件取代 `docs/stages/S0_axis_pipeline.md`（v1 早期快照，头部已标注"已被 axis_stage_merged.md 取代"）；v1 的架构决策/修复清单 R1–R12/测试矩阵作为子集并入下文并保留原编号。
-> 状态：代码冻结，双平台验证全绿（本机 Linux wayland/Mesa llvmpipe 4.5 Core GL 实跑 + Windows 实机 Intel UHD620 dpr=1.5；offscreen ctest 常驻）。审查闭环：t2(needs_revision)→t3→t4(pass)；t7(needs_revision)→t8→t9/t11(pass)；t15(pass)；t17/pass；t19/pass；t21(pass)。
+> 状态：代码冻结，双平台验证全绿（本机 Linux wayland/Mesa llvmpipe 4.5 Core GL 实跑 + Windows 实机 Intel UHD620 dpr=1.5；offscreen ctest 常驻）。审查闭环：t2(needs_revision)→t3→t4(pass)；t7(needs_revision)→t8→t9/t11(pass)；t15(pass)；t17/pass；t19/pass；t21(pass)；t65/t66/t68(均 pass，批次 4h-a/4h-b/4i，详见 §9)。
 > 基线：工作区 `/home/unidu/dsh/QChartWidget`（新根 CMakeLists 轴阶段子集；旧版 `CMakeLists_OLD.txt`/`main_OLD.cpp`/`LEGACY_DEMOS_OLD.txt` 保留）；全程无 git 写操作。
 
 ## 1. 批次结构与落地内容
@@ -82,6 +82,8 @@ QChartDemo（Test/demos：test.cpp 参数化主程序 + demo_axis.cpp）：
 - 恢复点（随阶段取回，git 历史有旧实现，禁止 git 写操作）：theme/legend/导出/动画/交互（事件钩子已就位）/拾取（QChartHitTester）；QChartLayer3D 系列方法（addSeries3D 等声明无定义，勿引用）；Layer3D 轴标题块、makeToPixel/drawAllSeries/hitTest 注释块。
 - 变更遗留：logProjection 类别临时定义于 QInterpolatedProjection.cpp（R12，Widget 消费方回归时移回 QChartWidget.cpp 位置）。
 - **informational（记录在案，非阻塞）**：① decor depth 下沉——3D GL 线框以 depth=2.0（decor 批次、depthTest 关）全边可见渲染，3D series 的深度排序/批次语义后续批次接管（GL 批次 layer 推断 depth>0.5/>1.0 与 3D 视图深度并存待整理）；② 非恒等投影矩阵——3D 投影族（spherical 等）CPU 冒烟已绿，矩阵对等/GLSL 注入覆盖面随 3D series 阶段扩展；③ 进程级 DPR 通道正式 API 化——`qchartSetGLPixelRatio/qchartGLPixelRatio` 为 .cpp 自由函数（头文件不动），正式 setPixelRatio API 随渲染器配置阶段落头；④ offscreen qExec 根因（QSKIP 后零执行怪癖）记录于 integration main.cpp 注释；⑤ I1 样式单像素——颜色生效类断言采用单像素取色（可接受性记录于 t21）；⑥ QFunctionalProjection 未覆写 glsl* 纯虚 → 抽象类（用户待决策清单，functional/demo 阶段确认意图）。
+- **已知小问题（4h-a 审查顺带发现；用户裁定：暂不修，登记待办）**：`include/axes/QChartAxis.h:177` `TICK_LENGTH = 0.015` 注释写"主刻度线长度（占轴长的比例）"，但两个调用点单位语义不同——`QChartAxis::drawAtPosition`（src/axes/QChartAxis.cpp:313）按 `(dimMax - dimMin) * TICK_LENGTH` 使用（**数值范围比例**，语义正确）；`drawAtEdge`（同文件 :190/:206，标签偏移 :191）直接当**像素**使用 → 边框轴主刻度线实长 0.015px，与轴线重合 = 视觉上没有主刻度；而同块常量 `SUB_TICK_LENGTH = 2.0`（include/axes/QChartAxis.h:178）是像素语义、次刻度真实可见。修法（用户确认"很简单，稍微改一下就行"，本批不修）：拆成两个单位显式常量（`SPINE_TICK_LEN_RATIO` 供 drawAtPosition / `EDGE_TICK_LEN_PX` 供 drawAtEdge），同步重算 `lblOff = AXIS_MARGIN - 主刻度像素长`，并补一条"主刻度线出墨"断言（现有外带断言只证明标签出墨）。来源：t65 审查 F1 + t63 披露。
+- **测试文件构建归属（用户裁定：并入批次 5 测试体系重组，本批不处理）**：`Test/unit/CMakeLists.txt` 当前只登记 5 个测试类（test_axis_pipeline / test_widget_smoke / test_axes3d_smoke / test_widget3d_smoke / test_axis_edge），而 `Test/unit/tests/` 下有 25 个 `.cpp`——其余 20 个为 legacy（S0 分期约定"旧 API 测试保留参考，暂不构建"，文件头注释已写明），其断言不参与 ctest。**教训（派单纪律）**：验收不得点名未纳入构建的测试文件——4h-b 曾点名 `test_qchartcamera.cpp`（该文件 legacy、含 S0 已删的 QChartCamera2D 接口引用），写入的断言不执行，可执行等价物改落 `Test/integration/tests/test_widget_gl.cpp`。批次 5 重组时一并裁定各 legacy 文件去向（现代接口改写后登记 / 保留参考但显式标注不参与构建）。
 
 ## 8. 登记总表（轴阶段全部类——类-文档映射）
 
@@ -120,3 +122,48 @@ QChartDemo（Test/demos：test.cpp 参数化主程序 + demo_axis.cpp）：
 
 - 同模块流程文档（docs/<module>/xxx_flow.md 等）非类文档，不在此表；其中描述重构前架构的旧类流程文档（如 QChartAxes3D_ticks_flow）随对应模块阶段落地时再迁移。
 - demo/测试类（QChartDemo、Test*）为阶段载体不入类文档表。
+
+## 9. 批次 4h/4i 增量登记（4h-a 范围取向 / 4h-b viewMatrix 顺序 / 4i 脊线装饰门控与直线化）
+
+> 本节收口轴阶段最后三批：三笔审查均 verdict=pass。其中 4i 属**有意渲染变更**——自本节起旧产物基线作废（见 §9.2 基线声明），后续对账口径随之切换。
+
+### 9.1 批次范围与结论
+
+| 批次 | 内容 | 审查结论 |
+| :--- | :--- | :--- |
+| 4h-a | `drawAtEdge` 范围取向修正：边框轴的维度范围读取改为区间规范化（水平取 `qMin/qMax(left,right)`、垂直取 `qMin/qMax(top,bottom)`，各 1 处，附根因注释） | t65 **verdict=pass**（`build-linux/review_t65/t65_review.md`） |
+| 4h-b | `QChartCamera::viewMatrix` 乘法顺序修正：语义固定为 **M = S·T**（先把视图中心平移到原点、再缩放到 NDC）——旧写法 M = T·S 的平移量未被缩放 | t66 **verdict=pass**（`build-linux/review_t66/t66_review.md`） |
+| 4i | 脊线装饰门控 + 恒等投影直线化：7 点装饰仅在 Tickwise 脊生成；恒等映射脊线提交 2 顶点 `Type::Line` | t68 **verdict=pass**（`build-linux/review_t68/t68_review.md`） |
+
+### 9.2 有意渲染变更登记（4i）
+
+- **变更内容**：Single/None 脊线上的 7 点装饰不再生成（二维网格脊恒为 `LabelMode::Single` ⇒ **每帧 1694 个装饰点归零**；三维主轴脊为 Tickwise，装饰保留）。
+- **变更原因**：这些点不携带信息，且占二维绘制耗时约八成。
+- **量化差异表（4i 前基线 vs 4i，同窗口紧邻，自算 bbox）**：
+
+| 产物 | 差异 | bbox |
+| :--- | :--- | :--- |
+| axis_cpu/demo_axis.png | 8417px(2.165%) | (69,20)-(699,497) |
+| axis3d_box/demo_axis3d*.png | 8817px(2.268%) | (200,46)-(567,420) |
+| axis3d_lattice/demo_axis3d_lattice.png | 33849px(8.706%) | (200,46)-(567,420) |
+| axis_gl/demo_axis.png 与 _glhost.png | 540px(0.139%/0.179%) | (68,26)-(690,497) / (0,6)-(622,477) |
+| axis3d_gl_box/*（含 _glhost） | 1177px(0.303%/0.390%) | (207,46)-(566,378) / (139,26)-(498,358) |
+
+- 差异来源：Single/None 脊装饰点移除（Lattice 脊最多故差异最大）；脊线 Line 与 Path 的栅格化差异在 GL 侧另计小量（540/1177px）。
+- **基线声明**：后续对账一律以 4i 之后的产物为新基线。
+
+### 9.3 4h-a 产物变更（属预期修正，不是有意渲染变更）
+
+- 二维 `demo_axis.png` 差异 2284px(0.587%)，bbox (31,10)-(60,508)，差异完全落在左侧边框轴标签带、plotArea 内零差异；三维产物与全部场景摘要逐字不变。
+
+### 9.4 4h-b 产物变更
+
+- **无视觉变化**：视图中心为原点时新旧实现等价；4h-b 前过审快照 vs 后 11/11 产物逐字节一致。
+
+### 9.5 批次 5 归口清单（备忘录，供后续批次取用）
+
+① **OpenGL 后端在 Tickwise 脊上存在装饰点漏画**（既有差异、非 4i 引入；证据：同一极坐标夹具双库同测，构成相同 Point=77/Path=2/labels=11，CPU 在探针 (216,109) 邻域 2px 有 8 墨、GL 新旧两库 12px 内 0 墨），且 GL 侧正向断言当前被条件跳过 ⇒ 根因待查后恢复双向断言。
+② `Test/integration/tests/test_axes3d_gl.cpp` 的烟雾级阈值（primitives>40、total>150、tiles>=3；实测 176/162/2278/7·9）改为结构断言，不要用墨迹数量作门槛。
+③ 20 个未登记进构建的测试文件归属（`Test/unit/tests/` 下 25 个 `.cpp`，`Test/unit/CMakeLists.txt` 仅登记 5 个）。
+④ 派单纪律：验收只允许点名已登记进构建的测试文件（本次教训："点名文件 ≠ 有效覆盖"）。
+⑤ `TICK_LENGTH` 单位不一致（注释为"占轴长比例"、`drawAtEdge` 按像素用 ⇒ 主刻度线 0.015px 不可见；用户裁定暂不修）。

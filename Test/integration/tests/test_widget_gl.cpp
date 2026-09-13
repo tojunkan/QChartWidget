@@ -336,4 +336,104 @@ void TestWidgetGl::glWidgetRenders()
         QVERIFY2(diff <= qMax(50, inkA / 50),
                  "父系(translate 生效)与 local 对照的标签掩膜应基本一致（translate 缺失时整体偏移）");
     }
+
+    // ===== 4h-b：偏心 viewRect（中心 (120,-80)）——GL 墨迹 > 0 且与 CPU 同场景落位一致 =====
+    // 场景内容中心 (120,-80)：x∈[100,140]、y∈[-110,-50]。修复前 viewMatrix=T·S（平移量被当缩放用）
+    // ⇒ 几何整体出画、GL 宿主 plotArea 内墨迹为 0；修复后（M=S·T）应正常落屏。
+    {
+        struct EccentricScene {
+            QChartWidget w;
+            QValueAxis ax{nullptr, Qt::AlignBottom};
+            QValueAxis ay{nullptr, Qt::AlignLeft};
+            QChartLayer layer;
+            explicit EccentricScene(bool gl)
+            {
+                ax.setRange(100.0, 140.0); ax.setTickCount(5); ax.setColor(Qt::black);
+                ay.setRange(-110.0, -50.0); ay.setTickCount(5); ay.setColor(Qt::black);
+                w.addAxis(&ax); w.addAxis(&ay); w.addLayer(&layer);
+                layer.setGridVisible(true);
+                layer.setGridColor(QColor(120, 120, 120));
+                if (gl) w.setRenderBackend(QChartAbstractWidget::RenderBackend::OpenGL);
+                w.resize(420, 340);
+                w.show();
+            }
+        };
+        auto inkOnRow = [](const QImage& img, int row) {
+            if (row < 0 || row >= img.height()) return 0;
+            int n = 0;
+            for (int x = 0; x < img.width(); ++x)
+                if (isInk(img.pixelColor(x, row))) ++n;
+            return n;
+        };
+
+        // CPU 孪生（同场景、同尺寸）
+        EccentricScene cs(false);
+        QVERIFY2(QTest::qWaitForWindowExposed(&cs.w), "偏心场景 CPU 窗口应暴露");
+        QTest::qWait(60);
+        const QImage cpuImg = cs.w.grab().toImage();
+        const double csScale = double(cpuImg.width()) / double(cs.w.width());
+        const QRectF cpuPa = cs.w.plotArea();
+        const QRectF cpuVr = cs.layer.camera()->viewRect();
+
+        // GL 侧
+        EccentricScene gs(true);
+        QVERIFY2(QTest::qWaitForWindowExposed(&gs.w), "偏心场景 GL 窗口应暴露");
+        for (int i = 0; i < 20; ++i) { QTest::qWait(20); if (gs.w.plotArea().width() > 0) break; }
+        auto* host2 = qobject_cast<QOpenGLWidget*>(gs.w.glHostWidget());
+        QVERIFY2(host2 && host2->isVisible(), "偏心场景应创建并显示 GL 宿主");
+        QTest::qWait(200);
+        const QImage eccFbo = host2->grabFramebuffer();
+        QVERIFY2(!eccFbo.isNull(), "偏心场景 host grabFramebuffer 应成功");
+        const double gsScale = double(eccFbo.width()) / double(qMax(1, host2->geometry().width()));
+        const QRectF glPa = gs.w.plotArea();
+        const QRectF glVr = gs.layer.camera()->viewRect();
+
+        int eccInk = 0;
+        for (int y = 0; y < eccFbo.height(); ++y)
+            for (int x = 0; x < eccFbo.width(); ++x)
+                if (isInk(eccFbo.pixelColor(x, y))) ++eccInk;
+        int cpuInk = 0;
+        for (int y = 0; y < cpuImg.height(); ++y)
+            for (int x = 0; x < cpuImg.width(); ++x)
+                if (isInk(cpuImg.pixelColor(x, y))) ++cpuInk;
+
+        qInfo().noquote() << QString("4h-b 偏心视图: viewRect(cpu)=%1 viewRect(gl)=%2 cpuInk=%3 glInk=%4 fbo=%5x%6")
+                                 .arg(QString("(%1,%2 %3x%4)").arg(cpuVr.left()).arg(cpuVr.top())
+                                          .arg(cpuVr.width()).arg(cpuVr.height()))
+                                 .arg(QString("(%1,%2 %3x%4)").arg(glVr.left()).arg(glVr.top())
+                                          .arg(glVr.width()).arg(glVr.height()))
+                                 .arg(cpuInk).arg(eccInk).arg(eccFbo.width()).arg(eccFbo.height());
+        QVERIFY2(qAbs(cpuVr.center().x() - 120.0) < 1e-6 && qAbs(cpuVr.center().y() + 80.0) < 1e-6,
+                 "偏心场景 viewRect 中心应为 (120,-80)");
+        QVERIFY2(eccInk > 0,
+                 qPrintable(QString("4h-b：偏心 viewRect 下 GL 宿主 plotArea 内应有墨迹（修复前为 0），实为 %1").arg(eccInk)));
+
+        // 落位一致（同代数探针）：逐条 y 网格脊行，CPU 与 GL 均须在该行有墨，且行位置差 ≤ 3px
+        const QVector<qreal> yTicks = cs.ay.tickValues(qMin(cpuVr.top(), cpuVr.bottom()),
+                                                       qMax(cpuVr.top(), cpuVr.bottom()));
+        int matched = 0;
+        for (qreal v : yTicks) {
+            // 均换算为「相对 plotArea 顶部」的逻辑行：CPU 抓图为整窗坐标、GL 宿主图恰为 plotArea 尺寸
+            const double cpuLocalRow = cs.layer.camera()->project(QVector3D(0.0f, float(v), 0.0f), cpuPa).screen.y() - cpuPa.top();
+            const double glLocalRow  = gs.layer.camera()->project(QVector3D(0.0f, float(v), 0.0f), glPa).screen.y() - glPa.top();
+            // 边界脊（恰落 plotArea 上下缘者）不作比较（裁剪边界效应），只比内部脊
+            const double localH = cpuPa.height();
+            if (cpuLocalRow < 2.0 || cpuLocalRow > localH - 2.0) continue;
+            // 行容差 ±1：抗锯齿/栅格差异
+            auto inkNearRow = [&inkOnRow](const QImage& img, int row) {
+                return inkOnRow(img, row - 1) + inkOnRow(img, row) + inkOnRow(img, row + 1);
+            };
+            const int cInk = inkNearRow(cpuImg, int(qRound(cpuLocalRow * csScale)));
+            const int gInk = inkNearRow(eccFbo, int(qRound(glLocalRow * gsScale)));
+            QVERIFY2(cInk > 0, qPrintable(QString("CPU 侧 y=%1（plotArea 内行 %2）应有网格脊墨迹").arg(v).arg(cpuLocalRow)));
+            QVERIFY2(gInk > 0, qPrintable(QString("GL 侧 y=%1（plotArea 内行 %2）应有网格脊墨迹（同代数探针落位）").arg(v).arg(glLocalRow)));
+            QVERIFY2(qAbs(cpuLocalRow - glLocalRow) <= 3.0,
+                     qPrintable(QString("CPU/GL 同一条脊的行位置应一致：cpu=%1 gl=%2（逻辑 px）")
+                                    .arg(cpuLocalRow).arg(glLocalRow)));
+            ++matched;
+        }
+        qInfo().noquote() << QString("4h-b 偏心视图落位: yTicks=%1 条，CPU/GL 逐条对齐=%2（容差 3px）")
+                                 .arg(yTicks.size()).arg(matched);
+        QVERIFY2(matched >= 3, "内部网格脊（≥3 条）应逐条 CPU/GL 对齐");
+    }
 }
