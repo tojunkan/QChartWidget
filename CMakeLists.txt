@@ -42,6 +42,7 @@ set(QCHART_SOURCES
     src/core/QOpenGLChartRenderer.cpp
     src/core/QChartGL.cpp
     src/core/QChartAbstractWidget.cpp
+    src/core/QChartPlotAreaLayout.cpp   # t82：GL 宿主几何布局（直通式 QLayout，无 Q_OBJECT/moc）
     src/core/QChartWidget.cpp
     src/core/QChartWidget3D.cpp     # 批次 B2：轻量 3D 容器（单 layer3D、相机归层）
     src/core/QChartCamera3D.cpp
@@ -72,6 +73,7 @@ set(QCHART_HEADERS
     include/core/QOpenGLChartRenderer.h
     include/core/QChartGL.h
     include/core/QChartAbstractWidget.h
+    include/core/QChartPlotAreaLayout.h   # t82
     include/core/QChartWidget.h
     include/core/QChartWidget3D.h     # 批次 B2：轻量 3D 容器（moc）
     include/layers/QChartAbstractLayer.h

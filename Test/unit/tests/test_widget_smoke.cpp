@@ -19,6 +19,7 @@
 #include "QChartWidget.h"
 #include "QChartLayer.h"
 #include "QChartCamera.h"    // t72：viewMatrix()/project() 双路径一致性
+#include "QChartPlotAreaLayout.h"   // t82：直通布局单元断言
 #include "QValueAxis.h"
 #include "QPainterChartRenderer.h"
 #include "QCartesianProjection.h"
@@ -854,4 +855,73 @@ void TestWidgetSmoke::dirtyModelContract()
     qInfo().noquote() << QString("4g 2D 脏模型: 稳态跳过 ×2；平移/轴范围/回退/同范围重建/数据/滚轮/刻度数/退化范围/网格样式 → 重收集累计 %1 次"
                                  "（背景 numeric 极值：范围 0..100 → %2，范围 -10..10 → %3，同范围重建逐位一致）")
                              .arg(layer.collectCount()).arg(e100a).arg(e10);
+
+    // ===== t82：QChartPlotAreaLayout 直通布局（offscreen，无需 GL）=====
+    // 目的：GL 宿主几何改由 Qt **布局阶段**应用（脱离绘制回调，消除 Windows resize 崩溃的重入路径）。
+    // 本段验证布局类自身：① 给定 plotArea 后经事件循环几何被正确应用；② 几何未变时重复触发布局
+    // 不再调用 setGeometry（applyCount 不增、skipCount 增）；③ setGeometry 忽略 Qt 传入 rect（直通）；
+    // ④ 摘除宿主（切回 CPU 后端的等价动作）后不再摆放。
+    {
+        QWidget host;
+        host.resize(400, 300);
+        auto* child = new QWidget(&host);
+        auto* lay = new QChartPlotAreaLayout(child, &host);
+        host.setLayout(lay);
+        host.show();
+        QVERIFY2(QTest::qWaitForWindowExposed(&host), "offscreen 下宿主窗口应暴露");
+        auto pump = []() { for (int i = 0; i < 5; ++i) { QCoreApplication::processEvents(); QTest::qWait(5); } };
+
+        lay->resetCounters();
+        lay->setPlotArea(QRect(20, 30, 200, 150));
+        QCOMPARE(lay->applyCount(), 0);           // 调用点（等价 relayout()）不直接改几何
+        pump();
+        QCOMPARE(child->geometry(), QRect(20, 30, 200, 150));
+        QVERIFY2(lay->applyCount() >= 1, "几何应由布局阶段应用");
+        QCOMPARE(lay->host(), child);
+
+        // ② 同一几何重复触发布局 ⇒ 不再调用 setGeometry
+        const int applied = lay->applyCount();
+        const int skipped = lay->skipCount();
+        for (int i = 0; i < 3; ++i) { lay->setPlotArea(QRect(20, 30, 200, 150)); lay->invalidate(); }
+        pump();
+        QCOMPARE(lay->applyCount(), applied);
+        QVERIFY2(lay->skipCount() > skipped, "重复布局应走跳过分支（几何未变不重设）");
+
+        // ③ 直通语义：Qt 传入 rect 被忽略，仍按保存的 plotArea 摆放
+        lay->setGeometry(host.rect());
+        lay->invalidate();
+        pump();
+        QCOMPARE(child->geometry(), QRect(20, 30, 200, 150));
+
+        // ④ 摘除宿主后不再摆放（切回 CPU 后端时先摘除再销毁）
+        lay->setHost(nullptr);
+        lay->setPlotArea(QRect(0, 0, 10, 10));
+        lay->invalidate();
+        pump();
+        QCOMPARE(child->geometry(), QRect(20, 30, 200, 150));
+
+        // ⑤ 宿主由隐藏变可见时补布局（不可见期间被跳过的几何需自兜底）
+        {
+            QWidget host2;
+            host2.resize(300, 200);
+            auto* child2 = new QWidget(&host2);    // 父窗口未 show ⇒ 子控件 isVisible()==false
+            auto* lay2 = new QChartPlotAreaLayout(child2, &host2);
+            host2.setLayout(lay2);
+            lay2->setPlotArea(QRect(5, 6, 120, 80));
+            pump();                                     // 宿主窗口未显示：几何不该被应用
+            QVERIFY2(!child2->isVisible(), "父窗口未 show 时子控件不可见");
+            QVERIFY2(child2->geometry() != QRect(5, 6, 120, 80), "不可见期间不得摆放");
+            host2.show();
+            QVERIFY2(QTest::qWaitForWindowExposed(&host2), "第二个宿主窗口应暴露");
+            pump();
+            QCOMPARE(child2->geometry(), QRect(5, 6, 120, 80));
+        }
+
+        qInfo().noquote() << QString("t82 布局直通（offscreen）：apply=%1 skip=%2；几何=%3；摘除后不再摆放")
+                                 .arg(lay->applyCount()).arg(lay->skipCount())
+                                 .arg(QString("(%1,%2 %3x%4)").arg(child->geometry().x())
+                                          .arg(child->geometry().y())
+                                          .arg(child->geometry().width())
+                                          .arg(child->geometry().height()));
+    }
 }

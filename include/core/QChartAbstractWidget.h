@@ -21,6 +21,7 @@ class QChartAbstractProjection;
 class QPainterChartRenderer;
 class QOpenGLChartRenderer;
 class GlPlotWidget;   // 实现细节（QOpenGLWidget 子控件），定义于 .cpp
+class QChartPlotAreaLayout;   // t82：GL 宿主几何布局（直通式；见 QChartPlotAreaLayout.h）
 
 class QPainter;
 class QPaintDevice;
@@ -47,6 +48,10 @@ public:
     RenderBackend renderBackend() const { return m_renderBackend; }
     /// GL 宿主控件（plotArea 对齐；OpenGL 后端激活时非空；测试/宿主 FBO 取证用）
     QWidget* glHostWidget() const { return m_glHostWidgetRaw; }
+
+    /// t82：GL 宿主几何布局（直通式；几何应用发生在 Qt 布局阶段，非绘制回调）。
+    /// 测试/诊断用途：applyCount()/skipCount() 给出“几何未变不重设”的可计数证据。
+    QChartPlotAreaLayout* plotAreaLayout() const { return m_plotAreaLayout; }
 
     // ===== 图层管理（容器）=====
     // 4a：层列表类型 = QChartAbstractLayer*（二维层 layers/2d/QChartLayer、三维层 layers/3d/QChartLayer3D 共同基类）
@@ -135,6 +140,7 @@ protected:
     std::unique_ptr<QOpenGLChartRenderer> m_glRenderer;   // OpenGL 后端激活时创建
     std::unique_ptr<GlPlotWidget> m_glHost;               // OpenGL 后端激活时创建（plotArea 对齐）
     QWidget* m_glHostWidgetRaw = nullptr;                 // 宿主裸指针（测试取证；随宿主创建/销毁维护）
+    QChartPlotAreaLayout* m_plotAreaLayout = nullptr;     // t82：宿主几何布局（常驻；归 widget 所有）
     RenderBackend m_renderBackend = RenderBackend::QPainter;
 
 private:

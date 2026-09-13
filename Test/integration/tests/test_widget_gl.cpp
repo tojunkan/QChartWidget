@@ -20,6 +20,7 @@
 #include "QChartWidget.h"
 #include "QChartLayer.h"
 #include "QChartCamera.h"   // t72：viewMatrix/project 朝向断言
+#include "QChartPlotAreaLayout.h"   // t82：宿主几何布局（applyCount/skipCount 取证）
 #include "QValueAxis.h"
 #include "QOpenGLChartRenderer.h"
 
@@ -800,5 +801,99 @@ void TestWidgetGl::glWidgetRenders()
                      qPrintable(QString("[%1] 变化序列后仍不得有空闲重绘（外层 %2 / 宿主 %3）")
                                 .arg(be).arg(cnt.outerCount).arg(cnt.hostCount)));
         }
+    }
+
+    // ===== t82：GL 宿主几何由**布局阶段**应用（绘制期无几何变更）=====
+    // 症状：Windows resize 崩溃定位到 paintEvent → relayout() → 子控件 setGeometry 的重入路径。
+    // 修复：几何交给 QChartPlotAreaLayout（Qt 布局阶段应用）。本段给出可观测证据：
+    //   ① 稳定后 宿主几何 == plotArea.toRect()，且由布局计数证明"是布局阶段做的"；
+    //   ② 连续多帧强制绘制后：布局 applyCount 与宿主几何变更事件计数都不增长（绘制期无几何变更）；
+    //   ③ relayout()（= 绘制回调里调用的那个函数）之后几何**尚未**变化，事件循环后才落位；
+    //      且同一几何重复触发布局时 applyCount 不增长（几何未变不重设）；④ 切回 CPU 时宿主先从布局摘除。
+    {
+        struct T82GeomCounter : public QObject {
+            QObject* host = nullptr;
+            int changes = 0;
+            explicit T82GeomCounter(QObject* h) : host(h) {}
+            bool eventFilter(QObject* obj, QEvent* e) override
+            {
+                if (obj == host && (e->type() == QEvent::Resize || e->type() == QEvent::Move))
+                    ++changes;
+                return false;
+            }
+        };
+
+        QChartWidget w;
+        QValueAxis ax(nullptr, Qt::AlignBottom), ay(nullptr, Qt::AlignLeft);
+        QChartLayer layer;
+        ax.setRange(0.0, 10.0); ax.setTickCount(5); ax.setColor(Qt::black);
+        ay.setRange(-5.0, 45.0); ay.setTickCount(5); ay.setColor(Qt::black);
+        w.addAxis(&ax); w.addAxis(&ay); w.addLayer(&layer);
+        layer.setGridVisible(true);
+        w.setRenderBackend(QChartAbstractWidget::RenderBackend::OpenGL);
+        w.resize(720, 540);
+        w.show();
+        QVERIFY2(QTest::qWaitForWindowExposed(&w), "t82：GL 窗口应暴露");
+        for (int i = 0; i < 20; ++i) { QTest::qWait(20); if (w.plotArea().width() > 0) break; }
+        auto* host82 = qobject_cast<QOpenGLWidget*>(w.glHostWidget());
+        QVERIFY2(host82 && host82->isVisible(), "t82：GL 模式应创建并显示 GL 宿主");
+        QChartPlotAreaLayout* lay = w.plotAreaLayout();
+        QVERIFY2(lay != nullptr, "t82：widget 应常驻 plotArea 布局");
+        QCOMPARE(lay->host(), static_cast<QWidget*>(host82));
+        auto pump = []() { for (int i = 0; i < 6; ++i) { QCoreApplication::processEvents(); QTest::qWait(10); } };
+
+        pump();
+        QCOMPARE(host82->geometry(), w.plotArea().toRect());      // ①
+        QVERIFY2(lay->applyCount() >= 1, "几何应由布局阶段应用（而非 relayout 直接 setGeometry）");
+        qInfo().noquote() << QString("t82 [GL] 稳定后：宿主几何=%1 plotArea=%2 布局 apply=%3 skip=%4")
+                                 .arg(QString("(%1,%2 %3x%4)").arg(host82->geometry().x()).arg(host82->geometry().y())
+                                          .arg(host82->geometry().width()).arg(host82->geometry().height()))
+                                 .arg(QString("(%1,%2 %3x%4)").arg(w.plotArea().x()).arg(w.plotArea().y())
+                                          .arg(w.plotArea().width()).arg(w.plotArea().height()))
+                                 .arg(lay->applyCount()).arg(lay->skipCount());
+
+        // ② 绘制期无几何变更：强制 5 帧绘制
+        T82GeomCounter geom(host82);
+        host82->installEventFilter(&geom);
+        lay->resetCounters();
+        for (int i = 0; i < 5; ++i) { w.grab(); QCoreApplication::processEvents(); }
+        qInfo().noquote() << QString("t82 [GL] 连续 5 帧强制绘制：布局 apply=%1 宿主几何变更事件=%2")
+                                 .arg(lay->applyCount()).arg(geom.changes);
+        QCOMPARE(lay->applyCount(), 0);
+        QCOMPARE(geom.changes, 0);
+        host82->removeEventFilter(&geom);
+
+        // ③ relayout() 之后几何尚未变化（应用在事件阶段）；事件处理后落位到新 plotArea
+        const QRect oldGeom = host82->geometry();
+        lay->resetCounters();
+        w.resize(760, 560);
+        w.grab();                                  // 触发 paintEvent → relayout()（重算 plotArea）
+        QVERIFY2(host82->geometry() == oldGeom,
+                 "t82：relayout()（绘制回调路径）之后几何不得变化——应用应发生在布局阶段");
+        QCOMPARE(lay->applyCount(), 0);
+        pump();
+        qInfo().noquote() << QString("t82 [GL] resize 760x560：relayout 后仍为旧几何=%1；事件循环后=%2（apply=%3）")
+                                 .arg(QString("(%1,%2 %3x%4)").arg(oldGeom.x()).arg(oldGeom.y())
+                                          .arg(oldGeom.width()).arg(oldGeom.height()))
+                                 .arg(QString("(%1,%2 %3x%4)").arg(host82->geometry().x()).arg(host82->geometry().y())
+                                          .arg(host82->geometry().width()).arg(host82->geometry().height()))
+                                 .arg(lay->applyCount());
+        QCOMPARE(host82->geometry(), w.plotArea().toRect());
+        QCOMPARE(lay->applyCount(), 1);
+
+        // ④ 同一几何重复触发布局 ⇒ 不再调用 setGeometry
+        const int applied = lay->applyCount();
+        const int skipped = lay->skipCount();
+        for (int i = 0; i < 3; ++i) { lay->invalidate(); w.relayout(); }
+        pump();
+        qInfo().noquote() << QString("t82 [GL] 同几何重复布局 ×3：apply %1 → %2（skip %3 → %4）")
+                                 .arg(applied).arg(lay->applyCount()).arg(skipped).arg(lay->skipCount());
+        QCOMPARE(lay->applyCount(), applied);
+        QVERIFY2(lay->skipCount() > skipped, "重复布局必须走跳过分支（几何未变不重设）");
+
+        // ⑤ 切回 CPU 后端：宿主从布局摘除后销毁（布局不再持有已销毁控件）
+        w.setRenderBackend(QChartAbstractWidget::RenderBackend::QPainter);
+        QCOMPARE(lay->host(), static_cast<QWidget*>(nullptr));
+        QVERIFY2(w.glHostWidget() == nullptr, "切回 CPU 后应销毁 GL 宿主");
     }
 }

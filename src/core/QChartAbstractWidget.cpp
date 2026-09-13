@@ -1,6 +1,7 @@
 // QChartAbstractWidget.cpp —— 图表抽象基类实现（S0+批次 A：纯容器）
 #include "QChartAbstractWidget.h"
 #include "QChartAbstractLayer.h"   // 4a：层列表改抽象层类型
+#include "QChartPlotAreaLayout.h"   // t82：GL 宿主几何改由布局阶段应用
 #include "QPainterChartRenderer.h"
 #include "QOpenGLChartRenderer.h"
 #include "QChartGL.h"
@@ -81,6 +82,11 @@ QChartAbstractWidget::QChartAbstractWidget(QWidget* parent)
     setMouseTracking(true);
     setMinimumSize(200, 150);
     m_cpuRenderer = std::make_unique<QPainterChartRenderer>();
+
+    // t82（第一步）：GL 宿主几何改由 QLayout 在**布局阶段**应用（不再在绘制回调里 setGeometry）。
+    // 布局常驻（CPU 后端下无宿主 = 空转），故障边界见 QChartPlotAreaLayout 头注释。
+    m_plotAreaLayout = new QChartPlotAreaLayout(nullptr, this);
+    setLayout(m_plotAreaLayout);
 }
 
 QChartAbstractWidget::~QChartAbstractWidget()
@@ -90,6 +96,9 @@ QChartAbstractWidget::~QChartAbstractWidget()
         m_glHost->makeCurrent();
         m_glRenderer->clearBatches();
     }
+    // t82：宿主即将销毁 → 先从布局摘除（布局项不得引用已销毁控件）
+    if (m_plotAreaLayout)
+        m_plotAreaLayout->setHost(nullptr);
 }
 
 // ===== 渲染后端 =====
@@ -108,10 +117,19 @@ void QChartAbstractWidget::setRenderBackend(RenderBackend backend)
         }
         m_renderBackend = RenderBackend::OpenGL;
         m_layoutDirty = true;          // 需要重算 plotArea 并摆放子控件
-        m_glHost->setGeometry(m_plotArea.toRect());
+        // t82：几何不再直接 setGeometry —— 交给布局（Qt 布局阶段应用）。
+        // 首个 relayout 之前先给一个同源几何初值（见 resizeEvent 注释），避免宿主停在空/默认几何。
+        if (m_plotAreaLayout) {
+            m_plotAreaLayout->setHost(m_glHost.get());
+            m_plotAreaLayout->setPlotArea(m_plotArea.isEmpty() ? calculatePlotArea().toRect()
+                                                               : m_plotArea.toRect());
+            m_plotAreaLayout->invalidate();
+        }
         m_glHost->show();
     } else {
-        // ---- 切 CPU：销毁 GL 宿主（不创建 GL 子控件）----
+        // ---- 切 CPU：先把宿主从布局摘除，再销毁 GL 宿主（不创建 GL 子控件）----
+        if (m_plotAreaLayout)
+            m_plotAreaLayout->setHost(nullptr);
         if (m_glHost && m_glRenderer) {
             m_glHost->makeCurrent();
             m_glRenderer->clearBatches();
@@ -174,8 +192,12 @@ void QChartAbstractWidget::relayout()
 
 void QChartAbstractWidget::layoutGlHost()
 {
-    if (m_glHost && m_glHost->isVisible()) {
-        m_glHost->setGeometry(m_plotArea.toRect());
+    // t82（第一步）：**不再**在绘制回调里直接 setGeometry —— 只把目标矩形交给布局并 invalidate()；
+    // 真正的几何应用发生在 Qt 的**布局阶段**（事件阶段）的 QChartPlotAreaLayout::setGeometry()。
+    // 内容脏模型与 plotArea 计算时机均不变（见 QChartPlotAreaLayout 头注释的边界说明）。
+    if (m_plotAreaLayout) {
+        m_plotAreaLayout->setPlotArea(m_plotArea.toRect());
+        m_plotAreaLayout->invalidate();
     }
 }
 
@@ -292,6 +314,13 @@ void QChartAbstractWidget::paintEvent(QPaintEvent*)
 void QChartAbstractWidget::resizeEvent(QResizeEvent*)
 {
     m_layoutDirty = true;
+    // t82：为布局提供**几何初值**——在首个 relayout（发生在首个 paint）之前，宿主不应停留在
+    // 默认/空几何（否则"同一调用栈里 grab→relayout→抓 FBO"这类外部时序会看到未落位的宿主）。
+    // 这里只做**纯像素计算**喂给布局：不写 m_plotArea、不发 plotAreaChanged、不调 onPlotAreaChanged、
+    // 不改 relayout() 的调用时机与内容脏模型（4e 驱动链零触碰；首个 relayout 仍是权威来源，
+    // 初值与权威值同源同值 ⇒ 通常不产生额外 apply）。
+    if (m_plotAreaLayout && m_plotArea.isEmpty())
+        m_plotAreaLayout->setPlotArea(calculatePlotArea().toRect());
     scheduleRepaint();
 }
 
