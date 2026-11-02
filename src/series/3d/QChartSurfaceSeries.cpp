@@ -1,5 +1,8 @@
-// QChartSurfaceSeries.cpp —— 曲面线框系列实现
+// QChartSurfaceSeries.cpp —— 3D 曲面实现（收集一个 TriangleMesh，绘制统一由 renderer 完成）
 #include "QChartSurfaceSeries.h"
+#include "QChartScene.h"
+#include "QChartPrimitive.h"
+#include "QChartAxis.h"
 #include <QDebug>
 #include <cmath>
 
@@ -39,57 +42,53 @@ void QChartSurfaceSeries::setParametricGrid(int rows, int cols,
     setGrid(rows, cols, pts);
 }
 
-// ===== 图元收集：线框（走全链闭包 ProjectFn3D，裁决 b）=====
-void QChartSurfaceSeries::collectPrimitives(const ProjectFn3D& projectFn,
-                                            QVector<QChartPrimitive>& out) const {
-    if (!projectFn || m_rows <= 0 || m_cols <= 0) return;
+// ===== 图元收集：一个 TriangleMesh（Numeric 顶点 + 三角索引）=====
+// 每格 2 个三角形：左上→左下→右上、右上→左下→右下（逆时针，与顶点顺序约定一致）；
+// 四角任一非有限（NaN/Inf）→ 整个格跳过。
+void QChartSurfaceSeries::collectPrimitives(QChartScene& scene,
+                                            const QChartAxis* ax, const QChartAxis* ay,
+                                            const QChartAxis* az) const {
+    if (m_rows < 2 || m_cols < 2) return;
 
-    // 全链闭包预投影全部网格点（Data→{screen,depth}）；count()/at() 双存储统一访问
-    const int n = count();
-    QVector<QChartProjectedPoint> proj(n);
-    QVector<bool> valid(n, false);
+    const int n = m_rows * m_cols;
+    QVector<QVector3D> verts;
+    QVector<bool> valid;
+    verts.reserve(n);
+    valid.reserve(n);
+
     for (int i = 0; i < n; ++i) {
-        proj[i] = projectFn(at(i));
-        valid[i] = std::isfinite(proj[i].screen.x()) && std::isfinite(proj[i].screen.y());
+        // count()/at()：双存储统一访问（setGrid 走 QVariant 路径）
+        const QDataPoint3D d = at(i);
+        const qreal nx = ax ? ax->toNumeric(d.x()) : d.x().toDouble();
+        const qreal ny = ay ? ay->toNumeric(d.y()) : d.y().toDouble();
+        const qreal nz = az ? az->toNumeric(d.z()) : d.z().toDouble();
+        const bool ok = std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz);
+        verts.append(QVector3D(static_cast<float>(nx), static_cast<float>(ny),
+                               static_cast<float>(nz)));
+        valid.append(ok);
     }
 
-    auto emitSegment = [&](int i0, int i1) {
-        if (!valid[i0] || !valid[i1]) return;   // 任一端投影 NaN → 跳过
-        QChartPrimitive prim;
-        prim.type = QChartPrimitive::Type::LineSegment;
-        prim.a = proj[i0].screen;
-        prim.b = proj[i1].screen;
-        prim.depth = (proj[i0].depth + proj[i1].depth) * 0.5;   // 裁决 a：两端点深度均值
-        prim.dataIndex = i0;                                     // 裁决 c：线段起点数据索引
-        prim.penWidth = 1.0;
-        prim.color = color();
-        prim.worldA = proj[i0].world;                            // GL 顶点源（t42，§3.2）
-        prim.worldB = proj[i1].world;
-        out.append(prim);
-    };
+    QVector<int> indices;
+    indices.reserve(6 * (m_rows - 1) * (m_cols - 1));
+    for (int r = 0; r + 1 < m_rows; ++r) {
+        for (int c = 0; c + 1 < m_cols; ++c) {
+            const int i00 = r * m_cols + c;          // 左上
+            const int i01 = i00 + 1;                 // 右上
+            const int i10 = i00 + m_cols;            // 左下
+            const int i11 = i10 + 1;                 // 右下
+            if (!valid.at(i00) || !valid.at(i01) || !valid.at(i10) || !valid.at(i11))
+                continue;
+            indices << i00 << i10 << i01;
+            indices << i01 << i10 << i11;
+        }
+    }
+    if (indices.isEmpty()) return;
 
-    // u 方向：rows·(cols-1) 条（同一行内相邻列）
-    for (int r = 0; r < m_rows; ++r)
-        for (int c = 0; c + 1 < m_cols; ++c)
-            emitSegment(r * m_cols + c, r * m_cols + c + 1);
-    // v 方向：cols·(rows-1) 条（同一列内相邻行）
-    for (int c = 0; c < m_cols; ++c)
-        for (int r = 0; r + 1 < m_rows; ++r)
-            emitSegment(r * m_cols + c, (r + 1) * m_cols + c);
-}
-
-// ===== 直接绘制：无排序直绘 =====
-void QChartSurfaceSeries::draw(QPainter* painter,
-                               const ProjectFn3D& projectFn,
-                               const DrawContext3D* ctx) const {
-    Q_UNUSED(ctx);
-    if (!painter || !projectFn) return;
-    QVector<QChartPrimitive> items;
-    collectPrimitives(projectFn, items);
-    painter->save();
-    painter->setOpacity(opacity());
-    painter->setPen(QPen(color(), 1.0));
-    for (const QChartPrimitive& prim : items)
-        painter->drawLine(prim.a, prim.b);
-    painter->restore();
+    QChartPrimitive p;
+    p.type = QChartPrimitive::Type::TriangleMesh;
+    p.numVerts = verts;
+    p.numIndices = indices;
+    p.fillColor = color();
+    p.color = color();
+    scene.primitives.append(p);
 }

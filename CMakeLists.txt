@@ -52,6 +52,17 @@ set(QCHART_SOURCES
     src/layers/3d/QChartLayer3D.cpp
     # projection：2D 投影族（3D 投影族为 header-only，随头文件引入即可；插值投影有 .cpp）
     src/projection/QInterpolatedProjection.cpp
+    # series：2D 系列（散点/折线/多边形/柱状）+ 3D 系列（散点/折线/曲面）
+    src/series/QChartSeries.cpp
+    src/series/2d/QXYSeries.cpp
+    src/series/2d/QScatterSeries.cpp
+    src/series/2d/QLineSeries.cpp
+    src/series/2d/QPolygonSeries.cpp
+    src/series/2d/QBarSeries.cpp
+    src/series/3d/QChartSeries3D.cpp
+    src/series/3d/QChartScatterSeries3D.cpp
+    src/series/3d/QChartLineSeries3D.cpp
+    src/series/3d/QChartSurfaceSeries.cpp
 )
 
 # 库头文件（AUTOMOC 需要：含 Q_OBJECT 的类经此入 moc 扫描）
@@ -92,6 +103,16 @@ set(QCHART_HEADERS
     include/utils/QDataPoint3D.h
     include/utils/QDataRect.h
     include/utils/ProjectionToolKit.h
+    include/series/QChartSeries.h
+    include/series/2d/QXYSeries.h
+    include/series/2d/QScatterSeries.h
+    include/series/2d/QLineSeries.h
+    include/series/2d/QPolygonSeries.h
+    include/series/2d/QBarSeries.h
+    include/series/3d/QChartSeries3D.h
+    include/series/3d/QChartScatterSeries3D.h
+    include/series/3d/QChartLineSeries3D.h
+    include/series/3d/QChartSurfaceSeries.h
 )
 
 # ---- 库目标（moc 唯一持有者，红线不变）----
@@ -111,6 +132,7 @@ target_include_directories(QChartWidget PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include/projection/2d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/projection/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/series
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/series/2d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/series/3d
     ${CMAKE_CURRENT_SOURCE_DIR}/include/utils
 )

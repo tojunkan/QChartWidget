@@ -34,6 +34,38 @@ public:
         return QVector3D(r, qRadiansToDegrees(rad), cart.z());
     }
 
+    // ── 反算：World 盒 → Numeric 盒（闭式，不用采样）──
+    //    rMin = 盒到轴的距离（含轴 → 0）；rMax = 最远角点；z 原样；
+    //    θ：盒含轴或跨正 X 轴（0/360 缝）→ [0,360)，否则取四角点角度区间。
+    QCube computeDataBounds(const QCube& w) const override {
+        if (!w.isValid()) return w;
+        const qreal dx = (w.min.x() <= 0.0 && w.max.x() >= 0.0) ? 0.0
+                                                               : qMin(qAbs(w.min.x()), qAbs(w.max.x()));
+        const qreal dy = (w.min.y() <= 0.0 && w.max.y() >= 0.0) ? 0.0
+                                                               : qMin(qAbs(w.min.y()), qAbs(w.max.y()));
+        const qreal rx = qMax(qAbs(w.min.x()), qAbs(w.max.x()));
+        const qreal ry = qMax(qAbs(w.min.y()), qAbs(w.max.y()));
+        const qreal rMin = qSqrt(dx * dx + dy * dy);
+        const qreal rMax = qSqrt(rx * rx + ry * ry);
+
+        const bool containsAxis = (dx == 0.0 && dy == 0.0);
+        const bool crossesPositiveX = (w.min.x() > 0.0 && w.min.y() <= 0.0 && w.max.y() >= 0.0);
+        qreal thMin = 0.0, thMax = 360.0;
+        if (!containsAxis && !crossesPositiveX) {
+            const qreal corners[4][2] = { {w.min.x(), w.min.y()}, {w.max.x(), w.min.y()},
+                                          {w.max.x(), w.max.y()}, {w.min.x(), w.max.y()} };
+            thMin = 360.0; thMax = 0.0;
+            for (const auto& c : corners) {
+                qreal a = qRadiansToDegrees(qAtan2(c[1], c[0]));
+                if (a < 0.0) a += 360.0;
+                thMin = qMin(thMin, a);
+                thMax = qMax(thMax, a);
+            }
+        }
+        return QCube(QVector3D(rMin, thMin, w.min.z()),
+                     QVector3D(rMax, thMax, w.max.z()));
+    }
+
     // QCylindricalProjection3D.h 中添加
     QString glslToCartesian() const override {
         // num.x=r, num.y=θ, num.z=z

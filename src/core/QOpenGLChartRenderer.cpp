@@ -3,6 +3,7 @@
 #include "QChartAbstractProjection.h"
 #include "QInterpolatedProjection.h"
 #include "QChartCamera.h"
+#include "QChartMath.h"   // triangulatePolygon（多边形填充 → 三角索引）
 #include <QOpenGLContext>
 #include <QOpenGLVersionFunctionsFactory>
 #include <QPainter>
@@ -98,6 +99,16 @@ void QOpenGLChartRenderer::drawPrimitives(QChartScene& scene,
     QOpenGLFunctions_3_3_Core* f = glFuncs();
     if (!f) return;
 
+    // ★ 深度状态显式复位：标签覆盖层用 QPainter 绘制，会把 GL_DEPTH_TEST 关掉、
+    //   把 glDepthMask 置 false 且**不恢复**。若不重置，下一帧所有图元都不写深度 →
+    //   遮挡退化为"按 pass 顺序"（Triangle→Line→Point，点永远压在网格上）。
+    f->glEnable(GL_DEPTH_TEST);
+    f->glDepthMask(GL_TRUE);
+    f->glDepthFunc(GL_LESS);
+
+    // TODO(blend)：半透明顶点色在 GL 下颜色不对（premultiplied/straight alpha 状态混用），
+    //   本轮暂时只保证不透明填充正确；标签覆盖层会留下 premultiplied 混合函数。
+
     // F2(S0 修复)：GL_PROGRAM_POINT_SIZE 未开启时，Core Profile 顶点着色器写的
     // gl_PointSize 被忽略（llvmpipe 实测刻度点完全不光栅化）；绘制前开启、绘制后恢复默认。
     f->glEnable(GL_PROGRAM_POINT_SIZE);
@@ -172,10 +183,12 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
         float pointSize;
         bool isGrid;
         bool isDecor;
+        float lineWidth;    // 仅 Line kind 参与（其余填 0）
 
         bool operator==(const GroupKey& other) const {
             return kind == other.kind && qFuzzyCompare(pointSize, other.pointSize)
-                && isGrid == other.isGrid && isDecor == other.isDecor;
+                && isGrid == other.isGrid && isDecor == other.isDecor
+                && qFuzzyCompare(lineWidth, other.lineWidth);
         }
     };
 
@@ -215,7 +228,9 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
         bool isGrid = (prim.depth > 0.5f);
         bool isDecor = (prim.depth > 1.0f);
 
-        GroupKey key{kind, prim.markerSize, isGrid, isDecor};
+        // 线宽只对 Line 有意义（同宽线段合批，减少 glLineWidth 切换）
+        GroupKey key{kind, prim.markerSize, isGrid, isDecor,
+                     (kind == ShaderKind::Line) ? prim.penWidth : 0.0f};
 
         int gi = -1;
         for (int g = 0; g < groups.size(); ++g) {
@@ -239,6 +254,7 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
         GLBatch batch;
         batch.shaderKind = grp.key.kind;
         batch.pointSize = float(grp.key.pointSize * qchartGLPixelRatio());
+        batch.lineWidth = grp.key.lineWidth;
         batch.depthTest = !grp.key.isDecor;
         batch.depthBias = grp.key.isGrid ? 0.001f : 0.0f;
         batch.baseId = baseId;
@@ -286,13 +302,14 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
                 break;
             }
             case QChartPrimitive::Type::Rect: {
-                // 矩形 → 2 个三角形（6 个顶点）
+                // 矩形 → 2 个三角形（6 个顶点）；填充色优先 fillColor
                 const QRectF& r = prim->numRect;
                 float x1 = r.left(), x2 = r.right(), y1 = r.top(), y2 = r.bottom();
-                uint8_t rCol = uint8_t(prim->color.red());
-                uint8_t gCol = uint8_t(prim->color.green());
-                uint8_t bCol = uint8_t(prim->color.blue());
-                uint8_t aCol = uint8_t(prim->color.alpha());
+                const QColor fill = (prim->fillColor.alpha() > 0) ? prim->fillColor : prim->color;
+                uint8_t rCol = uint8_t(fill.red());
+                uint8_t gCol = uint8_t(fill.green());
+                uint8_t bCol = uint8_t(fill.blue());
+                uint8_t aCol = uint8_t(fill.alpha());
                 // Triangle 1: (x1,y1) -> (x2,y1) -> (x1,y2)
                 verts.append({x1, y1, 0, rCol, gCol, bCol, aCol});
                 verts.append({x2, y1, 0, rCol, gCol, bCol, aCol});
@@ -309,10 +326,11 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
                 const QRectF& r = prim->numRect;
                 float cx = r.center().x(), cy = r.center().y();
                 float rx = r.width() / 2, ry = r.height() / 2;
-                uint8_t rCol = uint8_t(prim->color.red());
-                uint8_t gCol = uint8_t(prim->color.green());
-                uint8_t bCol = uint8_t(prim->color.blue());
-                uint8_t aCol = uint8_t(prim->color.alpha());
+                const QColor fill = (prim->fillColor.alpha() > 0) ? prim->fillColor : prim->color;
+                uint8_t rCol = uint8_t(fill.red());
+                uint8_t gCol = uint8_t(fill.green());
+                uint8_t bCol = uint8_t(fill.blue());
+                uint8_t aCol = uint8_t(fill.alpha());
                 const int segs = 16;
                 for (int i = 0; i < segs; ++i) {
                     float a1 = 2 * M_PI * i / segs;
@@ -323,11 +341,52 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
                 }
                 break;
             }
-            case QChartPrimitive::Type::Polygon:
-            case QChartPrimitive::Type::TriangleMesh:
+            case QChartPrimitive::Type::Polygon: {
+                // 多边形 → 三角化（耳切/扇形）后按索引展开；退化多边形直接跳过
+                const QVector<QVector3D>& vertsList = prim->numVerts;
+                if (vertsList.size() < 3) break;
+                // 填充色优先（fillColor 有效时），否则退回 color
+                const QColor fill = (prim->fillColor.alpha() > 0) ? prim->fillColor : prim->color;
+                uint8_t rCol = uint8_t(fill.red());
+                uint8_t gCol = uint8_t(fill.green());
+                uint8_t bCol = uint8_t(fill.blue());
+                uint8_t aCol = uint8_t(fill.alpha());
+                QVector<int> indices;
+                if (!QChartMath::triangulatePolygon(vertsList, indices)) break;
+                for (int t : indices) {
+                    const QVector3D& v = vertsList.at(t);
+                    verts.append({float(v.x()), float(v.y()), float(v.z()),
+                                  rCol, gCol, bCol, aCol});
+                }
+                break;
+            }
+            case QChartPrimitive::Type::TriangleMesh: {
+                // 三角网格：按 numIndices 展开（无索引时退化为顺序顶点）
+                const QVector<QVector3D>& vertsList = prim->numVerts;
+                const QVector<int>& idx = prim->numIndices;
+                const QColor fill = (prim->fillColor.alpha() > 0) ? prim->fillColor : prim->color;
+                uint8_t rCol = uint8_t(fill.red());
+                uint8_t gCol = uint8_t(fill.green());
+                uint8_t bCol = uint8_t(fill.blue());
+                uint8_t aCol = uint8_t(fill.alpha());
+                if (!idx.isEmpty()) {
+                    for (int t : idx) {
+                        if (t < 0 || t >= vertsList.size()) continue;
+                        const QVector3D& v = vertsList.at(t);
+                        verts.append({float(v.x()), float(v.y()), float(v.z()),
+                                      rCol, gCol, bCol, aCol});
+                    }
+                } else {
+                    for (const QVector3D& v : vertsList) {
+                        verts.append({float(v.x()), float(v.y()), float(v.z()),
+                                      rCol, gCol, bCol, aCol});
+                    }
+                }
+                break;
+            }
             case QChartPrimitive::Type::TriangleFan:
             case QChartPrimitive::Type::TriangleStrip: {
-                // 直接使用 numVerts
+                // 扇形/条带：直接使用 numVerts（GL 图元类型仍按 GL_TRIANGLES 展开顺序顶点）
                 const QVector<QVector3D>& vertsList = prim->numVerts;
                 uint8_t rCol = uint8_t(prim->color.red());
                 uint8_t gCol = uint8_t(prim->color.green());
@@ -423,12 +482,14 @@ void QOpenGLChartRenderer::drawPass(const QChartScene& scene, ShaderKind kind)
     // 注：宽度超 1 依赖驱动 ALIASED_LINE_WIDTH_RANGE（llvmpipe/多数桌面驱动支持 [1,N]）；
     // 驱动仅支持 1 时 glLineWidth 静默钳制为 1（不报错）。
     const bool linePass = (kind == ShaderKind::Line);
-    if (linePass)
-        f->glLineWidth(qMax(1.0f, float(qchartGLPixelRatio())));
 
     // 分层绘制（Grid -> Series -> Decor）
     for (const GLBatch& batch : m_batches) {
         if (batch.shaderKind != kind) continue;
+
+        // 线宽按图元 penWidth × DPR（驱动只支持 1.0 时会被静默钳制）
+        if (linePass)
+            f->glLineWidth(qMax(1.0f, float(batch.lineWidth * qchartGLPixelRatio())));
 
         // depthTest / depthBias
         if (batch.depthTest) f->glEnable(GL_DEPTH_TEST);

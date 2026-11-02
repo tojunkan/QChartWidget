@@ -33,7 +33,8 @@ public:
     void setPoints(const QVector<QDataPoint>& pts);   // 整批替换
 
 signals:
-    void dataChanged();             // 任何数据改动都发
+    // dataChanged 统一用基类 QChartSeries::dataChanged（派生类重复声明会遮蔽它，
+    // 导致 layer 连的基类信号永远不触发 → 数据改动不重收集）
     void renderOverrideChanged();   // 动画覆盖层变化（每帧可能多次）
 
 protected:

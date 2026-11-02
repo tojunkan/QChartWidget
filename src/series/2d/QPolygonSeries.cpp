@@ -1,147 +1,101 @@
-// QPolygonSeries.cpp —— 多边形系列实现
-// 每边用 near/far 策略（复用 LineSeries 逻辑），全部边连成封闭多边形后 fill。
+// QPolygonSeries.cpp —— 多边形系列实现（收集 Numeric 图元，绘制统一由 renderer 完成）
 #include "QPolygonSeries.h"
-#include "QChartAxis.h" // DrawContext
-#include "QChartDebug.h"
-#include <QPainterPath>
-#include <QDebug>
+#include "QChartScene.h"
+#include "QChartPrimitive.h"
+#include "QChartAxis.h"
 #include <cmath>
 
 QPolygonSeries::QPolygonSeries(const QString& name, QObject* parent)
-    : QXYSeries(name, parent) {}
-
-// ===== 绘制：逐边 near/far 策略构建多边形路径，fill =====
-void QPolygonSeries::draw(QPainter* painter,
-                          std::function<QPointF(QVariant,QVariant)> toPixel,
-                          const DrawContext* ctx) const {
-    if (!painter || !m_visible) return;
-    // override 点已是 Numeric 空间，不需 toPixel；真实数据则必须要有
-    if (!m_hasOverride && !toPixel) return;
-    if (!m_hasOverride && m_points.size() < 3) return; // 至少 3 个点才能构成多边形
-
-    // ── 点源统一为「Numeric 点 + 像素点」：曲线边逻辑只认 Numeric ──
-    struct PtSrc { QPointF pixel; QPointF numeric; };
-    QVector<PtSrc> pts;
-    if (m_hasOverride) {
-        pts.reserve(m_overridePoints.size());
-        for (const auto& n : m_overridePoints) {
-            QPointF px = ctx ? ctx->numericToPixel(n.x(), n.y())
-                             : QPointF(qQNaN(), qQNaN());
-            pts.append({px, n});
-        }
-    } else {
-        pts.reserve(m_points.size());
-        for (const auto& pt : m_points) {
-            QPointF px = toPixel(pt.x(), pt.y());
-            // 曲线边需要 Numeric；无 ctx/toNumeric 时留 NaN → 回退像素直线
-            QPointF n(ctx && ctx->toNumeric0 ? ctx->toNumeric0(pt.x()) : qQNaN(),
-                      ctx && ctx->toNumeric1 ? ctx->toNumeric1(pt.y()) : qQNaN());
-            pts.append({px, n});
-        }
-    }
-    if (pts.size() < 3) return;
-
-    const qreal threshold = 20.0; // 像素距离阈值
-    QPainterPath polyPath;
-
-    // 首先将第一个点作为起点
-    QPointF firstPx = pts[0].pixel;
-    if (!std::isfinite(firstPx.x()) || !std::isfinite(firstPx.y())) return;
-    polyPath.moveTo(firstPx);
-
-    QPointF prevPx = firstPx;
-    QPointF prevNumeric = pts[0].numeric;
-    int curvesDrawn = 0, linesDrawn = 0;
-
-    // 逐边 (i → i+1)
-    for (int i = 0; i < pts.size(); ++i) {
-        int next = (i + 1) % pts.size(); // 隐式闭合：末点连回第 0 点
-        const auto& pt = pts[next];
-        const QPointF& pixel = pt.pixel;
-
-        if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
-            // NaN 顶点 → 闭合当前子路径并重开
-            polyPath.closeSubpath();
-            if (next < pts.size() - 1) {
-                const QPointF& restart = pts[next + 1].pixel;
-                if (std::isfinite(restart.x()) && std::isfinite(restart.y()))
-                    polyPath.moveTo(restart);
-            }
-            prevPx = pixel;
-            prevNumeric = pt.numeric;
-            continue;
-        }
-
-        qreal dist = std::hypot(pixel.x() - prevPx.x(), pixel.y() - prevPx.y());
-
-        // 近点，或 Numeric 值不可用（无投影/转换失败）→ 像素直线
-        if (dist < threshold || !ctx || !ctx->projection
-            || !std::isfinite(pt.numeric.x()) || !std::isfinite(pt.numeric.y())
-            || !std::isfinite(prevNumeric.x()) || !std::isfinite(prevNumeric.y())) {
-            polyPath.lineTo(pixel);
-            linesDrawn++;
-        } else {
-            // ── 远点：Numeric 空间 Lerp → createPath → 曲线 ──
-            qreal dn0 = pt.numeric.x() - prevNumeric.x();
-            qreal dn1 = pt.numeric.y() - prevNumeric.y();
-            auto dataCurve = [prevNumeric, dn0, dn1](qreal t) -> QPointF {
-                return QPointF(prevNumeric.x() + t * dn0,
-                               prevNumeric.y() + t * dn1);
-            };
-            int segments = qMax(16, static_cast<int>(dist / 3.0));
-            QPainterPath curve = ctx->toPixelCurve(dataCurve, segments);
-            // 追加曲线元素到 polyPath
-            for (int j = 0; j < curve.elementCount(); ++j) {
-                const auto& el = curve.elementAt(j);
-                if (j == 0 || el.isMoveTo())
-                    polyPath.moveTo(QPointF(el.x, el.y));
-                else
-                    polyPath.lineTo(QPointF(el.x, el.y));
-            }
-            curvesDrawn++;
-        }
-        prevPx = pixel;
-        prevNumeric = pt.numeric;
-    }
-    polyPath.closeSubpath();
-
-    // ── fill ──
-    painter->save();
-    QColor fill = m_fillColor.isValid() ? m_fillColor : color();
-    fill.setAlpha(m_fillColor.isValid() ? fill.alpha() : 96);
-    painter->setBrush(fill);
-    if (m_strokeVisible) {
-        QPen pen(color(), 1.5);
-        pen.setCosmetic(true);
-        painter->setPen(pen);
-    } else {
-        painter->setPen(Qt::NoPen);
-    }
-    polyPath.setFillRule(m_fillRule);
-    painter->drawPath(polyPath);
-
-    qCDebug(logSeriesVerbose) << "QPolygonSeries::draw:" << curvesDrawn << "curves,"
-                              << linesDrawn << "lines," << pts.size() << "vertices";
-    painter->restore();
+    : QXYSeries(name, parent) {
+    m_themeColor = QColor("#42A5F5");
 }
 
-// ===== 命中检测：像素在多边形内部 =====
+void QPolygonSeries::setFillColor(const QColor& c) {
+    if (m_fillColor == c) return;
+    m_fillColor = c;
+    emit fillColorChanged();
+}
+
+void QPolygonSeries::setStrokeVisible(bool v) {
+    if (m_strokeVisible == v) return;
+    m_strokeVisible = v;
+    emit strokeChanged();
+}
+
+// ===== 图元收集 =====
+// 每段连续有效顶点 → 一个 Polygon（填充；renderer 负责三角化）；
+// strokeVisible 时再补一条闭合 Path（额外首点收尾）。NaN/Inf 断段，各段独立成多边形。
+void QPolygonSeries::collectPrimitives(QChartScene& scene,
+                                       const QChartAxis* ax, const QChartAxis* ay,
+                                       const QChartAxis* az) const {
+    Q_UNUSED(az);   // 二维系列不用第三轴
+
+    QVector<QVector3D> run;
+    auto flush = [&]() {
+        if (run.size() < 3) { run.clear(); return; }   // 少于 3 点构不成多边形
+
+        // 填充色：未显式设色 → 系列色半透明
+        QColor fill = m_fillColor;
+        if (fill.alpha() == 0) {
+            fill = color();
+            fill.setAlpha(120);
+        }
+
+        // ① 填充：Polygon（隐式闭合）
+        QChartPrimitive poly;
+        poly.type = QChartPrimitive::Type::Polygon;
+        poly.numVerts = run;
+        poly.fillColor = fill;
+        poly.color = fill;              // 供不区分 fill/border 的后端兜底
+        scene.primitives.append(poly);
+
+        // ② 描边：额外一条闭合 Path
+        if (m_strokeVisible) {
+            QChartPrimitive stroke;
+            stroke.type = QChartPrimitive::Type::Path;
+            stroke.numVerts = run;
+            stroke.numVerts.append(run.first());   // 闭合
+            stroke.color = color();
+            stroke.penWidth = 1.0f;               // TODO(stroke-width)
+            scene.primitives.append(stroke);
+        }
+        run.clear();
+    };
+
+    for (const QDataPoint& pt : m_points) {
+        // Data(QVariant) → Numeric(qreal)：轴负责数值化；无轴时按 toDouble 直通
+        const qreal nx = ax ? ax->toNumeric(pt.x()) : pt.x().toDouble();
+        const qreal ny = ay ? ay->toNumeric(pt.y()) : pt.y().toDouble();
+        if (!std::isfinite(nx) || !std::isfinite(ny)) {   // 断段
+            flush();
+            continue;
+        }
+        run.append(QVector3D(static_cast<float>(nx), static_cast<float>(ny), 0.0f));
+    }
+    flush();
+}
+
+// ===== 命中检测：像素落在哪个多边形内（旧签名；拾取轮替换）=====
 int QPolygonSeries::hitTest(const QPointF& pixel,
                             std::function<QPointF(QVariant,QVariant)> toPixel,
                             const DrawContext* ctx) const {
     Q_UNUSED(ctx);
-    if (!toPixel || !m_visible || m_points.size() < 3) return -1;
+    if (!toPixel || !m_visible) return -1;
 
-    QPolygonF polygon;
-    for (const auto& pt : m_points) {
-        QPointF p = toPixel(pt.x(), pt.y());
-        if (std::isfinite(p.x()) && std::isfinite(p.y()))
-            polygon << p;
+    QPolygonF poly;
+    int runStart = 0;
+    for (int i = 0; i < m_points.size(); ++i) {
+        const QPointF p = toPixel(m_points[i].x(), m_points[i].y());
+        if (!std::isfinite(p.x()) || !std::isfinite(p.y())) {   // 断段：判定当前环
+            if (poly.size() >= 3 && poly.containsPoint(pixel, Qt::OddEvenFill))
+                return runStart;
+            poly.clear();
+            runStart = i + 1;
+            continue;
+        }
+        poly.append(p);
     }
-    if (polygon.size() < 3) return -1;
-
-    QPainterPath path;
-    path.addPolygon(polygon);
-    path.setFillRule(m_fillRule);
-    return path.contains(pixel) ? 0 : -1;
+    if (poly.size() >= 3 && poly.containsPoint(pixel, Qt::OddEvenFill))
+        return runStart;
+    return -1;
 }

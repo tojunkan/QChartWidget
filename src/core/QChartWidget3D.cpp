@@ -52,6 +52,8 @@ QChartWidget3D::QChartWidget3D(QWidget* parent)
     for (QChartAxis* a : { static_cast<QChartAxis*>(m_axisX3D), static_cast<QChartAxis*>(m_axisY3D),
                            static_cast<QChartAxis*>(m_axisZ3D) })
         wireAxisToLayerDirty(a, m_layer3D);
+    // 相机视野盒变化 → 反算三轴范围（信号版；不再由 onWheel/onMouseMove 手动调用）
+    connect(m_layer3D, &QChartLayer3D::viewChanged, this, &QChartWidget3D::updateAxes);
 }
 
 QChartWidget3D::~QChartWidget3D() = default;
@@ -91,23 +93,21 @@ QChartAxis* QChartWidget3D::axisZ3D() const { return m_layer3D ? m_layer3D->axis
 
 // ===== 域盒 =====
 
-void QChartWidget3D::setDomainBox(const QCube& box)
+void QChartWidget3D::setDataBounds3D(const QCube& box)
 {
-    m_domainBoxSet = true;   // 4b：数值落在轴上（layer3D->setDataBounds 写三轴范围）
     if (m_layer3D)
-        m_layer3D->setDataBounds(box);   // 4c：QCube 主签名
+        m_layer3D->setDataBounds(box);   // 4c：QCube 主签名（数值落三轴范围）
     fitWorld();
 }
 
-QCube QChartWidget3D::domainBox() const
+QCube QChartWidget3D::dataBounds3D() const
 {
-    // 4c：域盒访问器（QCube）——按需从 layer3D 的三轴组装，无长期持有
+    // 4c：数据域访问器（QCube）——按需从 layer3D 的三轴组装，无长期持有
     return (m_layer3D && m_layer3D->axes3D()) ? m_layer3D->axes3D()->dataBounds() : QCube();
 }
 
-void QChartWidget3D::clearDomainBox()
+void QChartWidget3D::clearDataBounds3D()
 {
-    m_domainBoxSet = false;
     if (m_layer3D)
         m_layer3D->setDataBounds(QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10)));   // 4c：QCube 默认盒
     fitWorld();
@@ -117,14 +117,10 @@ void QChartWidget3D::clearDomainBox()
 
 void QChartWidget3D::setProjection3D(const QChartProjection3D* proj)
 {
+    m_projection3D = proj;                 // widget 持有（供 computeDataBounds/computeViewCube 使用）
     if (m_layer3D)
-        m_layer3D->setProjection3D(proj);   // layer 内部（采样提示）；scene3D.projection 由 pushContext 注入
+        m_layer3D->setProjection3D(proj);  // layer 同步一份（采样提示）；scene3D.projection 仍由 pushContext 注入
     fitWorld();
-}
-
-const QChartProjection3D* QChartWidget3D::projection3D() const
-{
-    return m_layer3D ? m_layer3D->projection3D() : nullptr;
 }
 
 // ===== 网格模式（批次2 B：转发 layer3D）=====
@@ -154,25 +150,28 @@ void QChartWidget3D::fitWorld()
     if (!cam->autoFit())
         return;
 
-    // 4d②：域盒（4b：由三根轴范围组装；4c：全程用 QCube 访问器）→ 外扩 6% → 数据锚点 viewCube
-    const QCube box = domainBox();
-    const QCube fitBox = box.isValid()
-        ? QCube(box.min, box.max) : QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10));
-    const QVector3D pad = fitBox.size() * 0.06f;   // 外扩 6%（与迁移前 (max-min)*0.06 逐位一致）
-    cam->setViewCube(QCube(fitBox.min - pad, fitBox.max + pad));
+    // 4d②：数据域（三轴组装）→ World 盒（非恒等投影须采样；Cartesian3D 下采样结果等于原盒）
+    //       → 外扩 6% → 数据锚点 viewCube
+    const QCube box = dataBounds3D();
+    const QCube dataBox = box.isValid() ? box : QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10));
+    QCube world = dataBox;
+    if (m_projection3D)
+        world = m_projection3D->computeViewCube(dataBox.min, dataBox.max);
+    if (!world.isValid())
+        world = dataBox;
+    const QVector3D pad = world.size() * 0.06f;   // 外扩 6%（对 World 盒）
 
-    // 4d②：镜头解算并入相机 fitCameraConfig（原手写 halfDiag/sin(fov/2) + setDistance + 近远面处理
-    // 全部由相机承担）：
-    //  · aspect ≥ 1 或 plotArea 退化（按 aspect=1）：d == r / max(0.05, sin(fov/2))，与 4c 内联式逐位一致；
-    //  · aspect < 1（竖高视口）：自 4d 起改按**横向**临界半视角解算
-    //    （d = r / max(0.05, sin(atan(tan(fov/2)·aspect)))）——4c 内联式忽略 aspect，此处为 4d 的
-    //    有意改进（t46 裁定①，已作为“表现可观测变更”登记；竖高视口下相机自动后退以完整包容数据）。
-    // 近远面由相机按内切值收尾。
+    // 本次相机变化由数值侧驱动 → 抑制反算回轴（否则外扩会写进轴范围）
+    m_cameraTriggered = true;
+    m_layer3D->setViewCube(QCube(world.min - pad, world.max + pad));
+
+    // 4d②：镜头解算并入相机 fitCameraConfig（近远面由相机按内切值收尾）
     cam->fitCameraConfig(plotArea(), FitConstraint::FixedFov);
 
     // 姿态复位（widget 策略，非相机 fit 职责）
     if (qAbs(cam->yaw() - 45.0) > 0.5) cam->setYaw(45.0);
     if (qAbs(cam->pitch() - 30.0) > 0.5) cam->setPitch(30.0);
+    m_cameraTriggered = false;
 }
 
 // ===== 4e：像素侧驱动（plotArea 变化 → 仅重解算镜头）=====
@@ -228,7 +227,7 @@ void QChartWidget3D::onMouseMove(QMouseEvent* e)
     const qreal ky = size.y() / pa.height();
     if (qFuzzyIsNull(kx) && qFuzzyIsNull(ky)) return;
     cam->panViewCube(-d.x() * kx, d.y() * ky);   // 拖动内容：中心反向平移（屏向下 → 世界 +Y）
-    scheduleRepaint();
+    scheduleRepaint();   // 相机 viewChanged 已触发层转发 → widget updateAxes 反算三轴
 }
 
 void QChartWidget3D::onMouseRelease(QMouseEvent* e)
@@ -244,6 +243,7 @@ void QChartWidget3D::onWheel(QWheelEvent* e)
     const qreal f = wheelDollyFactor(e->angleDelta().y());
     if (qFuzzyCompare(f, 1.0)) return;
     const QCube before = cam->viewCube();
+
     cam->dolly(f);                                            // 改视野盒尺寸（既有入口）
     if (cam->viewCube().min == before.min && cam->viewCube().max == before.max) return;   // 无变化 → 无联动
     // autoFit 联动：开 → 既有 fit 路径重算 distance/near/far（不改锚点、不复位姿态）；关 → 保留手调参数
@@ -251,7 +251,7 @@ void QChartWidget3D::onWheel(QWheelEvent* e)
         ++m_interactionFitCount;                              // 诊断计数（每次 dolly 后一次解算）
         cam->fitCameraConfig(plotArea(), FitConstraint::FixedFov);
     }
-    scheduleRepaint();
+    scheduleRepaint();   // 相机 viewChanged（dolly/fit）已触发层转发 → widget updateAxes 反算三轴
 }
 
 QPointF QChartWidget3D::worldToPixel(const QVector3D& w) const
@@ -273,6 +273,22 @@ void QChartWidget3D::setViewCube(const QCube& box)
         cam->setViewCube(box);
         cam->resetNearFar();
     }
+}
+
+// 相机视野盒（World 空间盒）→ 三轴范围（Numeric 空间）反算——镜像 2D QChartWidget::updateAxes。
+// 由 layer3D 的 viewChanged 触发（dolly/pan/fit 后）；fitWorld 期间由 m_cameraTriggered 抑制。
+void QChartWidget3D::updateAxes(const QCube& viewCube)
+{
+    if (m_cameraTriggered) return;
+    if (!m_projection3D || !viewCube.isValid()) return;
+    const QCube dataBox = m_projection3D->computeDataBounds(viewCube);   // 恒等→原盒；否则 5³ 采样
+    if (!dataBox.isValid()) return;
+    if (m_layer3D) {
+        if (auto* a = m_layer3D->axisX()) a->setRange(dataBox.min.x(), dataBox.max.x());
+        if (auto* a = m_layer3D->axisY()) a->setRange(dataBox.min.y(), dataBox.max.y());
+        if (auto* a = m_layer3D->axisZ()) a->setRange(dataBox.min.z(), dataBox.max.z());
+    }
+    scheduleRepaint();
 }
 
 // ===== 3D 渲染管线覆写（批次 B2）=====
@@ -349,10 +365,10 @@ void QChartWidget3D::renderLayersGL(QPaintDevice* device)
     // 4g：脏才重收集（同 CPU 路径）——缓存保留已变换/已标 depth 的状态，无变化直接复用
     if (m_layer3D->ensureSceneCollected()) {
         m_sceneCache = m_layer3D->scene3D();
-        // B1/B2 线框冒烟语义：depth>1 → decor 批次（depthTest 关=全边可见，与 CPU 全绘制一致）；
-        // 3D series 深度排序语义后续批次接管。
-        for (QChartPrimitive& p : m_sceneCache.primitives)
-            p.depth = 2.0f;
+        // 深度交给 GL 深度缓冲（深度测试开）：不再像线框冒烟阶段那样把所有图元 depth 置 2.0
+        // ——那会让 GL 批次把一切判成 decor（isDecor = depth > 1）→ depthTest=false，
+        // 遮挡退化为 pass 顺序（Triangle→Line→Point），散点会永远压在网格上面。
+        // depth 字段保留给 CPU 3D 的后排排序使用；GL 路径不依赖它。
         m_glRenderer->invalidateView();
     }
     m_glRenderer->render(m_sceneCache, &labelDev);

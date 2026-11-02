@@ -44,9 +44,13 @@ public:
     qreal zoom() const { return m_viewRect.width(); }
     void setZoom(qreal z);
 
-    // ---- 交互操作 ----
+    // ---- 交互操作（数据空间）----
     void panViewCartesian(qreal dx, qreal dy);
     void zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal factorY);
+
+    // ---- 像素级交互（像素 → 数据的换算在相机内完成，widget 只传像素）----
+    void panByPixels(const QPointF& pixelDelta, const QRectF& plotArea);
+    void zoomAtPixel(const QPointF& pixel, qreal factor, const QRectF& plotArea);
 
     // ---- fit 相关 ----
     bool fitToPlotArea(const QRectF& plotArea) override;

@@ -49,6 +49,23 @@ void QChartCamera::zoomViewCartesian(qreal cx, qreal cy, qreal factorX, qreal fa
     emit viewChanged();
 }
 
+// ===== 像素级交互（像素 → 数据的换算在相机内完成） =====
+void QChartCamera::panByPixels(const QPointF& pixelDelta, const QRectF& plotArea) {
+    if (plotArea.width() <= 0.0 || plotArea.height() <= 0.0) return;
+    if (m_viewRect.width() <= 0.0 || m_viewRect.height() <= 0.0) return;
+    // 像素位移 → 数据位移：比例 = viewRect 尺寸 / plotArea 尺寸；X 取反（抓住内容拖动），Y 取正
+    const qreal dx = -pixelDelta.x() * m_viewRect.width()  / plotArea.width();
+    const qreal dy = +pixelDelta.y() * m_viewRect.height() / plotArea.height();
+    panViewCartesian(dx, dy);
+}
+
+void QChartCamera::zoomAtPixel(const QPointF& pixel, qreal factor, const QRectF& plotArea) {
+    if (factor <= 0.0 || plotArea.width() <= 0.0 || plotArea.height() <= 0.0) return;
+    const Ray ray = unproject(pixel, plotArea);   // 光标处数据坐标（缩放中心）
+    if (!qIsFinite(ray.origin.x()) || !qIsFinite(ray.origin.y())) return;
+    zoomViewCartesian(ray.origin.x(), ray.origin.y(), factor, factor);
+}
+
 // ===== fit 几何（内部使用 m_fitStrategy） =====
 bool QChartCamera::fitToPlotArea(const QRectF& plotArea) {
     if (m_fitMode == ViewRectFitMode::Stretch) return false;

@@ -1,6 +1,7 @@
 // QChartLayer.cpp —— 图层基类实现
 #include "QChartLayer.h"
 #include "QChartCamera.h"
+#include "QChartSeries.h"
 #include <QDebug>
 #include <QLoggingCategory>
 
@@ -11,20 +12,39 @@ QChartLayer::QChartLayer(QObject* parent) : QChartAbstractLayer(parent) {
     // ★ 批次 A：相机归 layer——scene.camera 恒指向本层相机值成员
     //（相机 viewRect 由 widget/viewRect 驱动链或调用方显式设置后再渲染）
     m_scene.camera = &m_camera;
+    // 相机变化 → 收集置脏（永远）；并转发给 widget（setViewRect 期间由 m_rangeTriggered 挡住，防回环）
+    connect(&m_camera, &QChartCamera::viewChanged, this, &QChartAbstractLayer::invalidateView);
+    connect(&m_camera, &QChartCamera::viewChanged, this, [this] {
+        if (!m_rangeTriggered) emit viewChanged(m_camera.viewRect());
+    });
     // S0：QChartWidget/QChartAbstractWidget 尚未纳入本阶段子集，原「父对象为
     // QChartAbstractWidget 时自动注入 plotArea/projection」分支随 Widget 阶段一并恢复；
     // series 信号连接待 Series 阶段随 QChartSeries.cpp 恢复。
 }
 QChartLayer::~QChartLayer() = default;
 
+// ===== 相机窗口（widget 算好 viewRect 后直接给；本类不做 projection 换算）=====
+void QChartLayer::setViewRect(const QRectF& viewRect)
+{
+    m_rangeTriggered = true;
+    m_camera.setViewRect(viewRect);
+    m_rangeTriggered = false;
+}
+
+void QChartLayer::fitToPlotArea(const QRectF& plotArea)
+{
+    m_camera.fitToPlotArea(plotArea);   // 真·相机变化 → 转发 viewChanged
+}
+
 // ===== 轴绑定 =====
 // 4b：setNumericBounds(QRectF) 已删除——轴是范围的唯一持有者（范围写入由 QChartWidget
-// 在 recomputeDataBounds/onBeforePaint 中直接对轴 setRange 完成）；本类需要范围时临时组装。
+// 直接对轴 setRange 完成）；本类需要范围时临时组装。
 QRectF QChartLayer::numericBoundsFromAxes() const
 {
-    QRectF b;   // 默认 (0,0,0,0)：未绑定/未设置的维度保持 0（与迁移前 m_dataBounds 初值一致）
+    // 正常 QRectF（Y-up）：top = yMin（数值小端）、height > 0；翻转只由相机负责。
+    QRectF b;
     if (m_axisX) { b.setLeft(m_axisX->min()); b.setRight(m_axisX->max()); }
-    if (m_axisY) { b.setBottom(m_axisY->min()); b.setTop(m_axisY->max()); }
+    if (m_axisY) { b.setTop(m_axisY->min()); b.setBottom(m_axisY->max()); }
     return b;
 }
 
@@ -134,6 +154,30 @@ void QChartLayer::borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,
     }
 }
 
+// ===== Series 管理（非持有，用户管理生命周期）=====
+// 数据/可见性/颜色变化 → 重收集（图元在收集时固化，改样式也必须重收集）
+void QChartLayer::addSeries(QChartSeries* s) {
+    if (!s || m_series.contains(s)) return;
+    m_series.append(s);
+    connect(s, &QChartSeries::dataChanged, this, &QChartAbstractLayer::invalidateData);
+    connect(s, &QChartSeries::visibleChanged, this, &QChartAbstractLayer::invalidateData);
+    connect(s, &QChartSeries::colorChanged, this, &QChartAbstractLayer::invalidateData);
+    invalidateData();
+}
+
+void QChartLayer::removeSeries(QChartSeries* s) {
+    if (!s || !m_series.removeOne(s)) return;
+    disconnect(s, nullptr, this, nullptr);
+    invalidateData();
+}
+
+void QChartLayer::clearSeries() {
+    for (QChartSeries* s : m_series)
+        disconnect(s, nullptr, this, nullptr);
+    m_series.clear();
+    invalidateData();
+}
+
 void QChartLayer::collectPrimitives() {
     // 批次 A：每次收集前复位场景负载（widget 每帧重收集；sourceId 从 0 起重新分配）
     m_scene.primitives.clear();
@@ -141,8 +185,21 @@ void QChartLayer::collectPrimitives() {
     m_scene.maxSourceId = 0;
     m_scene.PrimitiveIdPrefixSum.clear();
     m_scene.PrimitiveIdPrefixSum.append(0);
-    // ---- 绘制网格（S0：Series 阶段前只收集网格；drawAllSeries 届时恢复）----
+    // ---- 绘制网格（先网格，后系列：系列覆盖在网格之上）----
     drawGrid(m_scene);
+
+    // ---- 系列：每系列一个 sourceId 组；图元按数据顺序追加 ----
+    // 前缀和 = 组号 → 图元区间（逆算拾取用）；"一数据一图元 + 按序追加"由系列契约保证。
+    for (QChartSeries* s : m_series) {
+        if (!s || !s->isVisible()) continue;
+        m_scene.maxSourceId++;
+        const int groupId = m_scene.maxSourceId;
+        const int primBefore = m_scene.primitives.size();
+        s->collectPrimitives(m_scene, m_axisX, m_axisY);
+        for (int i = primBefore; i < m_scene.primitives.size(); ++i)
+            m_scene.primitives[i].sourceId = groupId;
+        m_scene.PrimitiveIdPrefixSum.push_back(m_scene.primitives.size());
+    }
 }
 
 void QChartLayer::drawGrid(QChartScene& scene) {
@@ -192,26 +249,29 @@ void QChartLayer::drawGrid(QChartScene& scene) {
         lbl.sourceId = groupId;                                // 同组组尾可见图元定位
     };
 
-    // 4b：范围按需从轴临时组装（数值与迁移前 m_dataBounds 逐位一致），用完即弃
-    const QRectF bounds = numericBoundsFromAxes();
+    // 范围直接用轴自身（与 drawAtEdge 同源；不再经 numericBoundsFromAxes 的矩形取向中转）
+    const qreal xMin = m_axisX->min();
+    const qreal xMax = m_axisX->max();
+    const qreal yMin = m_axisY->min();
+    const qreal yMax = m_axisY->max();
 
     // ── 水平网格脊：dim0 扫动、固定 y = y 轴刻度（文字取 y 轴对该刻度的文字）──
-    const QVector<qreal> ticksY = m_axisY->tickValues(bounds.bottom(), bounds.top());
+    const QVector<qreal> ticksY = m_axisY->tickValues(yMin, yMax);
     const QStringList labelsY = m_axisY->tickLabels(ticksY);
 
     for (int i = 0; i < ticksY.size(); ++i) {
         const qreal tickVal = ticksY[i];
-        addSpine(m_axisX, 0, bounds.left(), bounds.right(),
+        addSpine(m_axisX, 0, xMin, xMax,
                  tickVal, tickVal, labelsY.value(i), scene);
     }
 
     // ── 垂直网格脊：dim1 扫动、固定 x = x 轴刻度（文字取 x 轴对该刻度的文字）──
-    const QVector<qreal> ticksX = m_axisX->tickValues(bounds.left(), bounds.right());
+    const QVector<qreal> ticksX = m_axisX->tickValues(xMin, xMax);
     const QStringList labelsX = m_axisX->tickLabels(ticksX);
 
     for (int i = 0; i < ticksX.size(); ++i) {
         const qreal tickVal = ticksX[i];
-        addSpine(m_axisY, 1, bounds.bottom(), bounds.top(),
+        addSpine(m_axisY, 1, yMin, yMax,
                  tickVal, tickVal, labelsX.value(i), scene);
     }
 }

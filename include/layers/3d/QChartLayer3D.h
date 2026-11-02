@@ -95,6 +95,8 @@ public:
     // ===== 相机/场景访问（批次 B1：3D 相机值成员 + scene3D 上下文，模式同 2D layer）=====
     QChartCamera3D* camera3D() { return &m_camera3D; }
     const QChartCamera3D* camera3D() const { return &m_camera3D; }
+    /// 由 widget 设置相机视野盒（m_rangeTriggered 包住 setViewCube，避免把本次 viewChanged 转发回去）
+    void setViewCube(const QCube& viewCube);
     // 4a：场景快照 = 继承的 m_scene（原 m_scene3D 已并入）；以下为三维命名访问口，语义不变
     void setScene3DProjection(const QChartAbstractProjection* p) { m_scene.projection = p; }
     void setScene3DPlotArea(const QRectF& plotArea) { m_scene.plotArea = plotArea; }
@@ -105,6 +107,8 @@ public:
 signals:
     /// 网格样式变化（4a：自持；语义同原二维层信号）
     void gridChanged();
+    /// 相机视野盒变化（仅当不是被 setViewCube 触发时发出；widget 据此反算三轴范围）
+    void viewChanged(const QCube& viewCube);
 
 protected:
     // 系列脏标记挂钩
@@ -115,6 +119,7 @@ protected:
     QList<QChartSeries3D*> m_series3D;
     const QChartProjection3D* m_projection3D = nullptr;
     QChartCamera3D m_camera3D;
+    bool m_rangeTriggered = false;   // setViewCube 期间为 true → 不转发 viewChanged（防回环）
     // m_scene 由抽象层提供（4a：原 m_scene3D 并入）
 
     std::unique_ptr<QChartAxes3D> m_axes3D;

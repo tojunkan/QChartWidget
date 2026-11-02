@@ -35,6 +35,11 @@ public:
     // ===== 相机（批次 A：相机归 layer——值成员自持，scene.camera 指向它）=====
     QChartCamera* camera() { return &m_camera; }
     const QChartCamera* camera() const { return &m_camera; }
+    /// 设相机窗口（widget 由 dataBounds → computeViewRect 算好后直接给；本类不做 projection 换算）。
+    /// 内部置 m_rangeTriggered，使本次 viewChanged 不转发回 widget（防回环）。
+    void setViewRect(const QRectF& viewRect);
+    /// 按 plotArea 宽比适配相机窗口（resize 用；真·相机变化 → 转发 viewChanged）。
+    void fitToPlotArea(const QRectF& plotArea);
     // 场景快照/上下文注入（setSceneProjection/setScenePlotArea/setSceneBackground/scene()）与
     // m_scene/m_dataDirty/invalidateData() 已上移到 QChartAbstractLayer（4a）。
     // 4b：删除 setNumericBounds(QRectF) —— 轴是范围的唯一持有者；需要范围时由本类按需组装
@@ -47,11 +52,11 @@ public:
     void setAxisY(QChartAxis* a);
     virtual bool validateAxes() const;
 
-    // ===== Series 管理（待 Series 阶段随 QChartSeries.cpp 一起恢复）=====
-    // void addSeries(QChartSeries* s);
-    // void removeSeries(QChartSeries* s);
-    // QList<QChartSeries*> seriesList() const { return m_series; }
-    // void clearSeries();
+    // ===== Series 管理（非持有，与 axes/layers 同约定）=====
+    void addSeries(QChartSeries* s);
+    void removeSeries(QChartSeries* s);
+    QList<QChartSeries*> seriesList() const { return m_series; }
+    void clearSeries();
 
     // ===== 绘制（由 QChartWidget 调用）=====
 
@@ -85,6 +90,8 @@ public:
 signals:
     // seriesAdded(QChartSeries*)/seriesRemoved(QChartSeries*) 待 Series 阶段恢复
     void gridChanged();
+    /// 相机窗口变化（仅当不是被 setViewRect 触发时发出；widget 据此反算轴范围）。
+    void viewChanged(const QRectF& viewRect);
 
 public:
     // ===== Grid 样式 =====
@@ -120,8 +127,9 @@ protected:
 
     // 4b：m_dataBounds 已删除（范围由 axisX/axisY 持有，需要时 numericBoundsFromAxes() 临时组装）
     QChartCamera m_camera;  // ★ 相机值成员（批次 A：相机归 layer；m_scene.camera=&m_camera 于构造注入）
+    bool m_rangeTriggered = false;  // setViewRect 期间为 true → 不转发 viewChanged（防回环）
     // m_scene / m_dataDirty 已上移 QChartAbstractLayer（4a）。
-    // QList<QChartSeries*> m_series;   // 待 Series 阶段恢复
+    QList<QChartSeries*> m_series;   // 非持有（用户管理生命周期）；数据变化 → invalidateData
     bool m_gridVisible = true;
     std::optional<QColor> m_gridColorOverride;           // 用户显式设过（setGridColor）
     QColor m_themeGridColor = QColor(220, 220, 220);     // 主题注入默认（setThemeGridColor）

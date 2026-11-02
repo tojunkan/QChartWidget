@@ -53,12 +53,9 @@ public:
     /// 测试/诊断用途：applyCount()/skipCount() 给出“几何未变不重设”的可计数证据。
     QChartPlotAreaLayout* plotAreaLayout() const { return m_plotAreaLayout; }
 
-    // ===== 图层管理（容器）=====
-    // 4a：层列表类型 = QChartAbstractLayer*（二维层 layers/2d/QChartLayer、三维层 layers/3d/QChartLayer3D 共同基类）
-    void addLayer(QChartAbstractLayer* layer);
-    void removeLayer(QChartAbstractLayer* layer);
-    void clearLayers();
-    QList<QChartAbstractLayer*> layers() const { return m_layers; }
+    // ===== 图层管理（单层：2D/3D 均只持有一个图层）=====
+    void addLayer(QChartAbstractLayer* layer);   // 设置唯一图层（重复调用以最后一次为准）
+    QChartAbstractLayer* layer() const { return m_layer; }
 
     // ===== 布局 / plotArea =====
     /// 触发 layoutAxes()（重算 plotArea 并广播 plotAreaChanged）
@@ -126,7 +123,7 @@ protected:
     virtual void pushContextToLayers();
 
     // ===== 成员 =====
-    QList<QChartAbstractLayer*> m_layers;   // 非持有（调用方保证生命周期；4a 起为抽象层类型）
+    QChartAbstractLayer* m_layer = nullptr;   // 唯一图层（非持有，调用方保证生命周期）
     QRectF m_plotArea;
     bool m_layoutDirty = true;
     bool m_interactionEnabled = true;   // 4f：最小交互开关（默认开；关闭后鼠标事件零效果）

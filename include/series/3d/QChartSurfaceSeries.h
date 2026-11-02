@@ -23,12 +23,12 @@ public:
     void setParametricGrid(int rows, int cols,
                            qreal u0, qreal u1, qreal v0, qreal v1);
 
-    // ===== World 层缓存：基类 QChartSeries3D::worldCache（t51 上移，VBO 源）=====
+    // ===== 图元收集：一个 TriangleMesh（Numeric 顶点 + 三角索引）=====
+    void collectPrimitives(QChartScene& scene,
+                           const QChartAxis* ax, const QChartAxis* ay,
+                           const QChartAxis* az = nullptr) const override;
 
-    void collectPrimitives(const ProjectFn3D& projectFn,
-                           QVector<QChartPrimitive>& out) const override;
-    void draw(QPainter* painter, const ProjectFn3D& projectFn,
-              const DrawContext3D* ctx = nullptr) const override;
+    // ===== World 层缓存：基类 QChartSeries3D::worldCache（t51 上移，VBO 源）=====
 
 signals:
     void gridChanged();

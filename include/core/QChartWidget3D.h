@@ -39,19 +39,17 @@ public:
     QChartAxis* axisY3D() const;
     QChartAxis* axisZ3D() const;
 
-    // ===== 域盒 API（转发 layer3D::setDataBounds；4c：统一 QCube 语义）=====
-    void setDomainBox(const QCube& box);
-    void setDomainBox(const QVector3D& dataMin, const QVector3D& dataMax)   // 便捷重载（转发 QCube 主签名）
-    { setDomainBox(QCube(dataMin, dataMax)); }
-    void clearDomainBox();               // 回退默认盒 (0,0,0)-(10,10,10)
-    /// 4b：域盒数值落在三根轴上（本类不再持有 min/max 值），此处仅记录"是否用户显式设过"
-    bool hasDomainBox() const { return m_domainBoxSet; }
-    /// 4c：域盒访问器（QCube）——按需从 layer3D 的三轴组装（无层时返回无效 QCube）
-    QCube domainBox() const;
+    // ===== 数据域 API（转发 layer3D::setDataBounds；4c：统一 QCube 语义）=====
+    void setDataBounds3D(const QCube& box);
+    void setDataBounds3D(const QVector3D& dataMin, const QVector3D& dataMax)   // 便捷重载（转发 QCube 主签名）
+    { setDataBounds3D(QCube(dataMin, dataMax)); }
+    void clearDataBounds3D();            // 回退默认盒 (0,0,0)-(10,10,10)
+    /// 4c：数据域访问器（QCube）——按需从 layer3D 的三轴组装（无层时返回无效 QCube）
+    QCube dataBounds3D() const;
 
-    // ===== 投影便捷（转发 layer3D；相机 fit 提示见 fitWorld）=====
+    // ===== 投影（widget 持有指针；layer3D 同步一份用于采样提示）=====
     void setProjection3D(const QChartProjection3D* proj);
-    const QChartProjection3D* projection3D() const;
+    const QChartProjection3D* projection3D() const { return m_projection3D; }
 
     // ===== 网格模式（批次2 B：Box / FaceLine（默认）/ Lattice，转发 layer3D）=====
     void setGridMode3D(QChartLayer3D::GridMode m);
@@ -76,8 +74,8 @@ public:
     //  数值侧（4d 已接线）：域盒/投影变化 → fitWorld（autoFit 门 + FixedFov 解算 + 锚点跟随 + 姿态复位）。
     //  像素侧（4e）：plotArea 变化 → 仅按 fitCameraConfig 重解算镜头（distance/fov/near/far；
     //    含竖高视口按窄边临界半视角的 4d 语义）——**不改数据锚点、不复位姿态**，autoFit=false 时零触碰。
-    //  相机侧（record）：三维的“viewCube → 三轴范围”反算**本阶段不做**（留后，与系列包围盒同批）——
-    //    三维轴范围当前只由域盒（数值侧）持有，相机侧（orbit/dolly/pan 手势）归 4f。
+    //  相机侧（8b 已实现）：viewCube → projection3D->computeDataBounds() → 写三轴范围
+    //    （backCalcAxesFromCameraWindow3D），在滚轮 dolly / 平移 pan 后调用。
     int plotAreaFitCount() const { return m_plotAreaFitCount; }             // 诊断：像素侧驱动次数（解算实跑）
     int plotAreaFitChangeCount() const { return m_plotAreaFitChangeCount; } // 诊断：其中真正改变镜头的次数
     void resetDriveCounters() { m_plotAreaFitCount = 0; m_plotAreaFitChangeCount = 0; m_interactionFitCount = 0; }
@@ -89,7 +87,7 @@ public:
     /// 滚轮 = dolly(factor)（改视野盒尺寸），并按 **autoFit 语义联动**：
     ///   autoFit 开 → 随后走既有 fit 路径（fitCameraConfig(plotArea, FixedFov)）重算 distance/近远面；
     ///   autoFit 关 → 保留用户手调参数（distance/fov/near/far 不变）。
-    /// 说明：三维的 viewCube→三轴反算仍留后（见上），故交互后三轴范围不变（相机侧留后项）。
+    /// 说明：滚轮 dolly / 平移 pan 后经 backCalcAxesFromCameraWindow3D 反算三轴范围（8b）。
     // 手势→相机约定（4g 方向修正）：**拖动的是“内容”**——向右拖动 ⇒ 画面向右旋转 ⇒
     //   相机必须向左绕行 ⇒ yaw 减小（QChartCamera3D 中 yaw 增大 = 相机往 +X 即右移 = 画面左转）。
     //   仅在本手势映射层取反，不改 QChartCamera3D::orbit() 的既有语义。
@@ -118,17 +116,21 @@ protected:
     void drawExternalContent(QPainter& painter) override;  // 3D 无边框轴/标题外部内容
 
 private:
+    /// 接 layer3D 的 viewChanged：computeDataBounds(viewCube) → 写三轴范围（m_cameraTriggered 防回环）
+    void updateAxes(const QCube& viewCube);
+
     QChartLayer3D* m_layer3D = nullptr;               // 托管默认 layer3D（QObject 子，非持有于 m_layers）
+    const QChartProjection3D* m_projection3D = nullptr;  // widget 持有（layer3D 同步一份用于采样提示）
     QValueAxis* m_axisX3D = nullptr;                  // 默认轴（可经 setAxisX3D 替换；owned by this）
     QValueAxis* m_axisY3D = nullptr;
     QValueAxis* m_axisZ3D = nullptr;
-    bool m_domainBoxSet = false;        // 4b：域盒数值由三根轴持有，本类仅记录是否用户显式设过
     int  m_plotAreaFitCount = 0;        // 4e 诊断：plotArea 变化触发的镜头重解算次数（解算实跑）
     int  m_plotAreaFitChangeCount = 0;  // 4e 诊断：其中真正改变镜头参数（distance/fov/near/far）的次数
     // 4f：交互状态
     enum class Drag3D { None, Orbit, Pan };
     Drag3D m_drag3D = Drag3D::None;
     QPointF m_lastPixel;
+    bool m_cameraTriggered = false;     // fitWorld 期间为 true → updateAxes 不回写轴（防外扩泄漏/回环）
     int  m_interactionFitCount = 0;     // 4f 诊断：滚轮 dolly + autoFit 触发的 fit 次数
 
     // 4g：渲染场景缓存（renderer 就地变换/裁剪，故缓存保留“已变换”状态）——

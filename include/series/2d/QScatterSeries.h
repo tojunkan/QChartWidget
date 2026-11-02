@@ -1,6 +1,6 @@
 // QScatterSeries.h —— 散点系列
-// 每个数据点画一个 marker（圆形/方形/三角等）。
-// 只存 Data，绘制用注入的 toPixel。不知道 Axis/Projection 类型。
+// 每个数据点收集为一个 Point 图元（Numeric 空间），绘制由 renderer 统一完成。
+// 只存 Data，数值化用调用时传入的轴（collectPrimitives 的 ax/ay），不知道 Axis/Projection 类型。
 #pragma once
 #include "QXYSeries.h"
 #include <QPen>
@@ -16,10 +16,10 @@ public:
 
     explicit QScatterSeries(const QString& name = {}, QObject* parent = nullptr);
 
-    // ===== 绘制 =====
-    void draw(QPainter* painter,
-              std::function<QPointF(QVariant,QVariant)> toPixel,
-              const DrawContext* ctx = nullptr) const override;
+    // ===== 图元收集（每点一个 Point，Numeric 空间；az 不用于二维）=====
+    void collectPrimitives(QChartScene& scene,
+                           const QChartAxis* ax, const QChartAxis* ay,
+                           const QChartAxis* az = nullptr) const override;
 
     // ===== 命中检测：像素到最近数据点的距离 < 阈值 =====
     int hitTest(const QPointF& pixel,
@@ -52,8 +52,6 @@ signals:
     void fillColorChanged();
 
 private:
-    void drawMarker(QPainter* p, const QPointF& pos) const;
-
     MarkerShape m_markerShape = MarkerShape::Circle;
     int m_markerSize = 8;
     QPen m_pen = Qt::NoPen;

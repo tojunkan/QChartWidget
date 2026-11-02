@@ -36,7 +36,7 @@ void TestWidget3DGl::glWidget3DRenders()
     QChartWidget3D w;
     QCartesianProjection3D proj;
     w.setProjection3D(&proj);
-    w.setDomainBox(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
+    w.setDataBounds3D(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
     w.resize(420, 360);
 
     w.setRenderBackend(QChartAbstractWidget::RenderBackend::OpenGL);

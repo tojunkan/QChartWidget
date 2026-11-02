@@ -1,8 +1,10 @@
-// QChartLineSeries3D.h —— 3D 折线系列（用户点名，不用 Curve）
-// collectPrimitives：相邻有效点成 LineSegment；任一端投影 screen 非有限 → 断段（延续 createPath 断路径语义）；
-// 深度 = 两端点 depth 均值（非线性投影下不得投影 Data 中点，队长裁决 a）；dataIndex = 线段起点索引（裁决 c）。
-// cullingEnabled 默认 true，沿用 2D QLineSeries 语义（屏外线段跳过）——本层无 plotArea，
-// 属性存留由 Renderer 3D 路径（t11）按屏矩形执行剔除；collect 阶段输出全部有效段（QPainter 会裁剪）。
+// QChartLineSeries3D.h —— 3D 折线系列
+// 与 2D 同构：数据点按顺序用 **Numeric 空间的直线段**连接；任一端 NaN/Inf → 断段
+// （y=1/x 这类多分支仍是同一系列）。投影/相机由 renderer 统一完成。
+//
+// TODO(line-style)：lineStyle / smooth 本轮只保留字段，未参与收集。
+// TODO(nonlinear)：Numeric 直线在 Cartesian 空间的插值由 renderer 负责（当前端点直连）。
+// TODO(adaptive)：自适应细分 —— GL 侧暂不支持，搁置。
 #pragma once
 #include "QChartSeries3D.h"
 
@@ -15,13 +17,13 @@ public:
 
     qreal lineWidth() const { return m_lineWidth; }     // 默认 2.0
     void setLineWidth(qreal w);
-    bool isCullingEnabled() const { return m_cullingEnabled; }  // 默认 true
+    bool isCullingEnabled() const { return m_cullingEnabled; }  // TODO：留后门，暂未参与收集
     void setCullingEnabled(bool v);
 
-    void collectPrimitives(const ProjectFn3D& projectFn,
-                           QVector<QChartPrimitive>& out) const override;
-    void draw(QPainter* painter, const ProjectFn3D& projectFn,
-              const DrawContext3D* ctx = nullptr) const override;
+    // ===== 图元收集：相邻有效点 → 一条 Line（Numeric 直线段）；NaN/Inf 断段 =====
+    void collectPrimitives(QChartScene& scene,
+                           const QChartAxis* ax, const QChartAxis* ay,
+                           const QChartAxis* az = nullptr) const override;
 
 signals:
     void lineWidthChanged();

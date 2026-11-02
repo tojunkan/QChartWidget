@@ -1,5 +1,8 @@
 // QChartScatterSeries3D.cpp —— 3D 散点系列实现
 #include "QChartScatterSeries3D.h"
+#include "QChartScene.h"
+#include "QChartPrimitive.h"
+#include "QChartAxis.h"
 #include <cmath>
 
 QChartScatterSeries3D::QChartScatterSeries3D(const QString& name, QObject* parent)
@@ -11,41 +14,25 @@ void QChartScatterSeries3D::setMarkerSize(qreal s) {
     emit markerSizeChanged();
 }
 
-void QChartScatterSeries3D::collectPrimitives(const ProjectFn3D& projectFn,
-                                              QVector<QChartPrimitive>& out) const {
-    if (!projectFn) return;
-    // count()/at()：双存储统一访问（numeric-only → float3 单点物化；混合 → QDataPoint3D 权威）
+// ===== 图元收集：每点一个 Point 图元（Numeric 三元组），非法点跳过 =====
+// count()/at()：双存储统一访问（numeric-only → float3 单点物化；混合 → QDataPoint3D 权威）
+void QChartScatterSeries3D::collectPrimitives(QChartScene& scene,
+                                              const QChartAxis* ax, const QChartAxis* ay,
+                                              const QChartAxis* az) const {
     const int n = count();
     for (int i = 0; i < n; ++i) {
-        const QChartProjectedPoint p = projectFn(at(i));           // 全链闭包：Data→{screen,depth}
-        if (!std::isfinite(p.screen.x()) || !std::isfinite(p.screen.y()))
-            continue;   // 投影 NaN（w<=0 等）→ 跳过
+        const QDataPoint3D d = at(i);
+        const qreal nx = ax ? ax->toNumeric(d.x()) : d.x().toDouble();
+        const qreal ny = ay ? ay->toNumeric(d.y()) : d.y().toDouble();
+        const qreal nz = az ? az->toNumeric(d.z()) : d.z().toDouble();
+        if (!std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz)) continue;
 
-        QChartPrimitive prim;
-        prim.type = QChartPrimitive::Type::Point;
-        prim.a = p.screen;
-        prim.depth = p.depth;
-        prim.dataIndex = i;
-        prim.markerSize = m_markerSize;
-        prim.color = color();
-        prim.worldA = p.world;   // GL 顶点源（t42，§3.2）
-        out.append(prim);
+        QChartPrimitive p;
+        p.type = QChartPrimitive::Type::Point;
+        p.numA = QVector3D(static_cast<float>(nx), static_cast<float>(ny),
+                           static_cast<float>(nz));
+        p.color = color();
+        p.markerSize = static_cast<float>(m_markerSize);
+        scene.primitives.append(p);
     }
-}
-
-void QChartScatterSeries3D::draw(QPainter* painter,
-                                 const ProjectFn3D& projectFn,
-                                 const DrawContext3D* ctx) const {
-    Q_UNUSED(ctx);
-    if (!painter || !projectFn) return;
-    QVector<QChartPrimitive> items;
-    collectPrimitives(projectFn, items);
-    painter->save();
-    painter->setOpacity(opacity());
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(color());
-    const qreal r = m_markerSize * 0.5;
-    for (const QChartPrimitive& prim : items)
-        painter->drawEllipse(prim.a, r, r);   // 无排序直绘
-    painter->restore();
 }

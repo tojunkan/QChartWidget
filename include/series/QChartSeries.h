@@ -12,6 +12,9 @@
 #include <functional>
 #include <optional>
 
+class QChartScene;   // 收集目标（series 只往 scene.primitives 追加，不持有）
+class QChartAxis;    // 数据数值化：axis->toNumeric(QVariant) → Numeric
+
 class QChartSeries : public QObject
 {
     Q_OBJECT
@@ -28,13 +31,14 @@ public:
     /// 数据点数量
     virtual int count() const = 0;
 
-    // ===== 绘制（纯虚）=====
-    /// toPixel: Data(QVariant, QVariant) → Pixel。NaN 的点应跳过。
-    /// ctx: 可选。提供 toNumeric*/toPixelCurve 用于通用坐标系下曲线边。
-    ///      nullptr → 像素空间直线（Cartesian 下的快路径/旧行为）
-    virtual void draw(QPainter* painter,
-                      std::function<QPointF(QVariant,QVariant)> toPixel,
-                      const struct DrawContext* ctx = nullptr) const = 0;
+    // ===== 图元收集（纯虚）=====
+    /// 把本系列的数据收集为 Numeric 图元，追加到 scene.primitives（绘制统一由 renderer 完成）。
+    /// ax/ay/az：调用时临时传入的轴指针（series 不持有）；nullptr → 按 QVariant::toDouble() 直通。
+    /// 二维系列忽略 az（默认 nullptr）；三维系列用满三根轴。
+    /// 非法（NaN/Inf）点由实现跳过；sourceId/penWidth 的组包装由 layer 统一处理。
+    virtual void collectPrimitives(QChartScene& scene,
+                                   const QChartAxis* ax, const QChartAxis* ay,
+                                   const QChartAxis* az = nullptr) const = 0;
 
     // ===== 命中检测 =====
     virtual int hitTest(const QPointF& pixel,

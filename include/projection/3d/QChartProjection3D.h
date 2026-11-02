@@ -10,6 +10,11 @@
 
 class QChartProjection3D : public QChartAbstractProjection {
 public:
+    /// 3D 投影采样分辨率（每轴采样点数，**必须为奇数**以包含盒心；正算 computeViewCube 与
+    /// 反算 computeDataBounds 统一使用此值，避免两侧网格不一致导致极值被漏采）。
+    /// 以后若要自适应采样，可把该常量替换为按盒尺寸/曲率选择的分辨率。
+    static constexpr int kSampleResolution = 17;
+
     QChartProjection3D(QString name0 = "x", QString name1 = "y", QString name2 = "z")
         : QChartAbstractProjection({name0, name1, name2}) {}
 
@@ -27,6 +32,10 @@ public:
     virtual std::pair<QVector3D, QVector3D> defaultDataBounds() const {
         return { QVector3D(0, 0, 0), QVector3D(10, 10, 10) };
     }
+
+    /// 反向：viewCube（World 轴对齐盒）→ Numeric 包围盒。
+    /// 恒等映射（isIdentityMapping）→ 直返 World 盒（免采样）；否则 5×5×5=125 点采样 fromCartesian 取 min/max（D23）。
+    virtual QCube computeDataBounds(const QCube& worldBox) const;
 
     // ===== 实现统一基类接口（final） =====
     QVector3D toCartesian(const QVector3D& num) const final {
@@ -118,7 +127,7 @@ public:
 inline QCube QChartProjection3D::computeViewCube(const QVector3D& dataMin,
                                                  const QVector3D& dataMax) const
 {
-    const int grid = 16;
+    const int grid = kSampleResolution - 1;   // 分段数（点数 = 奇数，含盒心）
     qreal minX = qInf(), maxX = -qInf();
     qreal minY = qInf(), maxY = -qInf();
     qreal minZ = qInf(), maxZ = -qInf();
@@ -144,4 +153,36 @@ inline QCube QChartProjection3D::computeViewCube(const QVector3D& dataMin,
         return QCube{ dataMin, dataMax };
     }
     return QCube{ QVector3D(minX, minY, minZ), QVector3D(maxX, maxY, maxZ) };
+}
+
+    // ===== computeDataBounds 的默认实现（采样法；与 computeViewCube 同分辨率，含盒心） =====
+inline QCube QChartProjection3D::computeDataBounds(const QCube& worldBox) const
+{
+    if (!worldBox.isValid()) return worldBox;
+    if (isIdentityMapping()) return worldBox;   // Cartesian3D 快速通道：免采样
+
+    const int g = kSampleResolution - 1;   // 分段数（点数 = 奇数，含盒心；避免漏采 r=0 等极值）
+    QVector3D mn, mx;
+    bool first = true;
+    for (int i = 0; i <= g; ++i) {
+        const qreal ti = static_cast<qreal>(i) / g;
+        const qreal x = worldBox.min.x() + (worldBox.max.x() - worldBox.min.x()) * ti;
+        for (int j = 0; j <= g; ++j) {
+            const qreal tj = static_cast<qreal>(j) / g;
+            const qreal y = worldBox.min.y() + (worldBox.max.y() - worldBox.min.y()) * tj;
+            for (int k = 0; k <= g; ++k) {
+                const qreal tk = static_cast<qreal>(k) / g;
+                const qreal z = worldBox.min.z() + (worldBox.max.z() - worldBox.min.z()) * tk;
+                const QVector3D n = fromCartesian(QVector3D(x, y, z));
+                if (!std::isfinite(n.x()) || !std::isfinite(n.y()) || !std::isfinite(n.z())) continue;
+                if (first) { mn = mx = n; first = false; }
+                else {
+                    mn.setX(qMin(mn.x(), n.x())); mn.setY(qMin(mn.y(), n.y())); mn.setZ(qMin(mn.z(), n.z()));
+                    mx.setX(qMax(mx.x(), n.x())); mx.setY(qMax(mx.y(), n.y())); mx.setZ(qMax(mx.z(), n.z()));
+                }
+            }
+        }
+    }
+    if (first) return worldBox;   // 全 NaN 兜底
+    return QCube{ mn, mx };
 }

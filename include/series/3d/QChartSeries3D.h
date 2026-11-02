@@ -68,24 +68,15 @@ public:
     const QVector<QVector3D>& worldCache() const { return m_worldCache; }
     QVector<QVector3D>& worldCache() { return m_worldCache; }   // Layer3D 填充入口（内部）
 
-    // ===== 图元收集（Renderer 3D 主路径：不排序、不直接绘制，D-3D-9）=====
-    /// projectFn: 全链闭包（Data→Numeric→World→{screen,depth}，Layer3D 组装）
-    /// 输出图元：type/a/b/depth/dataIndex/color/markerSize/penWidth 已填
-    virtual void collectPrimitives(const ProjectFn3D& projectFn,
-                                   QVector<QChartPrimitive>& out) const = 0;
-
-    // ===== 直接绘制入口（painter's algorithm 关闭/单系列调试；⚠ 重载隐藏基类 draw，见头注释）=====
-    virtual void draw(QPainter* painter,
-                      const ProjectFn3D& projectFn,
-                      const DrawContext3D* ctx = nullptr) const;
-
-    // ⚠ 基类纯虚 draw 的桩（2D 签名）：3D 系列不可走 2D 绘制路径，误用 → qWarning + no-op
-    void draw(QPainter* painter,
-              std::function<QPointF(QVariant, QVariant)> toPixel,
-              const struct DrawContext* ctx = nullptr) const override;
+    // ===== 图元收集（Renderer 3D 主路径：只产 Numeric 图元，不排序不绘制）=====
+    /// 与 2D 同构：ax/ay/az ->toNumeric 得到 Numeric 三元组 → QChartPrimitive（numA 等）。
+    /// 投影（Numeric→World）与相机（World→screen）由 renderer 统一完成。
+    void collectPrimitives(QChartScene& scene,
+                           const QChartAxis* ax, const QChartAxis* ay,
+                           const QChartAxis* az = nullptr) const override = 0;
 
 signals:
-    void dataChanged();
+    // dataChanged 统一用基类 QChartSeries::dataChanged（重复声明会遮蔽基类信号）
 
 protected:
     /// QVariant 路径批量赋值（setPoints/setGrid 共用）：m_points 权威、numericCache 失效（不发信号）

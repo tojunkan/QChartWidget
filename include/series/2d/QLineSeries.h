@@ -1,6 +1,11 @@
 // QLineSeries.h —— 折线系列
-// 数据点依次连接成折线。NaN 点断开路径（处理奇点）。
-// 只存 Data，绘制用注入的 toPixel。不知道 Axis/Projection 类型。
+// 数据点按数据顺序用 **Numeric 空间的直线段**连接；NaN/Inf 点断开路径
+// （y=1/x 这类多分支仍是**同一系列**，断线只是不连那一段）。
+// 只存 Data，收集时由 layer 传入轴指针做 Data→Numeric；投影/相机由 renderer 完成。
+//
+// TODO(line-style)：lineStyle（虚线）/ smooth（Catmull-Rom）本轮只保留字段，图元暂无对应属性。
+// TODO(nonlinear)：Numeric 直线在 Cartesian 空间的插值由 renderer 负责（当前先用端点直连的权宜做法）。
+// TODO(adaptive)：自适应细分（按 Cartesian 距离相对 viewRect 的阈值）—— GL 侧暂不支持，搁置。
 #pragma once
 #include "QXYSeries.h"
 
@@ -13,15 +18,15 @@ class QLineSeries : public QXYSeries
 public:
     explicit QLineSeries(const QString& name = {}, QObject* parent = nullptr);
 
-    // ===== 绘制：逐点连折线。远点走 Numeric Lerp→createPath 曲线边 =====
-    void draw(QPainter* painter,
-              std::function<QPointF(QVariant,QVariant)> toPixel,
-              const DrawContext* ctx = nullptr) const override;
+    // ===== 图元收集：相邻有效点 → 一条 Line（Numeric 直线段）；NaN/Inf 断线 =====
+    void collectPrimitives(QChartScene& scene,
+                           const QChartAxis* ax, const QChartAxis* ay,
+                           const QChartAxis* az = nullptr) const override;
 
-    // ===== 命中检测 =====
+    // ===== 命中检测（旧签名保留，拾取轮随 QChartHitTester 一起替换）=====
     int hitTest(const QPointF& pixel,
                 std::function<QPointF(QVariant,QVariant)> toPixel,
-                const DrawContext* ctx = nullptr) const override;
+                const struct DrawContext* ctx = nullptr) const override;
 
     // ===== 线样式（NOTIFY 供 QPropertyAnimation 驱动时实时刷新）=====
     qreal lineWidth() const { return m_lineWidth; }
@@ -32,27 +37,23 @@ public:
         emit lineWidthChanged();
     }
     Qt::PenStyle lineStyle() const { return m_lineStyle; }
-    void setLineStyle(Qt::PenStyle s) { m_lineStyle = s; }
+    void setLineStyle(Qt::PenStyle s) { m_lineStyle = s; }   // TODO：图元无 pen style，暂未生效
     bool smooth() const { return m_smooth; }
     void setSmooth(bool s) {
         if (m_smooth == s) return;
         m_smooth = s;
         emit smoothChanged();
-    }
-    // 视口裁剪（culling）：屏外线段跳过不画。默认 true（=旧行为）
+    }                                                         // TODO：Numeric 直线语义下暂未生效
     bool isCullingEnabled() const { return m_cullingEnabled; }
-    void setCullingEnabled(bool v) { m_cullingEnabled = v; }
+    void setCullingEnabled(bool v) { m_cullingEnabled = v; }  // TODO：renderer 裁剪待接
 
 signals:
     void lineWidthChanged();
     void smoothChanged();
 
 private:
-    // 平滑路径：Catmull-Rom 采样
-    QPainterPath smoothPath(const QVector<QPointF>& pts) const;
-
     qreal m_lineWidth = 2.0;
-    Qt::PenStyle m_lineStyle = Qt::SolidLine;
-    bool m_smooth = false;
-    bool m_cullingEnabled = true;
+    Qt::PenStyle m_lineStyle = Qt::SolidLine;   // TODO：留后门，暂未参与收集
+    bool m_smooth = false;                      // TODO：留后门，暂未参与收集
+    bool m_cullingEnabled = true;               // TODO：留后门，暂未参与收集
 };

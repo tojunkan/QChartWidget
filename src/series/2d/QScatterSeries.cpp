@@ -1,9 +1,8 @@
-// QScatterSeries.cpp —— 散点系列实现
+// QScatterSeries.cpp —— 散点系列实现（收集 Numeric 图元，绘制统一由 renderer 完成）
 #include "QScatterSeries.h"
-#include "QChartAxis.h"  // DrawContext::numericToPixel
-#include "QChartDebug.h"
-#include <QDebug>
-#include <QtMath>
+#include "QChartScene.h"
+#include "QChartPrimitive.h"
+#include "QChartAxis.h"   // 轴数值化：axis->toNumeric(QVariant)
 #include <cmath>
 
 QScatterSeries::QScatterSeries(const QString& name, QObject* parent)
@@ -12,43 +11,30 @@ QScatterSeries::QScatterSeries(const QString& name, QObject* parent)
     m_themeColor = QColor("#F44336");
 }
 
-// ===== 绘制 =====
-void QScatterSeries::draw(QPainter* painter,
-                          std::function<QPointF(QVariant,QVariant)> toPixel,
-                          const DrawContext* ctx) const {
-    if (!painter || !m_visible) return;
-    // override 点已是 Numeric 空间，不需 toPixel；真实数据则必须要有
-    if (!m_hasOverride && !toPixel) return;
+// ===== 图元收集：每点一个 Point 图元（Numeric 空间），非法点跳过 =====
+void QScatterSeries::collectPrimitives(QChartScene& scene,
+                                       const QChartAxis* ax, const QChartAxis* ay,
+                                       const QChartAxis* az) const {
+    Q_UNUSED(az);   // 二维系列不用第三轴
+    for (const QDataPoint& pt : m_points) {
+        // Data(QVariant) → Numeric(qreal)：轴负责数值化；无轴时按 toDouble 直通
+        const qreal nx = ax ? ax->toNumeric(pt.x()) : pt.x().toDouble();
+        const qreal ny = ay ? ay->toNumeric(pt.y()) : pt.y().toDouble();
+        if (!std::isfinite(nx) || !std::isfinite(ny)) continue;
 
-    int drawn = 0, skipped = 0;
-    if (m_hasOverride) {
-        // 动画覆盖层：Numeric 点直接投影到像素
-        for (const auto& n : m_overridePoints) {
-            QPointF pixel = ctx ? ctx->numericToPixel(n.x(), n.y())
-                                : QPointF(qQNaN(), qQNaN());
-            if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
-                skipped++;
-                continue;
-            }
-            drawMarker(painter, pixel);
-            drawn++;
-        }
-    } else {
-        for (const auto& pt : m_points) {
-            QPointF pixel = toPixel(pt.x(), pt.y());
-            if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())) {
-                skipped++;
-                continue;
-            }
-            drawMarker(painter, pixel);
-            drawn++;
-        }
+        QChartPrimitive p;
+        p.type = QChartPrimitive::Type::Point;
+        p.numA = QVector3D(static_cast<float>(nx), static_cast<float>(ny), 0.0f);
+        p.color = color();
+        p.fillColor = m_fillColor;
+        p.penWidth = static_cast<float>(m_pen.widthF());
+        p.markerSize = static_cast<float>(m_markerSize);
+        scene.primitives.append(p);
     }
-    qCDebug(logSeriesVerbose) << "QScatterSeries::draw:" << drawn << "drawn,"
-                              << skipped << "skipped (NaN)";
 }
 
 // ===== 命中检测：像素到最近数据点距离 < marker 半径 =====
+// 旧签名（toPixel 闭包，painter 时代）——拾取改造时随 QChartHitTester 一起替换。
 int QScatterSeries::hitTest(const QPointF& pixel,
                             std::function<QPointF(QVariant,QVariant)> toPixel,
                             const DrawContext* ctx) const {
@@ -69,61 +55,4 @@ int QScatterSeries::hitTest(const QPointF& pixel,
         }
     }
     return bestIndex;
-}
-
-// ===== marker 绘制 =====
-void QScatterSeries::drawMarker(QPainter* p, const QPointF& pos) const {
-    qreal r = m_markerSize / 2.0;
-
-    // 填充 + 描边
-    p->save();
-    QColor fill = (m_fillColor.alpha() == 0) ? color() : m_fillColor;
-    QBrush brush(fill);
-    if (m_pen.style() != Qt::NoPen)
-        brush = QBrush(fill);  // 有描边时也填充
-    p->setBrush(brush);
-    p->setPen(m_pen);
-
-    switch (m_markerShape) {
-    case MarkerShape::Circle: {
-        p->drawEllipse(pos, r, r);
-        break;
-    }
-    case MarkerShape::Square: {
-        p->drawRect(QRectF(pos.x() - r, pos.y() - r, m_markerSize, m_markerSize));
-        break;
-    }
-    case MarkerShape::Triangle: {
-        QPolygonF tri;
-        tri << QPointF(pos.x(), pos.y() - r)
-            << QPointF(pos.x() - r, pos.y() + r)
-            << QPointF(pos.x() + r, pos.y() + r);
-        p->drawPolygon(tri);
-        break;
-    }
-    case MarkerShape::Diamond: {
-        QPolygonF dia;
-        dia << QPointF(pos.x(), pos.y() - r)
-            << QPointF(pos.x() + r, pos.y())
-            << QPointF(pos.x(), pos.y() + r)
-            << QPointF(pos.x() - r, pos.y());
-        p->drawPolygon(dia);
-        break;
-    }
-    case MarkerShape::Plus: {
-        // 加号：无填充，画两条线
-        p->setBrush(Qt::NoBrush);
-        p->drawLine(QPointF(pos.x() - r, pos.y()), QPointF(pos.x() + r, pos.y()));
-        p->drawLine(QPointF(pos.x(), pos.y() - r), QPointF(pos.x(), pos.y() + r));
-        break;
-    }
-    case MarkerShape::Cross: {
-        // 叉号：无填充，画两条对角线
-        p->setBrush(Qt::NoBrush);
-        p->drawLine(QPointF(pos.x() - r, pos.y() - r), QPointF(pos.x() + r, pos.y() + r));
-        p->drawLine(QPointF(pos.x() + r, pos.y() - r), QPointF(pos.x() - r, pos.y() + r));
-        break;
-    }
-    }
-    p->restore();
 }

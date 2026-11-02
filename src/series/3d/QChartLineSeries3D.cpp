@@ -1,5 +1,8 @@
-// QChartLineSeries3D.cpp —— 3D 折线系列实现
+// QChartLineSeries3D.cpp —— 3D 折线系列实现（收集 Numeric 直线段，绘制统一由 renderer 完成）
 #include "QChartLineSeries3D.h"
+#include "QChartScene.h"
+#include "QChartPrimitive.h"
+#include "QChartAxis.h"
 #include <cmath>
 
 QChartLineSeries3D::QChartLineSeries3D(const QString& name, QObject* parent)
@@ -17,51 +20,42 @@ void QChartLineSeries3D::setCullingEnabled(bool v) {
     emit cullingChanged();
 }
 
-void QChartLineSeries3D::collectPrimitives(const ProjectFn3D& projectFn,
-                                           QVector<QChartPrimitive>& out) const {
-    // count()/at()：双存储统一访问（numeric-only → float3 单点物化；混合 → QDataPoint3D 权威）
+// ===== 图元收集 =====
+// 连续的**有效**点组成一段折线：2 个点 → Line；>2 个点 → Path。NaN/Inf 断段。
+void QChartLineSeries3D::collectPrimitives(QChartScene& scene,
+                                           const QChartAxis* ax, const QChartAxis* ay,
+                                           const QChartAxis* az) const {
     const int n = count();
-    if (!projectFn || n < 2) return;
+    QVector<QVector3D> run;
+    auto flush = [&]() {
+        if (run.isEmpty()) return;
+        QChartPrimitive p;
+        if (run.size() == 2) {
+            p.type = QChartPrimitive::Type::Line;
+            p.numA = run.at(0);
+            p.numB = run.at(1);
+        } else {
+            p.type = QChartPrimitive::Type::Path;
+            p.numVerts = run;
+        }
+        p.color = color();
+        p.penWidth = static_cast<float>(m_lineWidth);
+        scene.primitives.append(p);
+        run.clear();
+    };
 
-    // 全链闭包预投影所有点（{screen,depth}），screen 非有限 → 断段
-    struct Proj { QChartProjectedPoint p; bool valid; };
-    QVector<Proj> proj;
-    proj.reserve(n);
     for (int i = 0; i < n; ++i) {
-        const QChartProjectedPoint p = projectFn(at(i));
-        proj.append({ p, std::isfinite(p.screen.x()) && std::isfinite(p.screen.y()) });
+        // count()/at()：双存储统一访问（numeric-only → float3 单点物化；混合 → QDataPoint3D 权威）
+        const QDataPoint3D d = at(i);
+        const qreal nx = ax ? ax->toNumeric(d.x()) : d.x().toDouble();
+        const qreal ny = ay ? ay->toNumeric(d.y()) : d.y().toDouble();
+        const qreal nz = az ? az->toNumeric(d.z()) : d.z().toDouble();
+        if (!std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz)) {
+            flush();
+            continue;
+        }
+        run.append(QVector3D(static_cast<float>(nx), static_cast<float>(ny),
+                             static_cast<float>(nz)));
     }
-
-    for (int i = 0; i + 1 < proj.size(); ++i) {
-        const Proj& p0 = proj.at(i);
-        const Proj& p1 = proj.at(i + 1);
-        if (!p0.valid || !p1.valid) continue;   // 任一端 NaN → 断段
-
-        QChartPrimitive prim;
-        prim.type = QChartPrimitive::Type::LineSegment;
-        prim.a = p0.p.screen;
-        prim.b = p1.p.screen;
-        prim.depth = (p0.p.depth + p1.p.depth) * 0.5;   // 裁决 a：两端点深度均值
-        prim.dataIndex = i;                              // 裁决 c：线段起点数据索引
-        prim.penWidth = m_lineWidth;
-        prim.color = color();
-        prim.worldA = p0.p.world;                        // GL 顶点源（t42，§3.2）
-        prim.worldB = p1.p.world;
-        out.append(prim);
-    }
-}
-
-void QChartLineSeries3D::draw(QPainter* painter,
-                              const ProjectFn3D& projectFn,
-                              const DrawContext3D* ctx) const {
-    Q_UNUSED(ctx);
-    if (!painter || !projectFn) return;
-    QVector<QChartPrimitive> items;
-    collectPrimitives(projectFn, items);
-    painter->save();
-    painter->setOpacity(opacity());
-    painter->setPen(QPen(color(), m_lineWidth));
-    for (const QChartPrimitive& prim : items)
-        painter->drawLine(prim.a, prim.b);   // 无排序直绘
-    painter->restore();
+    flush();
 }

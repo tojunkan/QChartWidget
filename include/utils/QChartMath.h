@@ -10,6 +10,7 @@
 #include <QPointF>
 #include <QVector>
 #include <QtMath>
+#include <algorithm>
 
 namespace QChartMath {
 
@@ -86,18 +87,96 @@ namespace QChartMath {
     // ===== 反投影（Phase 3 射线拾取预留，design_3d_axes.md §2.3；本任务实现并单测）=====
     /// Clip(齐次) → World：逆 viewProj ÷w；w<=0 → NaN 哨兵。
     /// 输入 clipPos.w<=0（相机背后/近平面外）或 viewProj 不可逆 → NaN。
-    inline QVector3D unproject(const QMatrix4x4& viewProj, const QVector4D& clipPos) {
-        if (clipPos.w() <= 0.0)
-            return QVector3D(qQNaN(), qQNaN(), qQNaN());
-        bool invertible = false;
-        const QMatrix4x4 inv = viewProj.inverted(&invertible);
-        if (!invertible)
-            return QVector3D(qQNaN(), qQNaN(), qQNaN());
-        const QVector4D worldH = inv * clipPos;
-        if (worldH.w() <= 0.0)
-            return QVector3D(qQNaN(), qQNaN(), qQNaN());
-        return QVector3D(worldH.x() / worldH.w(),
-                         worldH.y() / worldH.w(),
-                         worldH.z() / worldH.w());
+    // ===== 多边形三角化（简单多边形：单环、无洞、不自交）=====
+    namespace detail {
+        /// 二维叉积 (b−a)×(c−a)：>0 逆时针，<0 顺时针，=0 共线
+        inline qreal cross2(const QVector3D& a, const QVector3D& b, const QVector3D& c) {
+            return (b.x() - a.x()) * (c.y() - a.y())
+                 - (b.y() - a.y()) * (c.x() - a.x());
+        }
+
+        /// 点是否落在三角形内（含边界；同号判据）
+        inline bool pointInTriangle(const QVector3D& p, const QVector3D& a,
+                                    const QVector3D& b, const QVector3D& c) {
+            const qreal d1 = cross2(a, b, p);
+            const qreal d2 = cross2(b, c, p);
+            const qreal d3 = cross2(c, a, p);
+            const bool hasNeg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+            const bool hasPos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+            return !(hasNeg && hasPos);
+        }
+    } // namespace detail
+
+    /// 多边形三角化（只用顶点的 x/y 判定拓扑，与投影无关）。
+    /// 凸多边形走扇形快路径 O(n)；凹多边形走耳切 O(n²)。
+    /// 输出 outIndices：每 3 个一组，索引指向 verts。
+    /// 退化（共线/面积为 0）/自交多边形 → 返回 false（结果未定义，调用方跳过绘制）。
+    /// TODO(holes)：带洞（fillRule 多环）暂不支持。
+    inline bool triangulatePolygon(const QVector<QVector3D>& verts, QVector<int>& outIndices) {
+        outIndices.clear();
+        const int n = verts.size();
+        if (n < 3) return false;
+
+        // 1. 有向面积 → 环绕方向（>0 逆时针）
+        qreal area2 = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const QVector3D& a = verts.at(i);
+            const QVector3D& b = verts.at((i + 1) % n);
+            area2 += a.x() * b.y() - b.x() * a.y();
+        }
+        if (qFuzzyIsNull(area2)) return false;   // 退化（共线/零面积）
+        const qreal sign = (area2 > 0.0) ? 1.0 : -1.0;
+
+        // 2. 凸多边形快速路径：扇形
+        bool convex = true;
+        for (int i = 0; i < n; ++i) {
+            const qreal c = detail::cross2(verts.at((i + n - 1) % n), verts.at(i),
+                                           verts.at((i + 1) % n));
+            if (c * sign < 0.0) { convex = false; break; }
+        }
+        if (convex) {
+            outIndices.reserve((n - 2) * 3);
+            for (int i = 1; i + 1 < n; ++i) {
+                outIndices << 0 << i << (i + 1);
+            }
+            return true;
+        }
+
+        // 3. 耳切：先把环统一成逆时针
+        QVector<int> ring;
+        ring.reserve(n);
+        for (int i = 0; i < n; ++i) ring << i;
+        if (sign < 0.0) std::reverse(ring.begin(), ring.end());
+
+        outIndices.reserve((n - 2) * 3);
+        int guard = 0;
+        while (ring.size() > 3 && guard++ < n * n) {
+            const int m = ring.size();
+            bool clipped = false;
+            for (int i = 0; i < m; ++i) {
+                const int i0 = ring.at((i + m - 1) % m);
+                const int i1 = ring.at(i);
+                const int i2 = ring.at((i + 1) % m);
+                const QVector3D& a = verts.at(i0);
+                const QVector3D& b = verts.at(i1);
+                const QVector3D& c = verts.at(i2);
+                if (detail::cross2(a, b, c) <= 0.0) continue;   // 非凸耳
+                // 耳内不得含其他顶点
+                bool contains = false;
+                for (int j = 0; j < m; ++j) {
+                    const int jj = ring.at(j);
+                    if (jj == i0 || jj == i1 || jj == i2) continue;
+                    if (detail::pointInTriangle(verts.at(jj), a, b, c)) { contains = true; break; }
+                }
+                if (contains) continue;
+                outIndices << i0 << i1 << i2;
+                ring.removeAt(i);
+                clipped = true;
+                break;
+            }
+            if (!clipped) return false;   // 退化/自交：放弃
+        }
+        if (ring.size() == 3) outIndices << ring.at(0) << ring.at(1) << ring.at(2);
+        return outIndices.size() >= 3;
     }
 }

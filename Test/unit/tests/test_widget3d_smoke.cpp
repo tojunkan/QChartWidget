@@ -82,12 +82,11 @@ void TestWidget3DSmoke::cpuWidget3DRenders()
     QChartWidget3D w;
     QCartesianProjection3D proj;          // 生命周期覆盖渲染（非持有约定）
     w.setProjection3D(&proj);
-    w.setDomainBox(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));   // → layer3D.setDataBounds + fitWorld
+    w.setDataBounds3D(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));   // → layer3D.setDataBounds + fitWorld
     // 批次2 B：FaceLine 为默认模式——容器冒烟取证（盒/网格/刻度墨迹）显式使用几何最丰富的 Box
     w.setGridMode3D(QChartLayer3D::GridMode::Box);
     QCOMPARE(static_cast<int>(w.gridMode3D()),
              static_cast<int>(QChartLayer3D::GridMode::Box));
-    QVERIFY2(w.hasDomainBox(), "setDomainBox 应记录域盒");
     QVERIFY2(w.layer3D() != nullptr, "构造应托管默认 layer3D");
     QVERIFY2(w.camera3D() == w.layer3D()->camera3D(), "相机归 layer3D（widget 无独立相机成员）");
     QVERIFY2(w.projection3D() == &proj, "投影应转发 layer3D");
@@ -118,7 +117,7 @@ void TestWidget3DSmoke::cpuWidget3DGridModes()
     QChartWidget3D w;
     QCartesianProjection3D proj;
     w.setProjection3D(&proj);
-    w.setDomainBox(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
+    w.setDataBounds3D(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
 
     // 默认模式 = FaceLine（批次2 B）
     QCOMPARE(static_cast<int>(w.gridMode3D()),
@@ -254,16 +253,14 @@ void TestWidget3DSmoke::dataBoundsFromAxesContract()
 
     // ① 默认（构造后）：三轴 0..10 → 组装盒 = (0,0,0)-(10,10,10)（= 迁移前默认盒）
     {
-        QVERIFY2(!w.hasDomainBox(), "默认不应标记为已设域盒");
         const QCube box = l3->axes3D()->dataBounds();
         QCOMPARE(box.min.x(), 0.0);  QCOMPARE(box.min.y(), 0.0);  QCOMPARE(box.min.z(), 0.0);
         QCOMPARE(box.max.x(), 10.0); QCOMPARE(box.max.y(), 10.0); QCOMPARE(box.max.z(), 10.0);
         QVERIFY2(l3->hasValidDataBounds(), "默认盒有效");
     }
 
-    // ② setDomainBox：数值落在三根轴上（本类不再持有 min/max）
-    w.setDomainBox(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
-    QVERIFY(w.hasDomainBox());
+    // ② setDataBounds3D：数值落在三根轴上（本类不再持有 min/max）
+    w.setDataBounds3D(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));
     QCOMPARE(l3->axisX()->min(), -3.0); QCOMPARE(l3->axisX()->max(), 3.0);
     QCOMPARE(l3->axisY()->min(), -3.0); QCOMPARE(l3->axisY()->max(), 3.0);
     QCOMPARE(l3->axisZ()->min(), -3.0); QCOMPARE(l3->axisZ()->max(), 3.0);
@@ -286,9 +283,8 @@ void TestWidget3DSmoke::dataBoundsFromAxesContract()
                              .arg(l3->axisZ()->min()).arg(l3->axisZ()->max())
                              .arg(l3->axes3D()->dataBounds().min.x()).arg(l3->axes3D()->dataBounds().max.x());
 
-    // ④ clearDomainBox：回退默认盒 0..10（轴与组装盒一致）
-    w.clearDomainBox();
-    QVERIFY2(!w.hasDomainBox(), "clearDomainBox 后不再标记已设域盒");
+    // ④ clearDataBounds3D：回退默认盒 0..10（轴与组装盒一致）
+    w.clearDataBounds3D();
     {
         const QCube box = l3->axes3D()->dataBounds();
         QCOMPARE(box.min.x(), 0.0); QCOMPARE(box.max.x(), 10.0);
@@ -333,29 +329,27 @@ void TestWidget3DSmoke::cubeToolsAndBoxApiContract()
                  "两点重载等价于 QCube 主签名");
     }
 
-    // ③ QChartWidget3D 域盒 API QCube 语义（数值仍落三轴；domainBox() 按需组装）
+    // ③ QChartWidget3D 域盒 API QCube 语义（数值仍落三轴；dataBounds3D() 按需组装）
     {
         QChartWidget3D w;
         QCartesianProjection3D proj;
         w.setProjection3D(&proj);
         const QCube box(QVector3D(-4, -5, -6), QVector3D(4, 5, 6));
-        w.setDomainBox(box);
-        QVERIFY2(w.hasDomainBox(), "QCube setDomainBox 应记录");
-        QVERIFY2(w.domainBox() == box, "domainBox() 组装值 == 入参");
+        w.setDataBounds3D(box);
+        QVERIFY2(w.dataBounds3D() == box, "dataBounds3D() 组装值 == 入参");
         QCOMPARE(w.axisX3D()->min(), -4.0);
         QCOMPARE(w.axisY3D()->max(), 5.0);
         QCOMPARE(w.axisZ3D()->min(), -6.0);
 
-        w.setDomainBox(QVector3D(-1, -1, -1), QVector3D(1, 1, 1));        // 便捷重载
-        QVERIFY2(w.domainBox() == QCube(QVector3D(-1, -1, -1), QVector3D(1, 1, 1)),
+        w.setDataBounds3D(QVector3D(-1, -1, -1), QVector3D(1, 1, 1));        // 便捷重载
+        QVERIFY2(w.dataBounds3D() == QCube(QVector3D(-1, -1, -1), QVector3D(1, 1, 1)),
                  "两点重载等价于 QCube 主签名");
 
-        w.clearDomainBox();
-        QVERIFY2(w.domainBox() == QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10)), "clearDomainBox 回退默认盒");
-        QVERIFY2(!w.hasDomainBox(), "clearDomainBox 后不标记");
+        w.clearDataBounds3D();
+        QVERIFY2(w.dataBounds3D() == QCube(QVector3D(0, 0, 0), QVector3D(10, 10, 10)), "clearDataBounds3D 回退默认盒");
         qInfo().noquote() << QString("4c: QCube 工具 + 盒子 API 契约通过；默认盒 size=(%1,%2,%3)")
-                                 .arg(w.domainBox().size().x()).arg(w.domainBox().size().y())
-                                 .arg(w.domainBox().size().z());
+                                 .arg(w.dataBounds3D().size().x()).arg(w.dataBounds3D().size().y())
+                                 .arg(w.dataBounds3D().size().z());
     }
 
     // ④ 4c 相机拟合判别力（t42 M1 回归断言：halfDiag 必须取「外扩 6% 后」的 viewCube 尺寸）
@@ -365,7 +359,7 @@ void TestWidget3DSmoke::cubeToolsAndBoxApiContract()
         QChartWidget3D w;
         QCartesianProjection3D proj;
         w.setProjection3D(&proj);
-        w.setDomainBox(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));
+        w.setDataBounds3D(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));
         QChartCamera3D* cam = w.camera3D();
         QVERIFY2(cam != nullptr, "camera3D 非空");
 
@@ -384,12 +378,12 @@ void TestWidget3DSmoke::cubeToolsAndBoxApiContract()
                  qPrintable(QString("distance 必须按外扩后半对角线（旧错误写法≈13.58），实为 %1")
                                 .arg(cam->distance(), 0, 'g', 12)));
 
-        w.clearDomainBox();                                     // 默认盒 0..10 → viewCube -0.6~10.6
+        w.clearDataBounds3D();                                     // 默认盒 0..10 → viewCube -0.6~10.6
         QVERIFY2(qAbs(cam->viewCube().min.x() - (-0.6)) < 1e-5 && qAbs(cam->viewCube().max.x() - 10.6) < 1e-5,
-                 "clearDomainBox 后 viewCube 应为 -0.6~10.6");
+                 "clearDataBounds3D 后 viewCube 应为 -0.6~10.6");
         QVERIFY2(qAbs(cam->distance() - 25.3459753) < 1e-4,
                  qPrintable(QString("默认盒期望 distance=25.3459753，实为 %1").arg(cam->distance(), 0, 'g', 12)));
-        qInfo().noquote() << QString("4c: 相机拟合判别力断言通过 d(±3 盒)=%1  d(clearDomainBox)=%2  viewCube(clear 后)=%3~%4")
+        qInfo().noquote() << QString("4c: 相机拟合判别力断言通过 d(±3 盒)=%1  d(clearDataBounds3D)=%2  viewCube(clear 后)=%3~%4")
                                  .arg(15.2075834, 0, 'g', 9).arg(w.camera3D()->distance(), 0, 'g', 9)
                                  .arg(w.camera3D()->viewCube().min.x(), 0, 'g', 9)
                                  .arg(w.camera3D()->viewCube().max.x(), 0, 'g', 9);
@@ -411,7 +405,7 @@ void TestWidget3DSmoke::cameraFitContract()
         QVERIFY2(cam != nullptr, "camera3D 非空");
         QVERIFY2(cam->autoFit(), "默认 autoFit=true");
 
-        w.setDomainBox(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));   // 建立基线状态
+        w.setDataBounds3D(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));   // 建立基线状态
         cam->setYaw(12.0);                              // 用户手调姿态
         cam->setPitch(20.0);
 
@@ -422,7 +416,7 @@ void TestWidget3DSmoke::cameraFitContract()
         const qreal n0 = cam->nearPlane(), f0 = cam->farPlane();
         const qreal yaw0 = cam->yaw(), pitch0 = cam->pitch();
 
-        w.setDomainBox(QCube(QVector3D(-5, -5, -5), QVector3D(5, 5, 5)));   // 路径①
+        w.setDataBounds3D(QCube(QVector3D(-5, -5, -5), QVector3D(5, 5, 5)));   // 路径①
         QCOMPARE(w.axisX3D()->min(), -5.0);             // 域盒数值仍落三轴
         QCOMPARE(w.axisX3D()->max(), 5.0);
         QCOMPARE(w.axisY3D()->min(), -5.0);
@@ -672,7 +666,7 @@ void TestWidget3DSmoke::plotAreaDriveContract()
     QChartWidget3D w;
     QCartesianProjection3D proj;
     w.setProjection3D(&proj);
-    w.setDomainBox(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));   // 锚点 ±3.36（pad = 6*0.06）
+    w.setDataBounds3D(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));   // 锚点 ±3.36（pad = 6*0.06）
     QChartCamera3D* cam = w.camera3D();
     QVERIFY2(cam != nullptr, "camera3D 非空");
     const qreal r = cam->viewCubeSize().length() * 0.5;
@@ -748,7 +742,7 @@ void TestWidget3DSmoke::mouseInteraction3DContract()
     QChartWidget3D w;
     QCartesianProjection3D proj;
     w.setProjection3D(&proj);
-    w.setDomainBox(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));
+    w.setDataBounds3D(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));
     w.resize(720, 540);
     w.show();
     QVERIFY2(QTest::qWaitForWindowExposed(&w), "offscreen 下窗口应暴露");
@@ -869,7 +863,7 @@ void TestWidget3DSmoke::mouseInteraction3DContract()
         QChartWidget3D w2;                                  // 独立夹具（避免前段交互状态干扰）
         QCartesianProjection3D proj2;
         w2.setProjection3D(&proj2);
-        w2.setDomainBox(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));
+        w2.setDataBounds3D(QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3)));
         w2.resize(720, 540);
         w2.show();                                          // 需 show 才会真正走 paint → 渲染路径
         QVERIFY2(QTest::qWaitForWindowExposed(&w2), "offscreen 下窗口应暴露");

@@ -39,7 +39,20 @@ QChartLayer3D::QChartLayer3D(QObject* parent)
     m_axes3D->axis(2).axis = m_axisZ;
     // ★ 批次 B1：3D 相机归 layer——scene3D.camera 恒指向本层相机值成员
     m_scene.camera = &m_camera3D;
+    // 相机变化 → 收集置脏（永远）；并转发给 widget（setViewCube 期间由 m_rangeTriggered 挡住，防回环）
+    connect(&m_camera3D, &QChartCamera3D::viewChanged, this, &QChartAbstractLayer::invalidateView);
+    connect(&m_camera3D, &QChartCamera3D::viewChanged, this, [this] {
+        if (!m_rangeTriggered) emit viewChanged(m_camera3D.viewCube());
+    });
     // 4b：无独立工作副本——collect 时由 m_axes3D->dataBounds() 从三轴范围组装
+}
+
+// ===== 相机视野盒（由 widget 设置；本层不做 projection 换算）=====
+void QChartLayer3D::setViewCube(const QCube& viewCube)
+{
+    m_rangeTriggered = true;
+    m_camera3D.setViewCube(viewCube);
+    m_rangeTriggered = false;
 }
 
 // ===== 轴重绑 =====
@@ -135,6 +148,23 @@ void QChartLayer3D::borderAxisSizeHint(const QFont& font, qreal& left, qreal& to
         }
         // HCenter/VCenter（数据主脊）不占外边距
     }
+}
+
+// ===== 3D 系列管理（非持有，与 2D 层同约定）=====
+// 数据/可见性/颜色变化 → 重收集（图元在收集时固化）
+void QChartLayer3D::addSeries3D(QChartSeries3D* s) {
+    if (!s || m_series3D.contains(s)) return;
+    m_series3D.append(s);
+    connect(s, &QChartSeries::dataChanged, this, &QChartAbstractLayer::invalidateData);
+    connect(s, &QChartSeries::visibleChanged, this, &QChartAbstractLayer::invalidateData);
+    connect(s, &QChartSeries::colorChanged, this, &QChartAbstractLayer::invalidateData);
+    invalidateData();
+}
+
+void QChartLayer3D::removeSeries3D(QChartSeries3D* s) {
+    if (!s || !m_series3D.removeOne(s)) return;
+    disconnect(s, nullptr, this, nullptr);
+    invalidateData();
 }
 
 // ===== collectPrimitives —— 纯 Numeric 图元组装 =====
@@ -385,18 +415,17 @@ void QChartLayer3D::collectPrimitives() {
         // }
     }
 
-    // 3. 系列图元（保留，使用 ProjectFn3D）
-    // const ProjectFn3D fn = makeProjectFn(nullptr, QRectF()); // cam/plotArea 在 series 内部使用
-    // for (QChartSeries3D* s : m_series3D) {
-    //     if (!s || !s->isVisible()) continue;
-    //     // 注意：series 的 collectPrimitives 需要 ProjectFn3D，它内部会调用相机投影
-    //     // 但我们暂时不传入 cam/plotArea，因为 series 自己会用到闭包。
-    //     // 这里我们传一个 dummy，但实际 series 会使用 makeProjectFn 传入的闭包。
-    //     // 为了兼容，我们让 series 使用自己的投影逻辑，暂不修改。
-    //     // 但原代码中 s->collectPrimitives(fn, out) 需要 fn，所以我们保留原样。
-    //     // 由于我们不再需要 cam/plotArea，所以这里直接传递默认构造的 fn。
-    //     // 但原 series 实现依赖 fn，我们保持原样。
-    //     s->collectPrimitives(fn, out);
-    // }
+    // 3. 系列图元（只产 Numeric；投影/相机由 renderer 统一处理）
+    //    每系列一个 sourceId 组；前缀和 = 组号 → 图元区间（逆算拾取用）
+    for (QChartSeries3D* s : m_series3D) {
+        if (!s || !s->isVisible()) continue;
+        m_scene.maxSourceId++;
+        const int groupId = m_scene.maxSourceId;
+        const int primBefore = m_scene.primitives.size();
+        s->collectPrimitives(m_scene, m_axisX, m_axisY, m_axisZ);
+        for (int i = primBefore; i < m_scene.primitives.size(); ++i)
+            m_scene.primitives[i].sourceId = groupId;
+        m_scene.PrimitiveIdPrefixSum.push_back(m_scene.primitives.size());
+    }
 }
 

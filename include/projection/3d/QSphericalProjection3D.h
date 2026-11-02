@@ -39,6 +39,50 @@ public:
         return QVector3D(r, qRadiansToDegrees(rad), phiDeg);
     }
 
+    // ── 反算：World 盒 → Numeric 盒（闭式，不用采样）──
+    //    rMin = 盒到原点的距离（含原点 → 0）；rMax = 最远角点；
+    //    θ：盒含 z 轴或跨正 X 轴（0/360 缝）→ [0,360)，否则取四角点角度区间；
+    //    φ = asin(z / √(dxy² + z²))，在 zmin / zmax 处取极值（含轴时自然得到 ±90）。
+    QCube computeDataBounds(const QCube& w) const override {
+        if (!w.isValid()) return w;
+        const qreal dx = (w.min.x() <= 0.0 && w.max.x() >= 0.0) ? 0.0
+                                                               : qMin(qAbs(w.min.x()), qAbs(w.max.x()));
+        const qreal dy = (w.min.y() <= 0.0 && w.max.y() >= 0.0) ? 0.0
+                                                               : qMin(qAbs(w.min.y()), qAbs(w.max.y()));
+        const qreal dz = (w.min.z() <= 0.0 && w.max.z() >= 0.0) ? 0.0
+                                                               : qMin(qAbs(w.min.z()), qAbs(w.max.z()));
+        const qreal rx = qMax(qAbs(w.min.x()), qAbs(w.max.x()));
+        const qreal ry = qMax(qAbs(w.min.y()), qAbs(w.max.y()));
+        const qreal rz = qMax(qAbs(w.min.z()), qAbs(w.max.z()));
+        const qreal dxy2 = dx * dx + dy * dy;
+        const qreal rMin = qSqrt(dxy2 + dz * dz);
+        const qreal rMax = qSqrt(rx * rx + ry * ry + rz * rz);
+
+        const bool containsZAxis = (dx == 0.0 && dy == 0.0);
+        const bool crossesPositiveX = (w.min.x() > 0.0 && w.min.y() <= 0.0 && w.max.y() >= 0.0);
+        qreal thMin = 0.0, thMax = 360.0;
+        if (!containsZAxis && !crossesPositiveX) {
+            const qreal corners[4][2] = { {w.min.x(), w.min.y()}, {w.max.x(), w.min.y()},
+                                          {w.max.x(), w.max.y()}, {w.min.x(), w.max.y()} };
+            thMin = 360.0; thMax = 0.0;
+            for (const auto& c : corners) {
+                qreal a = qRadiansToDegrees(qAtan2(c[1], c[0]));
+                if (a < 0.0) a += 360.0;
+                thMin = qMin(thMin, a);
+                thMax = qMax(thMax, a);
+            }
+        }
+
+        auto phiOf = [dxy2](qreal z) -> qreal {
+            const qreal den2 = dxy2 + z * z;
+            if (den2 <= 0.0) return 0.0;   // dxy=0 且 z=0：约定取 0
+            return qRadiansToDegrees(qAsin(qBound<qreal>(-1.0, z / qSqrt(den2), 1.0)));
+        };
+
+        return QCube(QVector3D(rMin, thMin, phiOf(w.min.z())),
+                     QVector3D(rMax, thMax, phiOf(w.max.z())));
+    }
+
     // QSphericalProjection3D.h 中添加
     QString glslToCartesian() const override {
         // num.x=r, num.y=θ, num.z=φ

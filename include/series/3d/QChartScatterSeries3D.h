@@ -1,6 +1,6 @@
 // QChartScatterSeries3D.h —— 3D 散点系列
-// collectPrimitives：每点一个 Point 图元（dataIndex=点索引；投影 screen 非有限 → 跳过）
-// draw：无排序直绘（收集后逐点画圆）
+// collectPrimitives：每点一个 Point 图元（Numeric 三元组；坐标由传入的三根轴 toNumeric 得到）。
+// 投影/相机由 renderer 统一完成（与 2D 同构）。
 #pragma once
 #include "QChartSeries3D.h"
 
@@ -13,10 +13,9 @@ public:
     qreal markerSize() const { return m_markerSize; }   // 默认 4.0（px）
     void setMarkerSize(qreal s);
 
-    void collectPrimitives(const ProjectFn3D& projectFn,
-                           QVector<QChartPrimitive>& out) const override;
-    void draw(QPainter* painter, const ProjectFn3D& projectFn,
-              const DrawContext3D* ctx = nullptr) const override;
+    void collectPrimitives(QChartScene& scene,
+                           const QChartAxis* ax, const QChartAxis* ay,
+                           const QChartAxis* az = nullptr) const override;
 
 signals:
     void markerSizeChanged();

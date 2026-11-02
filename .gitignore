@@ -40,6 +40,7 @@ CMakePresets.json
 .claude/
 .superpowers/
 .agent-teams/
+.dsh-meow/
 
 # 本机构建配置（scripts/config.local.bat.example 为模板，跟踪；实际配置不跟踪）
 scripts/config.local.bat

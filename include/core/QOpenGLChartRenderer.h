@@ -26,6 +26,7 @@ struct GLBatch {
     int baseId = 0;
     ShaderKind shaderKind = ShaderKind::Point;
     float pointSize = 0.0f;         // 仅 Point 有效
+    float lineWidth = 1.0f;         // 仅 Line 有效（图元 penWidth）
     bool depthTest = true;
     float depthBias = 0.0f;
 };
