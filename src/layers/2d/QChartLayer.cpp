@@ -49,12 +49,31 @@ QRectF QChartLayer::numericBoundsFromAxes() const
 }
 
 void QChartLayer::setAxisX(QChartAxis* a) {
+    if (m_axisX && m_axisX != a) disconnect(m_axisX, nullptr, this, nullptr);
     m_axisX = a;   // 4b：不再维护 m_dataBounds 缓存（范围由轴持有，按需组装）
+    if (a) {
+        // 轴属性变化 → 轴段必须重建（段内容依赖可见性/样式/刻度数/对齐）。
+        // ★ rangeChanged 不在此列：范围变化走"相机域同步"这一条独立通路，
+        //   两者语义不得混（见 QChartAxis.h 的信号注释）。
+        connect(a, &QChartAxis::visibleChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::styleChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::tickCountChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::subTickCountChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::alignmentChanged, this, &QChartAbstractLayer::invalidateData);
+    }
     qCDebug(logLayer) << "setAxisX:" << (a ? "set" : "null");
 }
 
 void QChartLayer::setAxisY(QChartAxis* a) {
+    if (m_axisY && m_axisY != a) disconnect(m_axisY, nullptr, this, nullptr);
     m_axisY = a;
+    if (a) {
+        connect(a, &QChartAxis::visibleChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::styleChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::tickCountChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::subTickCountChanged, this, &QChartAbstractLayer::invalidateData);
+        connect(a, &QChartAxis::alignmentChanged, this, &QChartAbstractLayer::invalidateData);
+    }
     qCDebug(logLayer) << "setAxisY:" << (a ? "set" : "null");
 }
 
@@ -142,6 +161,8 @@ void QChartLayer::borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,
     const QChartAxis* axes[2] = { m_axisX, m_axisY };
     for (const QChartAxis* a : axes) {
         if (!a) continue;
+        // 隐藏轴不占外边距（历史缺口：原本没判可见性，隐藏轴仍然挤占绘图区）
+        if (!a->isVisible()) continue;
         const Qt::Alignment al = a->alignment();
         if (al == Qt::AlignBottom || al == Qt::AlignTop) {
             const qreal h = a->sizeHint(font).height();
@@ -179,26 +200,25 @@ void QChartLayer::clearSeries() {
 }
 
 void QChartLayer::collectPrimitives() {
-    // 批次 A：每次收集前复位场景负载（widget 每帧重收集；sourceId 从 0 起重新分配）
-    m_scene.primitives.clear();
-    m_scene.labels.clear();
-    m_scene.maxSourceId = 0;
-    m_scene.PrimitiveIdPrefixSum.clear();
-    m_scene.PrimitiveIdPrefixSum.append(0);
+    QCHART_DIRTY_MSG(QStringLiteral("collect[2d]: FULL rebuild（清空 axisSegments + seriesSegments 后全量重建）"));
+    // 每次收集前复位段表（段序 = 绘制顺序，见契约 S1：轴段恒在系列段之前）
+    m_scene.axisSegments.clear();
+    m_scene.seriesSegments.clear();
     // ---- 绘制网格（先网格，后系列：系列覆盖在网格之上）----
     drawGrid(m_scene);
 
-    // ---- 系列：每系列一个 sourceId 组；图元按数据顺序追加 ----
-    // 前缀和 = 组号 → 图元区间（逆算拾取用）；"一数据一图元 + 按序追加"由系列契约保证。
+    // ---- 系列：每条可见系列一段 ----
     for (QChartSeries* s : m_series) {
+        // 契约 S6①：作者意图（visible）在收集期就过滤——不可见的系列**压根不入场景**，
+        // 因此天然拾不到、也不上传 GPU。不要改成"先收集再标 visible=false"。
         if (!s || !s->isVisible()) continue;
-        m_scene.maxSourceId++;
-        const int groupId = m_scene.maxSourceId;
-        const int primBefore = m_scene.primitives.size();
-        s->collectPrimitives(m_scene, m_axisX, m_axisY);
-        for (int i = primBefore; i < m_scene.primitives.size(); ++i)
-            m_scene.primitives[i].sourceId = groupId;
-        m_scene.PrimitiveIdPrefixSum.push_back(m_scene.primitives.size());
+        QCHART_DIRTY_MSG(QStringLiteral("  series<'%1'> 被重新收集").arg(s->name()));
+        QChartSegment seg;
+        seg.owner = s;
+        s->collectPrimitives(seg, m_axisX, m_axisY);
+        // 空段丢弃：不产生"零图元段"（历史坑：发号在前、产图元在后会留下空组）
+        if (seg.prims.isEmpty()) continue;
+        m_scene.seriesSegments.append(seg);
     }
 }
 
@@ -206,47 +226,39 @@ void QChartLayer::drawGrid(QChartScene& scene) {
     if (!m_gridVisible) return;
     if (!m_axisX || !m_axisY ) return;
 
-    const int segments = m_scene.projection ? m_scene.projection->samplingSegmentsHint() : 72;
     const QChartAxis::LabelMode spineLabelMode = gridSpineLabelMode();
 
-    // ----- 辅助 lambda：添加一条网格脊（几何 + 单标签改写）-----
+    // ----- 辅助 lambda：添加一条网格脊（一脊 = 一段）-----
     auto addSpine = [&](QChartAxis* scanAxis, int dimIndex, qreal dimMin, qreal dimMax,
                         qreal off0, qreal off1, const QString& valueText, QChartScene& out) {
         if (!scanAxis) return;
-        const int primBefore = out.primitives.size();
-        const int labelBefore = out.labels.size();
-        out.maxSourceId++;
-        const int groupId = out.maxSourceId;
+        QChartSegment seg;
+        seg.owner = scanAxis;
         // 几何 + 轴侧单标签（Single：下标 size/2 代表标签；该位置文字为空则轴不出标签）
-        scanAxis->drawAtPosition(dimMin, dimMax, off0, off1, dimIndex,
-                                 out, segments, spineLabelMode);
-        for (int i = primBefore; i < out.primitives.size(); ++i) {
-            auto& prim = out.primitives[i];
+        scanAxis->drawAtPosition(dimMin, dimMax, off0, off1, dimIndex, seg, spineLabelMode);
+        // 契约 S2：**先产图元，再接纳段**。
+        // 历史坑：这里原本是"先发组号再调 drawAtPosition"，而 drawAtPosition 对不可见轴会立即
+        // return，于是号已发出、图元一个没有 → 留下零图元段。空段一律丢弃。
+        if (seg.prims.isEmpty()) return;
+        for (auto& prim : seg.prims) {
             prim.color = gridColor();
             prim.penWidth = 1.0;
-            prim.sourceId = groupId;
         }
-        // t75：本组标签也盖上同组号（稳定身份——标签避让迟滞按身份记忆所选边；
-        // 轴侧标签原为 sourceId=-1，Tickwise 路径同样受益）
-        for (int i = labelBefore; i < out.labels.size(); ++i)
-            if (out.labels[i].sourceId < 0) out.labels[i].sourceId = groupId;
-        out.PrimitiveIdPrefixSum.push_back(out.primitives.size());
 
         // 单标签改写仅对"单标签"策略生效：
         //   None → 轴侧不出标签；Tickwise → 保留轴侧逐刻度标签（旧语义，不改写）
-        if (spineLabelMode != QChartAxis::LabelMode::Single) return;
-        if (out.labels.size() <= labelBefore) return;   // 轴侧未生成（该位置文字为空）
-
-        // 改写为自由标签：文字取固定坐标所属值轴；值轴文字为空则不生成
-        QChartTextLabel& lbl = out.labels[labelBefore];
-        if (valueText.isEmpty()) {
-            out.labels.removeAt(labelBefore);
-            return;
+        if (spineLabelMode == QChartAxis::LabelMode::Single && !seg.labels.isEmpty()) {
+            // 改写为自由标签：文字取固定坐标所属值轴；值轴文字为空则不生成
+            if (valueText.isEmpty()) {
+                seg.labels.clear();
+            } else {
+                QChartTextLabel& lbl = seg.labels[0];
+                lbl.text = valueText;
+                lbl.numericAnchor = QChartTextLabel{}.numericAnchor;   // 全 NaN 哨兵：无显式锚点
+                lbl.segPrim = -1;                                      // 自由标签（不指向图元）
+            }
         }
-        lbl.text = valueText;
-        lbl.numericAnchor = QChartTextLabel{}.numericAnchor;   // 全 NaN 哨兵：无显式锚点
-        lbl.refPrimitiveId = -1;                               // 自由标签（不指向图元）
-        lbl.sourceId = groupId;                                // 同组组尾可见图元定位
+        out.axisSegments.append(seg);
     };
 
     // 范围直接用轴自身（与 drawAtEdge 同源；不再经 numericBoundsFromAxes 的矩形取向中转）

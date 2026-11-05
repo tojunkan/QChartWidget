@@ -13,12 +13,13 @@ QLineSeries::QLineSeries(const QString& name, QObject* parent)
 // ===== 图元收集 =====
 // 连续的**有效**点组成一段折线：2 个点 → Line 图元；>2 个点 → Path 图元（一次装进 numVerts）。
 // NaN/Inf 断线（y=1/x 的两支仍属同一系列），断开后重新起一段。
-void QLineSeries::collectPrimitives(QChartScene& scene,
+void QLineSeries::collectPrimitives(QChartSegment& seg,
                                     const QChartAxis* ax, const QChartAxis* ay,
                                     const QChartAxis* az) const {
     Q_UNUSED(az);   // 二维系列不用第三轴
 
     QVector<QVector3D> run;
+    int runStart = 0;               // 本段折线的**首点数据下标**（契约 C3：一个图元跨多个数据项 → 写起点）
     auto flush = [&]() {
         if (run.isEmpty()) return;
         QChartPrimitive p;
@@ -32,18 +33,21 @@ void QLineSeries::collectPrimitives(QChartScene& scene,
         }
         p.color = color();
         p.penWidth = static_cast<float>(m_lineWidth);
-        scene.primitives.append(p);
+        seg.prims.append(p);
         run.clear();
     };
 
-    for (const QDataPoint& pt : m_points) {
+    for (int i = 0; i < m_points.size(); ++i) {
+        const QDataPoint& pt = m_points.at(i);
         // Data(QVariant) → Numeric(qreal)：轴负责数值化；无轴时按 toDouble 直通
         const qreal nx = ax ? ax->toNumeric(pt.x()) : pt.x().toDouble();
         const qreal ny = ay ? ay->toNumeric(pt.y()) : pt.y().toDouble();
         if (!std::isfinite(nx) || !std::isfinite(ny)) {   // 断线
             flush();
+            runStart = i + 1;       // 下一段从下一个点起头
             continue;
         }
+        if (run.isEmpty()) runStart = i;   // 本段的首点
         run.append(QVector3D(static_cast<float>(nx), static_cast<float>(ny), 0.0f));
     }
     flush();

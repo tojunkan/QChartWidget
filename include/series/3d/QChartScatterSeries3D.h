@@ -13,7 +13,7 @@ public:
     qreal markerSize() const { return m_markerSize; }   // 默认 4.0（px）
     void setMarkerSize(qreal s);
 
-    void collectPrimitives(QChartScene& scene,
+    void collectPrimitives(QChartSegment& seg,
                            const QChartAxis* ax, const QChartAxis* ay,
                            const QChartAxis* az = nullptr) const override;
 

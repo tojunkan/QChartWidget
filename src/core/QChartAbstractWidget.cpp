@@ -158,14 +158,22 @@ void QChartAbstractWidget::setMargins(qreal left, qreal top, qreal right, qreal 
 {
     m_marginLeft = left; m_marginTop = top; m_marginRight = right; m_marginBottom = bottom;
     m_layoutDirty = true;
+    QCHART_DIRTY_MSG(QStringLiteral("widget: setMargins(%1,%2,%3,%4) -> m_layoutDirty")
+                         .arg(left).arg(top).arg(right).arg(bottom));
     scheduleRepaint();
 }
 
 void QChartAbstractWidget::relayout()
 {
+    const QRectF oldPlotArea = m_plotArea;
     const QRectF newPlotArea = calculatePlotArea();
     m_layoutDirty = false;
     if (newPlotArea != m_plotArea) {
+        QCHART_DIRTY_MSG(QStringLiteral("widget: relayout -> plotArea %1,%2 %3x%4 → %5,%6 %7x%8")
+                             .arg(oldPlotArea.x()).arg(oldPlotArea.y())
+                             .arg(oldPlotArea.width()).arg(oldPlotArea.height())
+                             .arg(newPlotArea.x()).arg(newPlotArea.y())
+                             .arg(newPlotArea.width()).arg(newPlotArea.height()));
         m_plotArea = newPlotArea;
         emit plotAreaChanged(m_plotArea);
         onPlotAreaChanged(m_plotArea);   // 4e：像素侧驱动（子类重 fit 相机）
@@ -282,6 +290,8 @@ void QChartAbstractWidget::paintEvent(QPaintEvent*)
 void QChartAbstractWidget::resizeEvent(QResizeEvent*)
 {
     m_layoutDirty = true;
+    QCHART_DIRTY_MSG(QStringLiteral("widget: resizeEvent 控件 %1x%2 -> m_layoutDirty")
+                         .arg(width()).arg(height()));
     // t82：为布局提供**几何初值**——在首个 relayout（发生在首个 paint）之前，宿主不应停留在
     // 默认/空几何（否则"同一调用栈里 grab→relayout→抓 FBO"这类外部时序会看到未落位的宿主）。
     // 这里只做**纯像素计算**喂给布局：不写 m_plotArea、不发 plotAreaChanged、不调 onPlotAreaChanged、

@@ -24,7 +24,15 @@ void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
 
     const bool isIdentity = proj->isIdentityMapping();
 
-    for (QChartPrimitive& prim : scene.primitives) {
+    // 段序展开：轴段在前、系列段在后（契约 S1）。变换与段序无关，但保持同一套遍历习惯。
+    QVector<QChartPrimitive*> flat;
+    for (QChartSegment& s : scene.axisSegments)
+        for (QChartPrimitive& p : s.prims) flat.append(&p);
+    for (QChartSegment& s : scene.seriesSegments)
+        for (QChartPrimitive& p : s.prims) flat.append(&p);
+
+    for (QChartPrimitive* pp : flat) {
+        QChartPrimitive& prim = *pp;
         switch (prim.type) {
         case QChartPrimitive::Type::Point:
             prim.cartA = proj->toCartesian(prim.numA);
@@ -81,75 +89,62 @@ void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
 
 void QPainterChartRenderer::cullAndResolveLabels(QChartScene& scene)
 {
-    const int N = scene.primitives.size();
-    QVector<bool>& visibility = m_visibilityCache;
-    visibility.resize(N);
-
     const QChartAbstractCamera* camera = scene.camera;
 
-    QVector<int> lastVisibleIndex(scene.maxSourceId + 1, -1);
-
-    for (int i = 0; i < N; ++i) {
-        const QChartPrimitive& prim = scene.primitives[i];
-        bool visible = isPrimitiveVisible(prim, camera);
-        visibility[i] = visible;
-        if (visible) {
-            // F1(S0 修复)：sourceId 可为 -1（直接 drawAtPosition 装配的图元），
-            // 未守卫时 lastVisibleIndex[-1]=i 是整型负下标越界写；仅记录合法 sourceId。
-            if (prim.sourceId >= 0 && prim.sourceId < lastVisibleIndex.size())
-                lastVisibleIndex[prim.sourceId] = i;
-        }
-    }
-
-    // 标签解析（批次1：锚点三级优先级；见 QChartTextLabel.h 契约）
-    for (QChartTextLabel& label : scene.labels) {
-        // tier1：显式锚点（numericAnchor 任一分量非 NaN）→ 数值锚点直接生效，不被 refId 覆盖
-        if (label.hasExplicitAnchor()) {
-            if (!scene.projection) { label.visible = false; continue; }
-            label.cartesianAnchor = scene.projection->toCartesian(label.numericAnchor);
-            label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
-            continue;
+    // 逐段：段内先裁剪（只标 false、不删），再解析本段标签（契约 S6/S8）
+    auto resolveSegment = [&](QChartSegment& seg) {
+        int lastVisible = -1;
+        for (int i = 0; i < seg.prims.size(); ++i) {
+            QChartPrimitive& prim = seg.prims[i];
+            // 契约 S6②：视口裁剪只在这里**标 false**，绝不从段里删元素。
+            prim.visible = isPrimitiveVisible(prim, camera);
+            // 本段最后一个可见图元 = 自由标签的锚点（段内相对位置承载语义）
+            if (prim.visible) lastVisible = i;
         }
 
-        // tier2：锚点全 NaN 且绑定图元 → 继承该图元**组尾锚点**（t73：按类型分类，Line 取 cartB）
-        // 与可见性
-        if (label.refPrimitiveId >= 0) {
-            if (label.refPrimitiveId < N) {
-                label.cartesianAnchor =
-                    qchartGroupTailAnchorCartesian(scene.primitives[label.refPrimitiveId]);
-                label.visible = visibility[label.refPrimitiveId];
-            } else {
-                label.visible = false;   // 越界绑定：无对应图元 → 不可见
+        for (QChartTextLabel& label : seg.labels) {
+            // tier1：显式锚点（numericAnchor 任一分量非 NaN）
+            if (label.hasExplicitAnchor()) {
+                if (!scene.projection) { label.visible = false; continue; }
+                label.cartesianAnchor = scene.projection->toCartesian(label.numericAnchor);
+                label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
+                continue;
             }
-            continue;
-        }
 
-        // tier3：自由标签（refPrimitiveId == -1）→ 同 sourceId 组尾最后可见图元（机制不变；
-        // t73：锚点改取该图元的**组尾锚点**——Line 用尾端 cartB，旧实现取 cartA（首端点）
-        // 恰落视图边界，配合绘制期二次包含判定会按浮点噪声丢掉整组标签，见 t70 §3a）
-        if (label.refPrimitiveId == -1) {
-            const int sid = label.sourceId;
-            if (sid >= 0 && sid < lastVisibleIndex.size()) {
-                const int idx = lastVisibleIndex[sid];
-                if (idx != -1) {
-                    label.cartesianAnchor = qchartGroupTailAnchorCartesian(scene.primitives[idx]);
+            // tier2：段内绑定 → 继承该图元的组尾锚点与可见性
+            if (label.segPrim >= 0) {
+                if (label.segPrim < seg.prims.size()) {
+                    label.cartesianAnchor = qchartGroupTailAnchorCartesian(seg.prims[label.segPrim]);
+                    label.visible = seg.prims[label.segPrim].visible;
+                } else {
+                    label.visible = false;   // 越界绑定：无对应图元 → 不可见
+                }
+                continue;
+            }
+
+            // tier3：自由标签 → 本段最后一个可见图元的组尾锚点
+            if (label.segPrim == -1) {
+                if (lastVisible >= 0) {
+                    label.cartesianAnchor = qchartGroupTailAnchorCartesian(seg.prims[lastVisible]);
                     label.visible = true;
                     continue;
                 }
+                label.visible = false;   // 本段无可见图元
+                continue;
             }
-            label.visible = false;   // 同组无可见图元
-            continue;
-        }
 
-        label.visible = false;       // 非法绑定值（refPrimitiveId < -1）
-    }
+            label.visible = false;       // 非法绑定值（segPrim < -1）
+        }
+    };
+
+    for (QChartSegment& seg : scene.axisSegments) resolveSegment(seg);
+    for (QChartSegment& seg : scene.seriesSegments) resolveSegment(seg);
 }
 
 // 步骤 3：图元绘制
 
 void QPainterChartRenderer::drawPrimitives(QChartScene& scene,
-                                           QPaintDevice* device,
-                                           const QVector<bool>& visibility)
+                                           QPaintDevice* device)
 {
     if (!device) return;
 
@@ -175,11 +170,17 @@ void QPainterChartRenderer::drawPrimitives2D(QPainter& painter,
                                              const QChartCamera* cam2d)
 {
     const QRectF& plotArea = scene.plotArea;
-    auto& visibility = m_visibilityCache;
 
-    for (int i = 0; i < scene.primitives.size(); ++i) {
-        if (!visibility[i]) continue;
-        const QChartPrimitive& prim = scene.primitives[i];
+    // 段序展开：先轴段，后系列段；段内保持图元顺序（契约 S1）
+    QVector<const QChartPrimitive*> flat;
+    for (const QChartSegment& s : scene.axisSegments)
+        for (const QChartPrimitive& p : s.prims) flat.append(&p);
+    for (const QChartSegment& s : scene.seriesSegments)
+        for (const QChartPrimitive& p : s.prims) flat.append(&p);
+
+    for (const QChartPrimitive* pp : flat) {
+        const QChartPrimitive& prim = *pp;
+        if (!prim.visible) continue;   // 契约 S6②：可见性读图元自身
 
         QPointF pixelA = cam2d->project(QVector3D(prim.cartA.x(), prim.cartA.y(), 0), plotArea).screen;
         painter.setPen(QPen(prim.color, prim.penWidth));
@@ -270,19 +271,17 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
                                              QChartScene& scene,
                                              const QChartCamera3D* cam3d) {
     const QRectF& plotArea = scene.plotArea;
-    auto& visibility = m_visibilityCache;
 
-        // 1. 收集可见图元的索引
-    QVector<int> sortedIndices(scene.primitives.size());
-    int cnt = 0;
-    for (int i = 0; i < scene.primitives.size(); ++i) {
-        if (m_visibilityCache[i]) sortedIndices[cnt++] = i;
-    }
-    sortedIndices.resize(cnt);
+    // 1. 收集可见图元（段序展开成扁平表；深度排序只排这张表，不写回 scene）
+    QVector<QChartPrimitive*> flat;
+    for (QChartSegment& s : scene.axisSegments)
+        for (QChartPrimitive& p : s.prims) if (p.visible) flat.append(&p);
+    for (QChartSegment& s : scene.seriesSegments)
+        for (QChartPrimitive& p : s.prims) if (p.visible) flat.append(&p);
 
-    for (auto i : sortedIndices) {
-        QChartPrimitive& prim = scene.primitives[i];
-        qreal depth;
+    for (QChartPrimitive* pp : flat) {
+        QChartPrimitive& prim = *pp;
+        qreal depth = 0;
         switch (prim.type) {
         case QChartPrimitive::Type::Point:
             depth = cam3d->project(prim.cartA, plotArea).depth;
@@ -307,16 +306,14 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
     }
 
     // 2. 按 depth 降序排序（远→近）
-    std::sort(sortedIndices.begin(), sortedIndices.end(),
-        [&](int a, int b) {
-            // 注意：这里的 depth 应该是相机空间下的视图深度（-viewZ）
-            // 你可以从 prim.cartA 实时计算，或使用预先算好的 prim.depth
-            return scene.primitives[a].depth > scene.primitives[b].depth;
+    std::sort(flat.begin(), flat.end(),
+        [](const QChartPrimitive* a, const QChartPrimitive* b) {
+            return a->depth > b->depth;
         });
 
-    for (auto i : sortedIndices) {
-        if (!visibility[i]) continue;
-        const QChartPrimitive& prim = scene.primitives[i];
+    for (QChartPrimitive* pp : flat) {
+        const QChartPrimitive& prim = *pp;
+        if (!prim.visible) continue;
 
         QChartProjectedPoint ppA = cam3d->project(prim.cartA, plotArea);
         if (!std::isfinite(ppA.screen.x()) || !std::isfinite(ppA.screen.y())) continue;
@@ -445,7 +442,15 @@ void QPainterChartRenderer::drawLabels2D(QPainter& painter,
 {
     const QRectF& plotArea = scene.plotArea;
 
-    for (const QChartTextLabel& label : scene.labels) {
+    // 标签按段收集（段序 = 绘制顺序）
+    QVector<const QChartTextLabel*> flat;
+    for (const QChartSegment& s : scene.axisSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+    for (const QChartSegment& s : scene.seriesSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+
+    for (const QChartTextLabel* lp : flat) {
+        const QChartTextLabel& label = *lp;
         if (!label.visible) continue;
 
         QChartProjectedPoint pp = cam2d->project(label.cartesianAnchor, plotArea);
@@ -471,7 +476,14 @@ void QPainterChartRenderer::drawLabels3D(QPainter& painter,
 {
     const QRectF& plotArea = scene.plotArea;
 
-    for (const QChartTextLabel& label : scene.labels) {
+    QVector<const QChartTextLabel*> flat;
+    for (const QChartSegment& s : scene.axisSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+    for (const QChartSegment& s : scene.seriesSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+
+    for (const QChartTextLabel* lp : flat) {
+        const QChartTextLabel& label = *lp;
         if (!label.visible) continue;
 
         QChartProjectedPoint pp = cam3d->project(label.cartesianAnchor, plotArea);

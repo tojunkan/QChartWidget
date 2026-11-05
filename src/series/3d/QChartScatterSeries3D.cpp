@@ -16,7 +16,7 @@ void QChartScatterSeries3D::setMarkerSize(qreal s) {
 
 // ===== 图元收集：每点一个 Point 图元（Numeric 三元组），非法点跳过 =====
 // count()/at()：双存储统一访问（numeric-only → float3 单点物化；混合 → QDataPoint3D 权威）
-void QChartScatterSeries3D::collectPrimitives(QChartScene& scene,
+void QChartScatterSeries3D::collectPrimitives(QChartSegment& seg,
                                               const QChartAxis* ax, const QChartAxis* ay,
                                               const QChartAxis* az) const {
     const int n = count();
@@ -31,8 +31,9 @@ void QChartScatterSeries3D::collectPrimitives(QChartScene& scene,
         p.type = QChartPrimitive::Type::Point;
         p.numA = QVector3D(static_cast<float>(nx), static_cast<float>(ny),
                            static_cast<float>(nz));
+        // 契约 C3：一个点一个图元 → 数据下标就是它在系列里的下标
         p.color = color();
         p.markerSize = static_cast<float>(m_markerSize);
-        scene.primitives.append(p);
+        seg.prims.append(p);
     }
 }

@@ -24,7 +24,7 @@ public:
                            qreal u0, qreal u1, qreal v0, qreal v1);
 
     // ===== 图元收集：一个 TriangleMesh（Numeric 顶点 + 三角索引）=====
-    void collectPrimitives(QChartScene& scene,
+    void collectPrimitives(QChartSegment& seg,
                            const QChartAxis* ax, const QChartAxis* ay,
                            const QChartAxis* az = nullptr) const override;
 

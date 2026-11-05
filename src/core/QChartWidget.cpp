@@ -66,6 +66,13 @@ void QChartWidget::addAxis(QChartAxis* a)
     connect(a, &QChartAxis::subTickCountChanged, this, [markContentDirty]() { markContentDirty(); });
     connect(a, &QChartAxis::styleChanged, this, [markContentDirty]() { markContentDirty(); });
     connect(a, &QChartAxis::visibleChanged, this, [markContentDirty]() { markContentDirty(); });
+    // 轴占哪条边（对齐）与是否占位（可见性）变化 → 外边距变了 → 必须重算布局。
+    // 这是"轴信号没连好"的两处缺口：此前只做了重收集，没有把布局置脏。
+    connect(a, &QChartAxis::alignmentChanged, this, [this]() {
+        m_layoutDirty = true;
+        scheduleRepaint();
+    });
+    connect(a, &QChartAxis::visibleChanged, this, [this]() { m_layoutDirty = true; });
     if (QChartLayer* l = layer2D()) {
         attachToLayer(l, a);
         if (m_projection) {

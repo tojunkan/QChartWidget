@@ -17,7 +17,7 @@ public:
     explicit QScatterSeries(const QString& name = {}, QObject* parent = nullptr);
 
     // ===== 图元收集（每点一个 Point，Numeric 空间；az 不用于二维）=====
-    void collectPrimitives(QChartScene& scene,
+    void collectPrimitives(QChartSegment& seg,
                            const QChartAxis* ax, const QChartAxis* ay,
                            const QChartAxis* az = nullptr) const override;
 

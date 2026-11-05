@@ -54,7 +54,7 @@ void QBarSeries::clearRenderOverride() {
 
 // ===== 图元收集：每个矩形 → 一个 Rect（Numeric 轴对齐）；任何一边非法 → 跳过 =====
 // 投影快路径由 renderer 决定（恒等 → cartRect 直绘；非线性 → 转 Polygon），series 不关心。
-void QBarSeries::collectPrimitives(QChartScene& scene,
+void QBarSeries::collectPrimitives(QChartSegment& seg,
                                    const QChartAxis* ax, const QChartAxis* ay,
                                    const QChartAxis* az) const {
     Q_UNUSED(az);   // 二维系列不用第三轴
@@ -64,7 +64,8 @@ void QBarSeries::collectPrimitives(QChartScene& scene,
     const QColor border = hasBorder ? m_pen.color() : fill;
     const qreal penW = hasBorder ? qMax(1.0, m_pen.widthF()) : 1.0;
 
-    for (const QDataRect& r : m_rects) {
+    for (int i = 0; i < m_rects.size(); ++i) {
+        const QDataRect& r = m_rects.at(i);
         // Data(QVariant) → Numeric(qreal)：轴负责数值化；无轴时按 toDouble 直通
         const qreal l = ax ? ax->toNumeric(r.left()) : r.left().toDouble();
         const qreal rr = ax ? ax->toNumeric(r.right()) : r.right().toDouble();
@@ -75,13 +76,14 @@ void QBarSeries::collectPrimitives(QChartScene& scene,
 
         QChartPrimitive p;
         p.type = QChartPrimitive::Type::Rect;
+        // 契约 C3：一根柱一个图元 → 数据下标就是它在 m_rects 里的下标
         // Numeric 轴上对齐：左上（min x, min y）+ 宽高
         p.numRect = QRectF(QPointF(qMin(l, rr), qMin(b, t)),
                            QPointF(qMax(l, rr), qMax(b, t))).normalized();
         p.fillColor = fill;
         p.color = border;
         p.penWidth = static_cast<float>(penW);
-        scene.primitives.append(p);
+        seg.prims.append(p);
     }
 }
 

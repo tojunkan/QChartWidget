@@ -12,7 +12,7 @@
 #include <functional>
 #include <optional>
 
-class QChartScene;   // 收集目标（series 只往 scene.primitives 追加，不持有）
+struct QChartSegment;   // 收集目标：一个段（series 只往 seg.prims 追加，不持有段）
 class QChartAxis;    // 数据数值化：axis->toNumeric(QVariant) → Numeric
 
 class QChartSeries : public QObject
@@ -32,11 +32,13 @@ public:
     virtual int count() const = 0;
 
     // ===== 图元收集（纯虚）=====
-    /// 把本系列的数据收集为 Numeric 图元，追加到 scene.primitives（绘制统一由 renderer 完成）。
+    /// 把本系列的数据收集为 Numeric 图元，追加到 seg.prims（绘制统一由 renderer 完成）。
+    /// 段由 layer 创建并提供：owner = 本系列；空段由 layer 丢弃（不产生空段）。
     /// ax/ay/az：调用时临时传入的轴指针（series 不持有）；nullptr → 按 QVariant::toDouble() 直通。
     /// 二维系列忽略 az（默认 nullptr）；三维系列用满三根轴。
-    /// 非法（NaN/Inf）点由实现跳过；sourceId/penWidth 的组包装由 layer 统一处理。
-    virtual void collectPrimitives(QChartScene& scene,
+    /// 非法（NaN/Inf）点由实现跳过；样式一律由系列自己填。
+    /// ★ 图元身上没有编号：所属系列由段表达，段内第几个由段内下标表达。
+    virtual void collectPrimitives(QChartSegment& seg,
                                    const QChartAxis* ax, const QChartAxis* ay,
                                    const QChartAxis* az = nullptr) const = 0;
 

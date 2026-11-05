@@ -19,13 +19,12 @@ protected:
     /// Numeric → Cartesian 变换（CPU 端调用 projection->toCartesian）
     void transformNumericToCartesian(QChartScene& scene) override;
 
-    /// 裁剪 + 标签解析（精确裁剪，填充 m_visibilityCache）
+    /// 裁剪 + 标签解析（精确裁剪，结果写回每个图元的 visible 字段，契约 C5/C6）
     void cullAndResolveLabels(QChartScene& scene) override;
 
-    /// 绘制图元（从 cart* 转像素，用 QPainter 画）
+    /// 绘制图元（从 cart* 转像素，用 QPainter 画；可见性读 prim.visible）
     void drawPrimitives(QChartScene& scene,
-                        QPaintDevice* device,
-                        const QVector<bool>& visibility) override;
+                        QPaintDevice* device) override;
 
     /// 绘制标签（从 cartesianAnchor 转像素，用 QPainter 画文字）
     void drawLabels(QChartScene& scene,

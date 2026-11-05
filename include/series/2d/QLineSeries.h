@@ -19,7 +19,7 @@ public:
     explicit QLineSeries(const QString& name = {}, QObject* parent = nullptr);
 
     // ===== 图元收集：相邻有效点 → 一条 Line（Numeric 直线段）；NaN/Inf 断线 =====
-    void collectPrimitives(QChartScene& scene,
+    void collectPrimitives(QChartSegment& seg,
                            const QChartAxis* ax, const QChartAxis* ay,
                            const QChartAxis* az = nullptr) const override;
 

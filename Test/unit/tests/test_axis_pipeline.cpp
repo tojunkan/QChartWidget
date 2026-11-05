@@ -370,7 +370,9 @@ struct LabelFixture {
         p.color = Qt::black;
         p.sourceId = sourceId;
         scene.primitives.append(p);
-        scene.maxSourceId = qMax(scene.maxSourceId, sourceId);
+        // 组表必须覆盖到该组号（下标即组号；[0] 是哨兵）。渲染端按 groupSources.size()
+        // 建 lastVisibleIndex 数组，所以这里必须真的把组登记出来，而不是只记一个"最大值"。
+        while (scene.groupSources.size() <= sourceId) scene.groupSources.append(nullptr);
         return scene.primitives.size() - 1;
     }
 
@@ -651,7 +653,7 @@ void TestAxisPipeline::anchorVisibilityRules()
             prim.numVerts = { QVector3D(3, 4, 0), QVector3D(7, 4, 0) };
             prim.numRect = QRectF(4, 4, 2, 2);                    // 中心 (5,5)
             g.scene.primitives.append(prim);
-            g.scene.maxSourceId = qMax(g.scene.maxSourceId, 7);
+            while (g.scene.groupSources.size() <= 7) g.scene.groupSources.append(nullptr);
 
             QChartTextLabel freeLbl;
             freeLbl.text = QStringLiteral("g");
@@ -685,7 +687,7 @@ void TestAxisPipeline::anchorVisibilityRules()
         line.color = Qt::black;
         line.sourceId = 9;
         g.scene.primitives.append(line);
-        g.scene.maxSourceId = qMax(g.scene.maxSourceId, 9);
+        while (g.scene.groupSources.size() <= 9) g.scene.groupSources.append(nullptr);
 
         QChartTextLabel freeLbl;                    // tier3 自由标签（组尾 = 该直线）
         freeLbl.text = QStringLiteral("span");

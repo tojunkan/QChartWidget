@@ -56,17 +56,32 @@ void QChartLayer3D::setViewCube(const QCube& viewCube)
 }
 
 // ===== 轴重绑 =====
+// 轴属性变化 → 轴段必须重建（段内容依赖可见性/样式/刻度数/对齐）。
+// ★ rangeChanged 不在其中：范围变化走"相机域同步"这条独立通路，两者语义不得混。
+static void connectAxisPropertySignals(QChartAxis* a, QChartAbstractLayer* layer)
+{
+    if (!a) return;
+    QObject::connect(a, &QChartAxis::visibleChanged, layer, &QChartAbstractLayer::invalidateData);
+    QObject::connect(a, &QChartAxis::styleChanged, layer, &QChartAbstractLayer::invalidateData);
+    QObject::connect(a, &QChartAxis::tickCountChanged, layer, &QChartAbstractLayer::invalidateData);
+    QObject::connect(a, &QChartAxis::subTickCountChanged, layer, &QChartAbstractLayer::invalidateData);
+    QObject::connect(a, &QChartAxis::alignmentChanged, layer, &QChartAbstractLayer::invalidateData);
+}
+
 void QChartLayer3D::setAxisX(QChartAxis* a) {
     m_axisX = a;                                   // 4a：三维层自持轴绑定
     if (m_axes3D) m_axes3D->axis(0).axis = a;
+    connectAxisPropertySignals(a, this);
 }
 void QChartLayer3D::setAxisY(QChartAxis* a) {
     m_axisY = a;
     if (m_axes3D) m_axes3D->axis(1).axis = a;
+    connectAxisPropertySignals(a, this);
 }
 void QChartLayer3D::setAxisZ(QChartAxis* a) {
     m_axisZ = a;
     if (m_axes3D) m_axes3D->axis(2).axis = a;
+    connectAxisPropertySignals(a, this);
 }
 
 // ===== 数据盒 =====
@@ -169,12 +184,10 @@ void QChartLayer3D::removeSeries3D(QChartSeries3D* s) {
 
 // ===== collectPrimitives —— 纯 Numeric 图元组装 =====
 void QChartLayer3D::collectPrimitives() {
-    // 0a. 场景负载复位（每帧重收集；sourceId 从 0 重新分配）
-    m_scene.primitives.clear();
-    m_scene.labels.clear();
-    m_scene.maxSourceId = 0;
-    m_scene.PrimitiveIdPrefixSum.clear();
-    m_scene.PrimitiveIdPrefixSum.append(0);
+    QCHART_DIRTY_MSG(QStringLiteral("collect[3d]: FULL rebuild（清空 axisSegments + seriesSegments 后全量重建）"));
+    // 0a. 段表复位（段序 = 绘制顺序，契约 S1：轴段恒在系列段之前）
+    m_scene.axisSegments.clear();
+    m_scene.seriesSegments.clear();
 
     // 0. 轴配置重同步
     if (m_axes3D) {
@@ -222,7 +235,6 @@ void QChartLayer3D::collectPrimitives() {
         const QCube box = m_axes3D->dataBounds();
         const QVector3D mn = box.min;
         const QVector3D mx = box.max;
-        const int segments = m_projection3D ? m_projection3D->samplingSegmentsHint() : 72;
         const QColor gridCol = gridColor();
         const QColor boxCol(160, 160, 160);
 
@@ -249,28 +261,21 @@ void QChartLayer3D::collectPrimitives() {
         const QVector<qreal> t1 = getTicks(1);
         const QVector<qreal> t2 = getTicks(2);
 
-        // ----- 辅助 lambda：添加一条线段（调用 drawAtPosition，标签模式按调用点传入）-----
+        // ----- 辅助 lambda：添加一条线段（一脊 = 一段）-----
         auto addLine = [&](QChartAxis* axis, int dimIndex, qreal dimMin, qreal dimMax,
                            qreal off0, qreal off1, QChartAxis::LabelMode labelMode, const QColor& color, qreal penWidth) {
             if (!axis) return;
-            // int segments = m_projection3D ? m_projection3D->samplingSegmentsHint() : 72;
-            int cnt = m_scene.primitives.size();
-            const int labelCnt = m_scene.labels.size();     // t75：本组标签起点
-            m_scene.maxSourceId++;
-            const int groupId = m_scene.maxSourceId;
-            axis->drawAtPosition(dimMin, dimMax, off0, off1, dimIndex,
-                                 m_scene, segments, labelMode);
-            for (int i = cnt; i < m_scene.primitives.size(); ++i) {
-                auto& prim = m_scene.primitives[i];
+            QChartSegment seg;
+            seg.owner = axis;
+            axis->drawAtPosition(dimMin, dimMax, off0, off1, dimIndex, seg, labelMode);
+            // 契约 S2：**先产图元，再接纳段**。drawAtPosition 对不可见轴会立即 return，
+            // 若先建段再调用就会留下"零图元的空段"（与 2D drawGrid::addSpine 同一教训）。
+            if (seg.prims.isEmpty()) return;
+            for (auto& prim : seg.prims) {
                 prim.color = color;
                 prim.penWidth = penWidth;
-                prim.sourceId = groupId;
             }
-            // t75：本组标签也盖上同组号（稳定身份——标签避让迟滞按身份记忆所选边；
-            // 轴侧标签原为 sourceId=-1）
-            for (int i = labelCnt; i < m_scene.labels.size(); ++i)
-                if (m_scene.labels[i].sourceId < 0) m_scene.labels[i].sourceId = groupId;
-            m_scene.PrimitiveIdPrefixSum.push_back(m_scene.primitives.size());
+            m_scene.axisSegments.append(seg);
         };
 
         // ===== 模式解析（批次2 B）=====
@@ -416,16 +421,17 @@ void QChartLayer3D::collectPrimitives() {
     }
 
     // 3. 系列图元（只产 Numeric；投影/相机由 renderer 统一处理）
-    //    每系列一个 sourceId 组；前缀和 = 组号 → 图元区间（逆算拾取用）
+    //    每条可见系列一段
     for (QChartSeries3D* s : m_series3D) {
+        // 契约 S6①：作者意图在收集期过滤——不可见的系列压根不入场景
         if (!s || !s->isVisible()) continue;
-        m_scene.maxSourceId++;
-        const int groupId = m_scene.maxSourceId;
-        const int primBefore = m_scene.primitives.size();
-        s->collectPrimitives(m_scene, m_axisX, m_axisY, m_axisZ);
-        for (int i = primBefore; i < m_scene.primitives.size(); ++i)
-            m_scene.primitives[i].sourceId = groupId;
-        m_scene.PrimitiveIdPrefixSum.push_back(m_scene.primitives.size());
+        QCHART_DIRTY_MSG(QStringLiteral("  series<'%1'> 被重新收集").arg(s->name()));
+        QChartSegment seg;
+        seg.owner = s;
+        s->collectPrimitives(seg, m_axisX, m_axisY, m_axisZ);
+        // 空段丢弃：不产生"零图元段"
+        if (seg.prims.isEmpty()) continue;
+        m_scene.seriesSegments.append(seg);
     }
 }
 

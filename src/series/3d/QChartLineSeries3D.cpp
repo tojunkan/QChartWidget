@@ -22,11 +22,12 @@ void QChartLineSeries3D::setCullingEnabled(bool v) {
 
 // ===== 图元收集 =====
 // 连续的**有效**点组成一段折线：2 个点 → Line；>2 个点 → Path。NaN/Inf 断段。
-void QChartLineSeries3D::collectPrimitives(QChartScene& scene,
+void QChartLineSeries3D::collectPrimitives(QChartSegment& seg,
                                            const QChartAxis* ax, const QChartAxis* ay,
                                            const QChartAxis* az) const {
     const int n = count();
     QVector<QVector3D> run;
+    int runStart = 0;               // 本段折线的**首点数据下标**（契约 C3：一个图元跨多个数据项 → 写起点）
     auto flush = [&]() {
         if (run.isEmpty()) return;
         QChartPrimitive p;
@@ -40,7 +41,7 @@ void QChartLineSeries3D::collectPrimitives(QChartScene& scene,
         }
         p.color = color();
         p.penWidth = static_cast<float>(m_lineWidth);
-        scene.primitives.append(p);
+        seg.prims.append(p);
         run.clear();
     };
 
@@ -54,6 +55,7 @@ void QChartLineSeries3D::collectPrimitives(QChartScene& scene,
             flush();
             continue;
         }
+        if (run.isEmpty()) runStart = i;   // 本段的首点
         run.append(QVector3D(static_cast<float>(nx), static_cast<float>(ny),
                              static_cast<float>(nz)));
     }

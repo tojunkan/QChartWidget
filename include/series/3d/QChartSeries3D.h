@@ -71,7 +71,7 @@ public:
     // ===== 图元收集（Renderer 3D 主路径：只产 Numeric 图元，不排序不绘制）=====
     /// 与 2D 同构：ax/ay/az ->toNumeric 得到 Numeric 三元组 → QChartPrimitive（numA 等）。
     /// 投影（Numeric→World）与相机（World→screen）由 renderer 统一完成。
-    void collectPrimitives(QChartScene& scene,
+    void collectPrimitives(QChartSegment& seg,
                            const QChartAxis* ax, const QChartAxis* ay,
                            const QChartAxis* az = nullptr) const override = 0;
 

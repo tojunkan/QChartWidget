@@ -15,6 +15,7 @@
 #include <QMatrix4x4>
 #include <cstring>
 #include "QChartScene.h"
+#include "QChartDebug.h"   // 脏变量观测（chart.dirty）
 
 class QChartAbstractProjection;
 
@@ -47,8 +48,10 @@ public:
         const bool same = m_hasContentState && m_contentKey == contentKey;
         m_contentKey = contentKey;
         m_hasContentState = true;
-        if (!same)
+        if (!same) {
+            QCHART_DIRTY_MSG(QStringLiteral("layer: content-fingerprint CHANGED -> m_dataDirty"));
             m_dataDirty = true;
+        }
     }
     /// 数据版本（invalidateData()/invalidateView() 自增）：可并入内容指纹
     quint64 contentRevision() const { return m_contentRevision; }
@@ -69,9 +72,17 @@ public:
     /// 退化范围（min==max，不 fit、相机不变）时轴刻度已变但层未置脏——二维轴→层置脏通路需在
     /// QChartWidget 内补（本任务 inScope 不含该文件，留待后续批次）；三维已由 QChartWidget3D 接通
     /// “轴范围变化 → invalidateData()”。
-    void invalidateData() { m_dataDirty = true; ++m_contentRevision; }
+    void invalidateData() {
+        ++m_contentRevision;
+        m_dataDirty = true;
+        QCHART_DIRTY_MSG(QStringLiteral("layer: invalidateData() -> m_dataDirty"));
+    }
     /// 视图变化（相机操作、resize 经 plotArea、投影/背景切换）→ 同样必须重收集（规则更正的落点）
-    void invalidateView() { m_dataDirty = true; ++m_contentRevision; }
+    void invalidateView() {
+        ++m_contentRevision;
+        m_dataDirty = true;
+        QCHART_DIRTY_MSG(QStringLiteral("layer: invalidateView() -> m_dataDirty"));
+    }
 
     /// 视图状态指纹注入（widget 渲染前调用）：相机视图投影矩阵 × plotArea × 投影 × 背景。
     /// 与上次不同 ⇒ 视图变化 ⇒ 置脏（相机 orbit/dolly/pan/zoom/fit、resize、投影/背景切换全覆盖；
@@ -89,8 +100,10 @@ public:
         m_viewProjection = proj;
         m_viewBackground = bg;
         m_hasViewState = true;
-        if (!same)
+        if (!same) {
+            QCHART_DIRTY_MSG(QStringLiteral("layer: view-fingerprint CHANGED -> m_dataDirty"));
             m_dataDirty = true;   // 视图变化（含首帧）→ 必须重收集背景
+        }
     }
 
     /// 场景快照收集入口 —— m_dataDirty 的**唯一消费点**：脏则收集并计数，净则跳过（返回 false）。
@@ -98,9 +111,17 @@ public:
     {
         if (!m_dataDirty)
             return false;
+        QCHART_DIRTY_MSG(QStringLiteral("layer: collect BEGIN（m_dataDirty 被消费）"));
         collectPrimitives();
         m_dataDirty = false;
         ++m_collectCount;
+        int prims = 0;
+        for (const QChartSegment& s : m_scene.axisSegments) prims += s.prims.size();
+        for (const QChartSegment& s : m_scene.seriesSegments) prims += s.prims.size();
+        QCHART_DIRTY_MSG(QStringLiteral("layer: collect END axisSegs=%1 seriesSegs=%2 prims=%3 (第 %4 次收集)")
+                             .arg(m_scene.axisSegments.size())
+                             .arg(m_scene.seriesSegments.size())
+                             .arg(prims).arg(m_collectCount));
         return true;
     }
     int collectCount() const { return m_collectCount; }   // 诊断：重收集次数（单测计数断言用）

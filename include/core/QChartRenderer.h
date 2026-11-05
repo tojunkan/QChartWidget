@@ -19,6 +19,7 @@
 #include "QChartPrimitive.h"
 #include "QChartTextLabel.h"
 #include "QChartScene.h"
+#include "QChartDebug.h"   // 脏变量观测（chart.dirty）
 
 class QChartAxis;
 class QChartLayer;
@@ -67,7 +68,10 @@ public:
     /// 4g：本标记由 widget 在“层重收集（ensureSceneCollected() 为真）”时调用——不再每帧无条件置位；
     /// 规则更正：**视图变化必须重收集背景**（网格脊/刻度/标签由轴持有的可见 numeric 范围生成），
     /// 本阶段为**粗粒度 viewDirty = 全量更新（重收集 + 变换 + 裁剪）**，背景/前景分级留待后续批次。
-    void invalidateView() { m_viewDirty = true; }
+    void invalidateView() {
+        m_viewDirty = true;
+        QCHART_DIRTY_MSG(QStringLiteral("renderer: invalidateView() -> m_viewDirty=true"));
+    }
 
     // ===== t75：标签自动避让状态（迟滞）只读查询（测试/诊断入口；契约见下方 drawLabel 注释）=====
     /// 标签稳定身份键（当前实现 = 字号 + 文字；图层已按契约把组号盖进 label.sourceId，
@@ -89,10 +93,13 @@ protected:
     // 2. 裁剪 + 标签解析（CPU 后端精确裁，GPU 后端可以粗裁或全可见）
     virtual void cullAndResolveLabels(QChartScene& scene) = 0;
 
-    /// 绘制所有可见图元（visibility[i] == true）
+    /// 绘制所有可见图元。
+    /// ★ 可见性不再走独立参数，而是**写在图元身上**（QChartPrimitive::visible，由步骤 2 写回；
+    ///   见 QChartScene.h 契约 C5/C6）。理由：scene 是渲染与拾取的唯一共同输入，
+    ///   可见性必须和 cart* 一样成为快照的一部分——否则拾取侧要么复制一份裁剪判据，
+    ///   要么反过来依赖渲染器的私有状态，两条路都会让"两后端一致"失效。
     virtual void drawPrimitives(QChartScene& scene,
-                                QPaintDevice* device,
-                                const QVector<bool>& visibility) = 0;
+                                QPaintDevice* device) = 0;
 
     /// 绘制所有可见标签（label.visible == true）
     virtual void drawLabels(QChartScene& scene,
@@ -146,7 +153,8 @@ protected:
     //   translate 同构探针 inkA(parent)=450 / inkB(local)=450 / maskDiff=0。
     // 返回 true = 已解析（label.cartesianAnchor/visible 已写入）；false = 不适用（非自由标签、
     //   组内无图元、或缺投影）。
-    bool hybridResolveFreeLabelAnchor(const QChartScene& scene, QChartTextLabel& label) const;
+    bool hybridResolveFreeLabelAnchor(const QChartScene& scene, const QChartSegment& seg,
+                                      QChartTextLabel& label) const;
     // ========================================================================
 
     // 可选钩子
@@ -159,7 +167,8 @@ protected:
     // 4g：视图/数据变化（= 场景快照重建）→ 需要重算变换与裁剪；无变化则不重算（缓存有效）。
     // 粗粒度全量更新语义见 invalidateView() 注释（背景/前景分级留待后续批次）。
     bool m_viewDirty = true;
-    QVector<bool> m_visibilityCache;  // 与 scene.primitives 一一对应
+    // m_visibilityCache 已删除：裁剪结果直接写回 QChartPrimitive::visible（契约 C5/C6）。
+    // 不要在渲染器里再重建一份"与 primitives 一一对应的可见性数组"——那是两份需要同步的状态。
 
     /// t75：避让状态 LRU 裁剪（超过 kAvoidMaxEntries 时丢弃最久未更新条目）
     void pruneAvoidState();

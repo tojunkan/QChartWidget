@@ -49,48 +49,50 @@ void QOpenGLChartRenderer::transformNumericToCartesian(QChartScene& /*scene*/)
 
 void QOpenGLChartRenderer::cullAndResolveLabels(QChartScene& scene)
 {
-    const int N = scene.primitives.size();
-    m_visibilityCache.resize(N);
-    std::fill(m_visibilityCache.begin(), m_visibilityCache.end(), true);
-
     const QChartAbstractProjection* proj = scene.projection;
-    if (!proj) return;
 
-    // ---- 标签解析（批次1：锚点三级优先级；见 QChartTextLabel.h 契约）----
-    for (QChartTextLabel& label : scene.labels) {
-        // tier1：显式锚点 → CPU 侧 toCartesian + 像素可见性判定（绘制仍走 GL/覆盖层）
-        if (label.hasExplicitAnchor()) {
-            label.cartesianAnchor = proj->toCartesian(label.numericAnchor);
-            label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
-            continue;
-        }
+    // 逐段解析（段内完成，不跨段）
+    auto resolveSegment = [&](QChartSegment& seg) {
+        // ★ GPU 后端：真正的裁剪在 GPU 上（视锥/深度由硬件判），CPU 侧一律视为可见。
+        //   因此 prim.visible 在 GL 路径上恒为 true、**不承载语义**；GL 的拾取走 ID 帧，也不需要它。
+        //   （契约 S6 要求该字段与 cart* 一样由步骤 2 写回，所以仍然显式赋值，
+        //     避免继承上一次收集残留的 false。）
+        for (QChartPrimitive& prim : seg.prims) prim.visible = true;
+        if (!proj) return;
 
-        // tier2：锚点全 NaN 且绑定图元 → 用该图元的**组尾锚点**（t73：与二维 CPU 后端同一分类，
-        // Line 取 numB，避免两后端锚点语义分叉）算 Cartesian 锚点；
-        // 图元可见性归 GPU 裁剪（本后端粗裁 = 全可见）
-        if (label.refPrimitiveId >= 0) {
-            if (label.refPrimitiveId < N) {
-                const QVector3D num =
-                    qchartGroupTailAnchorNumeric(scene.primitives[label.refPrimitiveId]);
-                label.cartesianAnchor = proj->toCartesian(num);
-                label.visible = true;
-            } else {
-                label.visible = false;   // 越界绑定：无对应图元 → 不可见
+        for (QChartTextLabel& label : seg.labels) {
+            // tier1：显式锚点 → CPU 侧 toCartesian + 像素可见性判定
+            if (label.hasExplicitAnchor()) {
+                label.cartesianAnchor = proj->toCartesian(label.numericAnchor);
+                label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
+                continue;
             }
-            continue;
-        }
 
-        // tier3：自由标签 —— 既定契约（批次1 过审）：纯 GPU 后端无能力渲染自由标签 → 不可见。
-        // 二维网格脊标签（批次2 A 以自由标签提交）因此在 GL 后端不显示：已知缺陷、既定接受差异。
-        // 未来"混合后端"（CPU 前置 projection+裁剪）的预研旁路见
-        // QChartRenderer::hybridResolveFreeLabelAnchor（当前不启用，本路径不得调用）。
-        label.visible = false;
-    }
+            // tier2：段内绑定 → 用该图元的组尾锚点（与 CPU 后端同一分类，避免两后端锚点语义分叉）；
+            // 图元可见性归 GPU 裁剪（本后端粗裁 = 全可见）
+            if (label.segPrim >= 0) {
+                if (label.segPrim < seg.prims.size()) {
+                    const QVector3D num = qchartGroupTailAnchorNumeric(seg.prims[label.segPrim]);
+                    label.cartesianAnchor = proj->toCartesian(num);
+                    label.visible = true;
+                } else {
+                    label.visible = false;   // 越界绑定：无对应图元 → 不可见
+                }
+                continue;
+            }
+
+            // tier3：自由标签 —— 既定契约：纯 GPU 后端无能力渲染自由标签 → 不可见。
+            // 二维网格脊标签因此在 GL 后端不显示：已知缺陷、既定接受差异。
+            label.visible = false;
+        }
+    };
+
+    for (QChartSegment& seg : scene.axisSegments) resolveSegment(seg);
+    for (QChartSegment& seg : scene.seriesSegments) resolveSegment(seg);
 }
 
 void QOpenGLChartRenderer::drawPrimitives(QChartScene& scene,
-                                          QPaintDevice* device,
-                                          const QVector<bool>& /*visibility*/)
+                                          QPaintDevice* device)
 {
     if (!QOpenGLContext::currentContext()) {
         qWarning() << "No current OpenGL context!";
@@ -143,7 +145,14 @@ void QOpenGLChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
     painter.translate(-plotArea.topLeft());
     painter.setClipRect(plotArea);
 
-    for (const QChartTextLabel& label : scene.labels) {
+    QVector<const QChartTextLabel*> flat;
+    for (const QChartSegment& s : scene.axisSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+    for (const QChartSegment& s : scene.seriesSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+
+    for (const QChartTextLabel* lp : flat) {
+        const QChartTextLabel& label = *lp;
         if (!label.visible) continue;
 
         // 用 Camera 的 project 将 Cartesian 转成屏幕坐标（平移后即 child-local）
@@ -173,8 +182,14 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
     QOpenGLFunctions_3_3_Core* f = glFuncs();
     if (!f) return;
 
-    const QVector<QChartPrimitive>& prims = scene.primitives;
-    const int N = prims.size();
+    // 段序展开成扁平表（批次仍按样式全局分组，但遍历顺序 = 段序，保证轴垫在系列之下）
+    QVector<const QChartPrimitive*> flat;
+    for (const QChartSegment& s : scene.axisSegments)
+        for (const QChartPrimitive& p : s.prims) flat.append(&p);
+    for (const QChartSegment& s : scene.seriesSegments)
+        for (const QChartPrimitive& p : s.prims) flat.append(&p);
+
+    const int N = flat.size();
     if (N == 0) return;
 
     // ---- 1. 先按图元类型分片 ----
@@ -200,7 +215,7 @@ void QOpenGLChartRenderer::uploadBatches(const QChartScene& scene)
     QVector<Group> groups;
 
     for (int i = 0; i < N; ++i) {
-        const QChartPrimitive& prim = prims[i];
+        const QChartPrimitive& prim = *flat[i];
 
         ShaderKind kind;
         switch (prim.type) {

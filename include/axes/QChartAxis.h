@@ -38,7 +38,7 @@ class QChartAxis : public QObject
     Q_PROPERTY(QColor color READ color WRITE setColor)
     Q_PROPERTY(int tickCount READ tickCount WRITE setTickCount NOTIFY tickCountChanged)
     Q_PROPERTY(int subTickCount READ subTickCount WRITE setSubTickCount NOTIFY subTickCountChanged)
-    Q_PROPERTY(Qt::Alignment alignment READ alignment WRITE setAlignment)
+    Q_PROPERTY(Qt::Alignment alignment READ alignment WRITE setAlignment NOTIFY alignmentChanged)
 
 public:
     /// 标签生成模式（批次1 契约：替代原 bool drawLabels 参数）
@@ -74,17 +74,18 @@ public:
     void drawAtEdge(QPainter* painter, const DrawContext& ctx,
                     bool drawAxisLine, bool drawLabels, bool drawTicks) const;
 
-    /// 数据主脊：生成 Numeric 空间的图元
+    /// 数据主脊：把本脊的图元与标签追加到**一个段**里（段由 layer 创建并决定是否接纳）。
     /// dimMin/dimMax: 本轴的 Numeric 范围
     /// offset0/offset1: 另外两维的固定值
     /// dimIndex: 0/1/2，表示本轴沿哪个维度变化
     /// 二维情况下，offset1表示z轴，恒为0，且dimIndex只能是0或1
     /// labelMode: 标签生成模式（默认 Tickwise = 现状"每刻度一标签"）
+    /// ★ 几何一律是 **Numeric 直线段**（Type::Line）：非线性投影下的加密采样归 renderer，
+    ///   收集期不判投影，因此这里不再需要 projection、也不再需要采样段数。
     virtual void drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,
-                                QChartScene& scene,
-                                int segments = 72,
+                                QChartSegment& seg,
                                 LabelMode labelMode = LabelMode::Tickwise) const;
 
     /// 边框轴占用空间估算；数据主脊返回 {0, 0}
@@ -100,7 +101,8 @@ public:
 
     // ===== 样式 / 查询 =====
     Qt::Alignment alignment() const { return m_alignment; }
-    void setAlignment(Qt::Alignment a) { m_alignment = a; }
+    /// 对齐方式决定轴占哪条边（→ 外边距归属），必须通知布局重算。
+    void setAlignment(Qt::Alignment a);
 
     bool isVisible() const { return m_visible; }
     void setVisible(bool v);
@@ -147,8 +149,12 @@ public:
     virtual bool isInteractive() const { return true; }
 
 signals:
-    /// 轴范围变化通知（setRange 写状态后发出；无内部映射语义）
+    /// 轴范围变化通知（setRange 写状态后发出；无内部映射语义）。
+    /// ★ 边界：rangeChanged 只表示"域变了"（消费者 = widget 同步相机域）；
+    ///   其余属性（对齐/可见性/样式/刻度数）走下面几个属性信号（消费者 = layer 重建轴段
+    ///   + widget 重算外边距）。两者不得互相包含，否则防回环守卫无法判定。
     void rangeChanged(qreal min, qreal max);
+    void alignmentChanged();
     void visibleChanged();
     void styleChanged();
     void tickCountChanged();

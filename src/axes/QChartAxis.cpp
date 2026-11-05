@@ -38,6 +38,13 @@ QChartAxis::QChartAxis(QObject* parent, Qt::Alignment alignment)
 }
 
 // ===== 样式 setter =====
+void QChartAxis::setAlignment(Qt::Alignment a) {
+    if (m_alignment == a) return;
+    m_alignment = a;
+    // 对齐方式决定轴占哪条边 → 外边距归属变了 → 布局必须重算（见 QChartWidget::addAxis 的连接）。
+    emit alignmentChanged();
+}
+
 void QChartAxis::setVisible(bool v) {
     if (m_visible == v) return;
     m_visible = v;
@@ -244,14 +251,13 @@ void QChartAxis::drawAtEdge(QPainter* painter,
 void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,
-                                QChartScene& scene,
-                                int segments,
+                                QChartSegment& seg,
                                 LabelMode labelMode) const
 {
     if (!m_visible) return;
     if (dimMin > dimMax) std::swap(dimMin, dimMax);
-    auto outPrims = &scene.primitives;
-    auto outLabels = &scene.labels;
+    auto outPrims = &seg.prims;
+    auto outLabels = &seg.labels;
 
     // 1. 获取刻度
     QVector<qreal> ticks = tickValues(dimMin, dimMax);
@@ -275,13 +281,10 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
     }
     QVector<QVector3D> dirs = { axisDir, -axisDir, dir1, -dir1, dir2, -dir2 };
 
-    // 3. 生成脊线（4i：恒等投影下直线化）
-    //    判据 = scene.projection->isIdentityMapping()（今日 true ⇔ QCartesianProjection / QCartesianProjection3D）：
-    //      恒等 ⇒ 直接提交 2 顶点直线（Type::Line + numA/numB；CPU 2D/3D 与 GL 三路均已支持 Line）；
-    //      非恒等 ⇒ 保持按 segments 采样的 Path（Polar / Functional / 插值投影等）。
-    //    ★禁止用 projection->type() 判直线：QInterpolatedProjection::type() 返回**目标**投影类型，
-    //      投影切换动画中途按 type() 判会令仍在弯曲的脊线突然变直。
-    const bool identityMapping = (scene.projection && scene.projection->isIdentityMapping());
+    // 3. 生成脊线：**一律 Numeric 直线**。
+    //    ★ 非线性投影（polar / functional / 插值动画）下的加密采样归 renderer 的变换阶段，
+    //      收集期不判投影 —— 因此这里既不看 isIdentityMapping，也不需要采样段数。
+    //      历史实现曾在非恒等投影下提交 Path，那是旧架构（投影参与收集）的遗留，已删除。
     auto spinePoint = [&](qreal val) {
         switch (dimIndex) {
         case 0: return QVector3D(val, offset0, offset1);
@@ -292,17 +295,9 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
     QChartPrimitive axisLine;
     axisLine.color = axisColor;
     axisLine.penWidth = 1.0;
-    if (identityMapping) {
-        axisLine.type = QChartPrimitive::Type::Line;   // 2 顶点直线
-        axisLine.numA = spinePoint(dimMin);
-        axisLine.numB = spinePoint(dimMax);
-    } else {
-        axisLine.type = QChartPrimitive::Type::Path;   // 采样折线
-        for (int i = 0; i <= segments; ++i) {
-            const qreal t = static_cast<qreal>(i) / segments;
-            axisLine.numVerts.append(spinePoint(dimMin + t * (dimMax - dimMin)));
-        }
-    }
+    axisLine.type = QChartPrimitive::Type::Line;
+    axisLine.numA = spinePoint(dimMin);
+    axisLine.numB = spinePoint(dimMax);
     outPrims->append(axisLine);
 
     // 4. 对每个主刻度生成 7 个点 + 1 个标签
@@ -339,8 +334,8 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
         }
 
         // 4c. 标签（锚点指向刻度位置，方向由 Renderer 决定）
-        // 批次1：numericAnchor 为显式锚点（tier1）→ 数值锚点生效，不再被 refId 覆盖；
-        // refPrimitiveId 仍绑定本刻度中心点图元，作为锚点缺失时的回退（tier2）。
+        // 批次1：numericAnchor 为显式锚点（tier1）→ 数值锚点生效，不再被绑定覆盖；
+        // segPrim 仍绑定本刻度中心点图元（**段内偏移**），作为锚点缺失时的回退（tier2）。
         if (labelsEnabled && (singleIdx < 0 || i == singleIdx)
             && i < labels.size() && !labels[i].isEmpty()) {
             QChartTextLabel label;
@@ -349,10 +344,9 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
             label.fontSize = 10.0f;
             label.alignment = Qt::AlignCenter;
             label.numericAnchor = pos;
-            label.sourceId = -1;
-            // 4i：装饰被跳过（Single/None）时不得留下悬空下标 → refPrimitiveId = -1（显式锚点仍有效）；
-            //     Tickwise 保持绑定到本刻度中心点图元（tier2 回退）。
-            label.refPrimitiveId = decorate ? centerIdx : -1;
+            // 4i：装饰被跳过（Single/None）时不得留下悬空下标 → segPrim = -1（显式锚点仍有效）；
+            //     Tickwise 保持绑定到本刻度中心点图元（段内偏移，tier2 回退）。
+            label.segPrim = decorate ? centerIdx : -1;
             outLabels->append(label);
         }
     }

@@ -18,18 +18,17 @@ struct QChartPrimitive
     };
     Type type = Type::Point;
 
-    // ---- 标识 ----
-    int id = -1;                // ★ 全局唯一 ID（收集时赋值为向量下标）
-    int sourceId = -1;          // 归属（Axis 或 Series 的 ID）
-    // int PrimitiveId = -1;       // 数据点索引（拾取用）
-    // Scene实际上是一个巨大的数组，下标就可以当索引了
+    // ===== 标识 =====
+    // ★ 图元身上**没有任何编号**。它是谁产出的、属于第几段，全由它所在的 QChartSegment 表达
+    //   （段自带 owner）；拾取只要"哪一段"，段号就是 seriesSegments 的下标，不需要图元级编号。
+    //   历史上这里有过 sourceId / dataIndex / id 等字段，段化之后一并删除，别再往回加。
 
     // ---- 样式 ----
     QColor color;               // 主色（线条/边框/点色）
     QColor fillColor;           // 填充色（Rect/Ellipse/Polygon/Mesh 用）
     float penWidth = 1.0f;      // 线宽（像素）
     float markerSize = 4.0f;    // Point 标记大小（半径，像素）
-    float depth = 0.0f;         // 3D CPU 排序用（GPU 后端忽略）
+    float depth = 0.0f;         // 3D CPU 排序用（GPU 后端忽略；按设计将在渲染器内部现算后删除）
 
     // ===== Numeric 空间（收集时由 Axis 数值化后填入） =====
     // Point / Line
@@ -52,4 +51,12 @@ struct QChartPrimitive
     QRectF cartRect{0, 0, 0, 0};
     QVector<QVector3D> cartVerts;
     QVector<int> cartIndices;   // 通常直接复用 numIndices，仅在变换后需要重排时使用
+
+    // ===== 运行时状态（渲染步骤 2 写回；收集期不碰）=====
+    /// 本帧裁剪结果：由 renderer 在 cull 阶段写回（契约 S5/S6）。
+    /// ★ 视口裁剪只能"标 false"，**永远不能从段里删图元**——删了段内下标就抖，
+    ///   标签的段内绑定与拾取的段遍历都会随之错位。
+    /// ★ GL 后端恒为 true：真正的裁剪在 GPU 上做（深度/视锥由硬件判），该字段不承载语义。
+    ///   CPU 后端才真正使用它。
+    bool visible = true;
 };

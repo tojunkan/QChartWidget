@@ -2,11 +2,16 @@
 #include "QChartRenderer.h"
 #include "QChartCamera.h"
 #include "QChartAbstractProjection.h"
+#include "QChartDebug.h"
 #include <QRectF>
 #include <QPainter>
 #include <QVector>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+
+// 脏变量追踪类别（chart.dirty）：默认关，验证时 QT_LOGGING_RULES="chart.*=false;chart.dirty=true"
+Q_LOGGING_CATEGORY(logDirty, "chart.dirty")
 
 // ============================================================================
 // t75：标签自动避让（"最空一边"启发式）常量——契约见 include/core/QChartRenderer.h
@@ -62,17 +67,62 @@ void QChartRenderer::render(QChartScene& scene, QPaintDevice* device)
 
     onRenderBegin(device);
 
+    // ===== 脏变量观测：变换产物的分段校验和 =====
+    // 用途：camera / layout 单独变化时，投影没变 ⇒ 同一份 num* 应产出同一份 cart*。
+    // 所以 [seriesSegSum] 纹丝不动就证明"变换白跑了一遍"（浪费而非错误）。
+    // 注意：GL 后端的 transformNumericToCartesian 是空函数（变换在着色器里），
+    //       其 cart* 恒为 0 ⇒ 校验和在 GL 后端不具备判别力，只在 CPU 后端有意义。
+    auto cartSum = [](const QVector<QChartSegment>& segs) {
+        quint64 h = 0xcbf29ce484222325ULL;
+        auto mix = [&h](float f) {
+            quint32 bits = 0;
+            std::memcpy(&bits, &f, sizeof(bits));
+            h ^= bits;
+            h *= 0x100000001b3ULL;
+        };
+        for (const QChartSegment& s : segs) {
+            for (const QChartPrimitive& p : s.prims) {
+                mix(p.cartA.x()); mix(p.cartA.y()); mix(p.cartA.z());
+                mix(p.cartB.x()); mix(p.cartB.y()); mix(p.cartB.z());
+                mix(static_cast<float>(p.cartRect.x()));
+                mix(static_cast<float>(p.cartRect.y()));
+                mix(static_cast<float>(p.cartRect.width()));
+                mix(static_cast<float>(p.cartRect.height()));
+                for (const QVector3D& v : p.cartVerts) { mix(v.x()); mix(v.y()); mix(v.z()); }
+            }
+        }
+        return h;
+    };
+
     // ---- 步骤 2：变换与裁剪（4g：仅在场景快照重建后执行——widget 在层重收集时置 viewDirty；
     //      视图变化必须重收集背景（网格/刻度/标签随可见 numeric 范围更新），
     //      当前为粗粒度全量更新（重收集 + 变换 + 裁剪），背景/前景分级留待后续批次） ----
     if (m_viewDirty) {
+        QCHART_DIRTY_MSG(QStringLiteral("renderer: viewDirty consumed -> 执行 transform + cull"));
         transformNumericToCartesian(scene);
+
+        int axisPrims = 0, seriesPrims = 0;
+        for (const QChartSegment& s : scene.axisSegments) axisPrims += s.prims.size();
+        for (const QChartSegment& s : scene.seriesSegments) seriesPrims += s.prims.size();
+        QCHART_DIRTY_MSG(QStringLiteral("  transform: axisPrims=%1 seriesPrims=%2 axisSum=%3 seriesSegSum=%4")
+                             .arg(axisPrims).arg(seriesPrims)
+                             .arg(cartSum(scene.axisSegments), 0, 16)
+                             .arg(cartSum(scene.seriesSegments), 0, 16));
+
         cullAndResolveLabels(scene);
+
+        int vis = 0, total = 0;
+        for (const QChartSegment& s : scene.axisSegments)
+            for (const QChartPrimitive& p : s.prims) { ++total; if (p.visible) ++vis; }
+        for (const QChartSegment& s : scene.seriesSegments)
+            for (const QChartPrimitive& p : s.prims) { ++total; if (p.visible) ++vis; }
+        QCHART_DIRTY_MSG(QStringLiteral("  cull: visible=%1/%2").arg(vis).arg(total));
+
         m_viewDirty = false;
     }
 
-    // ---- 步骤 3：图元绘制 ----
-    drawPrimitives(scene, device, m_visibilityCache);
+    // ---- 步骤 3：图元绘制（可见性已在步骤 2 写回每图元的 visible 字段）----
+    drawPrimitives(scene, device);
 
     // ---- 步骤 4：标签绘制 ----
     drawLabels(scene, device);
@@ -154,22 +204,18 @@ QVector3D qchartGroupTailAnchorCartesian(const QChartPrimitive& p)
 }
 
 bool QChartRenderer::hybridResolveFreeLabelAnchor(const QChartScene& scene,
+                                                 const QChartSegment& seg,
                                                  QChartTextLabel& label) const
 {
     // ★ 旁路函数：默认不被正常渲染路径调用（见头文件注释）。启用属"混合后端"阶段内容。
-    if (label.hasExplicitAnchor() || label.refPrimitiveId != -1) return false;
-    if (label.sourceId < 0) return false;
+    if (label.hasExplicitAnchor() || label.segPrim != -1) return false;
 
     const QChartAbstractProjection* proj = scene.projection;
     if (!proj) return false;
+    if (seg.prims.isEmpty()) return false;
 
-    // 组尾图元：同 sourceId 的最后一个（GL 粗裁=全可见 → "最后一个"即"最后可见"）
-    int tail = -1;
-    for (int i = 0; i < scene.primitives.size(); ++i)
-        if (scene.primitives[i].sourceId == label.sourceId) tail = i;
-    if (tail < 0) return false;
-
-    label.cartesianAnchor = proj->toCartesian(qchartGroupTailAnchorNumeric(scene.primitives[tail]));
+    // 段尾图元：段内最后一个（GL 粗裁 = 全可见 → "最后一个"即"最后可见"）
+    label.cartesianAnchor = proj->toCartesian(qchartGroupTailAnchorNumeric(seg.prims.last()));
     label.visible = anchorVisibleInPlotArea(scene, label.cartesianAnchor);
     return true;
 }
@@ -282,7 +328,14 @@ void QChartRenderer::drawLabels(QChartScene& scene, QPaintDevice* device)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setClipRect(plotArea);
 
-    for (const QChartTextLabel& label : scene.labels) {
+    QVector<const QChartTextLabel*> flat;
+    for (const QChartSegment& s : scene.axisSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+    for (const QChartSegment& s : scene.seriesSegments)
+        for (const QChartTextLabel& l : s.labels) flat.append(&l);
+
+    for (const QChartTextLabel* lp : flat) {
+        const QChartTextLabel& label = *lp;
         if (!label.visible) continue;
 
         QChartProjectedPoint pp = camera->project(label.cartesianAnchor, plotArea);//Cartesian -> Pixel

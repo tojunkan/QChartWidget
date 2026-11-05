@@ -25,12 +25,13 @@ void QPolygonSeries::setStrokeVisible(bool v) {
 // ===== 图元收集 =====
 // 每段连续有效顶点 → 一个 Polygon（填充；renderer 负责三角化）；
 // strokeVisible 时再补一条闭合 Path（额外首点收尾）。NaN/Inf 断段，各段独立成多边形。
-void QPolygonSeries::collectPrimitives(QChartScene& scene,
+void QPolygonSeries::collectPrimitives(QChartSegment& seg,
                                        const QChartAxis* ax, const QChartAxis* ay,
                                        const QChartAxis* az) const {
     Q_UNUSED(az);   // 二维系列不用第三轴
 
     QVector<QVector3D> run;
+    int runStart = 0;               // 本段多边形的**首点数据下标**（契约 C3：一个图元跨多个数据项 → 写起点）
     auto flush = [&]() {
         if (run.size() < 3) { run.clear(); return; }   // 少于 3 点构不成多边形
 
@@ -47,7 +48,7 @@ void QPolygonSeries::collectPrimitives(QChartScene& scene,
         poly.numVerts = run;
         poly.fillColor = fill;
         poly.color = fill;              // 供不区分 fill/border 的后端兜底
-        scene.primitives.append(poly);
+        seg.prims.append(poly);
 
         // ② 描边：额外一条闭合 Path
         if (m_strokeVisible) {
@@ -57,12 +58,13 @@ void QPolygonSeries::collectPrimitives(QChartScene& scene,
             stroke.numVerts.append(run.first());   // 闭合
             stroke.color = color();
             stroke.penWidth = 1.0f;               // TODO(stroke-width)
-            scene.primitives.append(stroke);
+            seg.prims.append(stroke);
         }
         run.clear();
     };
 
-    for (const QDataPoint& pt : m_points) {
+    for (int i = 0; i < m_points.size(); ++i) {
+        const QDataPoint& pt = m_points.at(i);
         // Data(QVariant) → Numeric(qreal)：轴负责数值化；无轴时按 toDouble 直通
         const qreal nx = ax ? ax->toNumeric(pt.x()) : pt.x().toDouble();
         const qreal ny = ay ? ay->toNumeric(pt.y()) : pt.y().toDouble();
@@ -70,6 +72,7 @@ void QPolygonSeries::collectPrimitives(QChartScene& scene,
             flush();
             continue;
         }
+        if (run.isEmpty()) runStart = i;   // 本段的首点
         run.append(QVector3D(static_cast<float>(nx), static_cast<float>(ny), 0.0f));
     }
     flush();

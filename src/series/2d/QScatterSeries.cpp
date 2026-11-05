@@ -12,11 +12,12 @@ QScatterSeries::QScatterSeries(const QString& name, QObject* parent)
 }
 
 // ===== 图元收集：每点一个 Point 图元（Numeric 空间），非法点跳过 =====
-void QScatterSeries::collectPrimitives(QChartScene& scene,
+void QScatterSeries::collectPrimitives(QChartSegment& seg,
                                        const QChartAxis* ax, const QChartAxis* ay,
                                        const QChartAxis* az) const {
     Q_UNUSED(az);   // 二维系列不用第三轴
-    for (const QDataPoint& pt : m_points) {
+    for (int i = 0; i < m_points.size(); ++i) {
+        const QDataPoint& pt = m_points.at(i);
         // Data(QVariant) → Numeric(qreal)：轴负责数值化；无轴时按 toDouble 直通
         const qreal nx = ax ? ax->toNumeric(pt.x()) : pt.x().toDouble();
         const qreal ny = ay ? ay->toNumeric(pt.y()) : pt.y().toDouble();
@@ -25,11 +26,12 @@ void QScatterSeries::collectPrimitives(QChartScene& scene,
         QChartPrimitive p;
         p.type = QChartPrimitive::Type::Point;
         p.numA = QVector3D(static_cast<float>(nx), static_cast<float>(ny), 0.0f);
+        // 契约 C3：一个点一个图元 → 数据下标就是它在系列里的下标
         p.color = color();
         p.fillColor = m_fillColor;
         p.penWidth = static_cast<float>(m_pen.widthF());
         p.markerSize = static_cast<float>(m_markerSize);
-        scene.primitives.append(p);
+        seg.prims.append(p);
     }
 }
 

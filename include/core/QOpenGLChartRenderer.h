@@ -41,8 +41,7 @@ public:
     void transformNumericToCartesian(QChartScene& scene) override;
     void cullAndResolveLabels(QChartScene& scene) override;
     void drawPrimitives(QChartScene& scene,
-                        QPaintDevice* device,
-                        const QVector<bool>& visibility) override;
+                        QPaintDevice* device) override;
     void drawLabels(QChartScene& scene,
                     QPaintDevice* device) override;
 

@@ -45,7 +45,7 @@ void QChartSurfaceSeries::setParametricGrid(int rows, int cols,
 // ===== 图元收集：一个 TriangleMesh（Numeric 顶点 + 三角索引）=====
 // 每格 2 个三角形：左上→左下→右上、右上→左下→右下（逆时针，与顶点顺序约定一致）；
 // 四角任一非有限（NaN/Inf）→ 整个格跳过。
-void QChartSurfaceSeries::collectPrimitives(QChartScene& scene,
+void QChartSurfaceSeries::collectPrimitives(QChartSegment& seg,
                                             const QChartAxis* ax, const QChartAxis* ay,
                                             const QChartAxis* az) const {
     if (m_rows < 2 || m_cols < 2) return;
@@ -88,7 +88,9 @@ void QChartSurfaceSeries::collectPrimitives(QChartScene& scene,
     p.type = QChartPrimitive::Type::TriangleMesh;
     p.numVerts = verts;
     p.numIndices = indices;
+    // 契约 C3：整张网格是**一个**图元，代表从数据下标 0 开始的整片网格数据。
+    // 精确到"第几个格点"必须在图元内部再判（顶点序 = r*cols+c，可反推），不能靠图元下标。
     p.fillColor = color();
     p.color = color();
-    scene.primitives.append(p);
+    seg.prims.append(p);
 }

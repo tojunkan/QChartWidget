@@ -28,7 +28,7 @@ public:
     const QVector<QDataRect>& rectangles() const { return m_rects; }
 
     // ===== 图元收集：每个矩形 → 一个 Rect 图元（Numeric 轴对齐）；非法四边跳过 =====
-    void collectPrimitives(QChartScene& scene,
+    void collectPrimitives(QChartSegment& seg,
                            const QChartAxis* ax, const QChartAxis* ay,
                            const QChartAxis* az = nullptr) const override;
 

@@ -41,6 +41,7 @@
 #include <QTimer>
 #include <QPixmap>
 #include <QDebug>
+#include "QChartDebug.h"   // 脏变量观测（chart.dirty）
 
 static void applyBackend(QChartAbstractWidget* w, DemoBackend b)
 {
@@ -113,21 +114,24 @@ void logSceneSummary2D(QChartLayer* layer, DemoBackend backend)
 {
     if (!layer) return;
     const QChartScene& sc = layer->scene();
-    QSet<int> groups;        // 含系列组的全部 sourceId
-    QSet<int> labelGroups;   // 有标签的组（网格脊；系列组无标签）
-    int freeLabels = 0;
-    for (const QChartPrimitive& p : sc.primitives)
-        if (p.sourceId >= 0) groups.insert(p.sourceId);
-    for (const QChartTextLabel& l : sc.labels) {
-        if (l.sourceId >= 0) labelGroups.insert(l.sourceId);
-        if (l.refPrimitiveId == -1 && std::isnan(l.numericAnchor.x())) ++freeLabels;
+    const int spineCount = sc.axisSegments.size();
+    const int seriesCount = sc.seriesSegments.size();
+    int labels = 0, freeLabels = 0, spinesWithLabel = 0;
+    for (const QChartSegment& seg : sc.axisSegments) {
+        if (!seg.labels.isEmpty()) ++spinesWithLabel;
+        for (const QChartTextLabel& l : seg.labels) {
+            ++labels;
+            if (l.segPrim == -1 && std::isnan(l.numericAnchor.x())) ++freeLabels;
+        }
     }
+    for (const QChartSegment& seg : sc.seriesSegments) labels += seg.labels.size();
+
     const bool gl = (backend == DemoBackend::Gl);
-    qInfo().noquote() << QString("shot-summary axis[%1]: groups=%2 labels=%3 freeLabels=%4 (%5)")
+    qInfo().noquote() << QString("shot-summary axis[%1]: spines=%2 series=%3 labels=%4 freeLabels=%5 (%6)")
                              .arg(gl ? "gl" : "cpu")
-                             .arg(groups.size()).arg(sc.labels.size()).arg(freeLabels)
+                             .arg(spineCount).arg(seriesCount).arg(labels).arg(freeLabels)
                              .arg(gl ? QStringLiteral("GL 不渲染自由标签：网格线标签在本后端不显示（既定契约）")
-                                     : (labelGroups.size() == sc.labels.size()
+                                     : (spinesWithLabel == spineCount
                                             ? QStringLiteral("每线一标签 OK")
                                             : QStringLiteral("MISMATCH")));
 }
@@ -136,31 +140,38 @@ void logSceneSummary3D(QChartLayer3D* layer, QChartLayer3D::GridMode mode)
 {
     if (!layer) return;
     const QChartScene& sc = layer->scene3D();
+    int primCount = 0, labelCount = 0;
+    for (const QChartSegment& s : sc.axisSegments) { primCount += s.prims.size(); labelCount += s.labels.size(); }
+    for (const QChartSegment& s : sc.seriesSegments) { primCount += s.prims.size(); labelCount += s.labels.size(); }
     qInfo().noquote() << QString("shot-summary axis3d[%1]: prims=%2 labels=%3")
-                             .arg(gridModeKey(mode)).arg(sc.primitives.size()).arg(sc.labels.size());
+                             .arg(gridModeKey(mode)).arg(primCount).arg(labelCount);
 
     // 几何自检（诊断用）：环 = 固定 r/φ、θ 从 0 扫到 360 的 Path。
     // 打印环数量、World 空间首尾距离（>1e-6 即未闭合）、以及每环的 (r, φ)。
     if (mode != QChartLayer3D::GridMode::Lattice) return;
     const QChartProjection3D* proj = layer->projection3D();
     int rings = 0, openRings = 0;
-    for (const auto& prim : sc.primitives) {
-        if (prim.type != QChartPrimitive::Type::Path || prim.numVerts.size() < 2) continue;
-        const QVector3D& a = prim.numVerts.first();
-        const QVector3D& b = prim.numVerts.last();
-        if (qAbs(a.x() - b.x()) > 1e-9 || qAbs(a.z() - b.z()) > 1e-9) continue;      // 只认 y(θ) 扫动的
-        if (qAbs(qAbs(b.y() - a.y()) - 360.0) > 1e-6) continue;                      // 跨度须为 360
-        ++rings;
-        const QVector3D wa = proj ? proj->toCartesian(a) : a;
-        const QVector3D wb = proj ? proj->toCartesian(b) : b;
-        const qreal d = (wa - wb).length();
-        if (d > 1e-6) {
-            ++openRings;
-            if (openRings <= 6)
-                qInfo().noquote() << QString("  open-ring r=%1 phi=%2 dWorld=%3")
-                                         .arg(a.x()).arg(a.z()).arg(d);
+    auto scanSegment = [&](const QChartSegment& seg) {
+        for (const auto& prim : seg.prims) {
+            if (prim.type != QChartPrimitive::Type::Path || prim.numVerts.size() < 2) continue;
+            const QVector3D& a = prim.numVerts.first();
+            const QVector3D& b = prim.numVerts.last();
+            if (qAbs(a.x() - b.x()) > 1e-9 || qAbs(a.z() - b.z()) > 1e-9) continue;      // 只认 y(θ) 扫动的
+            if (qAbs(qAbs(b.y() - a.y()) - 360.0) > 1e-6) continue;                      // 跨度须为 360
+            ++rings;
+            const QVector3D wa = proj ? proj->toCartesian(a) : a;
+            const QVector3D wb = proj ? proj->toCartesian(b) : b;
+            const qreal d = (wa - wb).length();
+            if (d > 1e-6) {
+                ++openRings;
+                if (openRings <= 6)
+                    qInfo().noquote() << QString("  open-ring r=%1 phi=%2 dWorld=%3")
+                                             .arg(a.x()).arg(a.z()).arg(d);
+            }
         }
-    }
+    };
+    for (const QChartSegment& s : sc.axisSegments) scanSegment(s);
+    for (const QChartSegment& s : sc.seriesSegments) scanSegment(s);
     qInfo().noquote() << QString("  lattice rings=%1 openRings=%2").arg(rings).arg(openRings);
 }
 
@@ -174,7 +185,8 @@ void scheduleSummary2D(QChartLayer* layer, DemoBackend backend)
     auto waited = std::make_shared<int>(0);
     QObject::connect(tick, &QTimer::timeout, layer, [tick, layer, backend, waited]() {
         *waited += 60;
-        const bool ready = !layer->scene().primitives.isEmpty();
+        const bool ready = !layer->scene().axisSegments.isEmpty()
+                           || !layer->scene().seriesSegments.isEmpty();
         if (!ready && *waited < 360) return;
         tick->stop();
         logSceneSummary2D(layer, backend);
@@ -192,7 +204,9 @@ void scheduleModeShot(QChartWidget3D* w3, QChartLayer3D::GridMode mode, DemoBack
     auto waited = std::make_shared<int>(0);
     QObject::connect(tick, &QTimer::timeout, w3, [tick, w3, mode, backend, waited]() {
         *waited += 60;
-        const bool ready = w3->layer3D() && !w3->layer3D()->scene3D().primitives.isEmpty();
+        const bool ready = w3->layer3D()
+                           && (!w3->layer3D()->scene3D().axisSegments.isEmpty()
+                               || !w3->layer3D()->scene3D().seriesSegments.isEmpty());
         if (!ready && *waited < 360) return;
         tick->stop();
         logSceneSummary3D(w3->layer3D(), mode);
@@ -398,6 +412,26 @@ QWidget* buildDemoLine(DemoBackend backend)
     }
     layer->addSeries(wave);
 
+    // ===== 脏变量验证钩子（QCHART_DEMO_DIRTY=1 时启用）=====
+    // 程序跑到第 60 秒改一次 series 数据（y 整体 +1.5），用来观察：
+    //   dataDirty 是否真的驱动了「收集 + 变换 + 裁剪 + 绘制」，以及图像是否随之更新。
+    if (qEnvironmentVariableIsSet("QCHART_DEMO_DIRTY")) {
+        auto* timer = new QTimer(wave);
+        timer->setSingleShot(true);
+        timer->setInterval(60000);
+        QObject::connect(timer, &QTimer::timeout, wave, [wave]() {
+            QVector<QDataPoint> pts;
+            pts.reserve(201);
+            for (int i = 0; i <= 200; ++i) {
+                const qreal t = -6.0 + 12.0 * static_cast<qreal>(i) / 200.0;
+                pts.append(QDataPoint(t, 3.0 * std::sin(t * 1.5) + 1.5));
+            }
+            wave->setPoints(pts);
+            QCHART_DIRTY_MSG(QStringLiteral("demo: series<'sin'> 数据已改动（200 点 y 整体 +1.5）"));
+        });
+        timer->start();
+    }
+
     applyBackend(w, backend);
     w->setWindowTitle(QStringLiteral("demo_line [%1|%2]")
                       .arg(backend == DemoBackend::Gl ? "gl" : "cpu")
@@ -453,6 +487,30 @@ QWidget* buildDemoLine3D(DemoBackend backend)
         }
     }
     w3->layer3D()->addSeries3D(series);
+
+    // ===== 脏变量验证钩子（QCHART_DEMO_DIRTY=1 时启用）=====
+    // 第 60 秒续写 60 个螺旋点（延伸线段，仍落在 dataBounds 内），观察 dataDirty 是否驱动全链更新。
+    if (qEnvironmentVariableIsSet("QCHART_DEMO_DIRTY")) {
+        auto* timer = new QTimer(series);
+        timer->setSingleShot(true);
+        timer->setInterval(60000);
+        QObject::connect(timer, &QTimer::timeout, series, [series, projKind]() {
+            const int extra = 60;
+            for (int i = 1; i <= extra; ++i) {
+                const qreal u = static_cast<qreal>(i) / 600.0;
+                if (projKind == Proj3D::Cylindrical)
+                    series->append(2.2, 720.0 * u + 720.0, 2.5 * std::sin(6.0 * M_PI * u));
+                else if (projKind == Proj3D::Spherical)
+                    series->append(2.2, 720.0 * u + 720.0, 60.0 * std::sin(2.0 * M_PI * u));
+                else {
+                    const qreal t = 6.0 * M_PI + 6.0 * M_PI * u;
+                    series->append(2.2 * std::cos(t), 2.2 * std::sin(t), 2.5 * std::sin(t * 0.5));
+                }
+            }
+            QCHART_DIRTY_MSG(QStringLiteral("demo: series<'spiral'> 数据已改动（续写 %1 点）").arg(extra));
+        });
+        timer->start();
+    }
 
     applyBackend(w3, backend);
     w3->setWindowTitle(QStringLiteral("demo_line3d [%1|%2|%3]")
