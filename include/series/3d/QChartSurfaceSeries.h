@@ -1,17 +1,32 @@
-// QChartSurfaceSeries.h —— 曲面线框系列（行主序网格）
+// QChartSurfaceSeries.h —— 3D 曲面系列（行主序网格）
 // Data 层：网格 QVector<QDataPoint3D>（rows×cols 行主序）；setParametricGrid 便捷生成 (u,v) 格点。
-// World 层缓存：m_worldCache（基类 QChartSeries3D，Phase 3 上移）行主序 rows*cols，由 QChartLayer3D
-//   渲染时经自身 axis toNumeric + projection3D toWorld 直算填充（不走系列闭包；参数曲面莫比乌斯/球面的
-//   toWorld 在此发生），供 Phase 3 VBO 直接消费；collectPrimitives 仍走全链闭包 ProjectFn3D（队长裁决 b）。
-// collectPrimitives：线框 rows·(cols-1) + cols·(rows-1) 条 LineSegment，任一端投影 screen 非有限 → 跳过；
-//   深度 = 两端点 depth 均值（裁决 a）；dataIndex = 线段起点数据索引（裁决 c）。
+// 收集产物（第 2 步统一走 QChartPrimitive.h 的 generatePrimitive / generateWireframe）：
+//   · RenderMode::Surface（默认）：一个 Type::Grid 图元（rows×cols 共享控制点，索引由渲染端派生）
+//   · SurfaceWithGrid：上面的 Grid + 网格连线（rows+cols 条 Path，线比面更实、压在面上）
+//   · GridOnly：只出网格连线
+// 曲面本身由渲染端负责弯曲（GL: quads 域 TCS/TES；CPU: 按控制点画平面三角）。
 #pragma once
 #include "QChartSeries3D.h"
 
 class QChartSurfaceSeries : public QChartSeries3D {
     Q_OBJECT
 public:
+    /// 渲染模式（只影响"吐哪些图元"，与数据无关）。
+    /// 以后若要加等高线之类的辅助显示，在这里加一个取值即可。
+    enum class RenderMode {
+        Surface,          // 只画面（默认，画面与加本枚举之前完全一致）
+        SurfaceWithGrid,  // 面 + 网格连线（辅助显示，线比面更实、压在面上）
+        GridOnly          // 只画网格连线（线框模式）
+    };
+
     explicit QChartSurfaceSeries(const QString& name = {}, QObject* parent = nullptr);
+
+    RenderMode renderMode() const { return m_renderMode; }
+    void setRenderMode(RenderMode m) {
+        if (m_renderMode == m) return;
+        m_renderMode = m;
+        emit dataChanged();   // 产物集合变了 → 触发 layer 重收（与数据变化同一条通路）
+    }
 
     // ===== Data 层：网格（行主序，rows×cols）=====
     /// pts.size() 必须 == rows*cols，否则忽略并 qWarning（不改变状态）
@@ -35,4 +50,5 @@ signals:
 
 private:
     int m_rows = 0, m_cols = 0;
+    RenderMode m_renderMode = RenderMode::Surface;
 };

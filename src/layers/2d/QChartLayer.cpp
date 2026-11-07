@@ -7,19 +7,35 @@
 
 Q_LOGGING_CATEGORY(logLayer, "chart.layer")
 
-QChartLayer::QChartLayer(QObject* parent) : QChartAbstractLayer(parent) {
-    connect(this, &QChartLayer::gridChanged, this, &QChartLayer::invalidateData);
+QChartLayer::QChartLayer(QChartAxis* axisX, QChartAxis* axisY, QObject* parent)
+    : QChartAbstractLayer(parent)
+{
+    // ★ layer = 相机 + 两根轴 + 图元：**轴在构造时绑定，运行期不可更换**（换轴请重建 layer）。
+    //   理由：换轴会同时改变 Data→Numeric 映射、range 的权威、相机窗口与外边距，
+    //   而且既有系列数据未必还能被新轴映射（分类轴 → 数值轴会得到 NaN）。见 QChartWidget::removeAxis。
+    m_axisX = axisX;
+    m_axisY = axisY;
+    // 轴的一切属性变化（含 rangeChanged 这个"域变了"的信号）→ 轴段重建（脏表 axis 行）。
+    // ★ rangeChanged 在这里是**脏表输入**，不是"相机域同步"——那条通路在 widget 侧。
+    for (QChartAxis* a : { m_axisX, m_axisY }) {
+        if (!a) continue;
+        connect(a, &QChartAxis::rangeChanged, this, &QChartLayer::invalidateAxis);
+        connect(a, &QChartAxis::visibleChanged, this, &QChartLayer::invalidateAxis);
+        connect(a, &QChartAxis::styleChanged, this, &QChartLayer::invalidateAxis);
+        connect(a, &QChartAxis::tickCountChanged, this, &QChartLayer::invalidateAxis);
+        connect(a, &QChartAxis::subTickCountChanged, this, &QChartLayer::invalidateAxis);
+        connect(a, &QChartAxis::alignmentChanged, this, &QChartLayer::invalidateAxis);
+    }
+    // 网格样式变化 → 轴段重建（网格脊属于轴段）
+    connect(this, &QChartLayer::gridChanged, this, &QChartLayer::invalidateAxis);
     // ★ 批次 A：相机归 layer——scene.camera 恒指向本层相机值成员
     //（相机 viewRect 由 widget/viewRect 驱动链或调用方显式设置后再渲染）
     m_scene.camera = &m_camera;
-    // 相机变化 → 收集置脏（永远）；并转发给 widget（setViewRect 期间由 m_rangeTriggered 挡住，防回环）
-    connect(&m_camera, &QChartCamera::viewChanged, this, &QChartAbstractLayer::invalidateView);
+    // 相机变化 → 转发给 widget（setViewRect 期间由 m_rangeTriggered 挡住，防回环）。
+    // ★ 相机本身不再直接置脏表：它只负责"域可能变"，真正决定重建的是 rangeChanged → invalidateAxis。
     connect(&m_camera, &QChartCamera::viewChanged, this, [this] {
         if (!m_rangeTriggered) emit viewChanged(m_camera.viewRect());
     });
-    // S0：QChartWidget/QChartAbstractWidget 尚未纳入本阶段子集，原「父对象为
-    // QChartAbstractWidget 时自动注入 plotArea/projection」分支随 Widget 阶段一并恢复；
-    // series 信号连接待 Series 阶段随 QChartSeries.cpp 恢复。
 }
 QChartLayer::~QChartLayer() = default;
 
@@ -46,35 +62,6 @@ QRectF QChartLayer::numericBoundsFromAxes() const
     if (m_axisX) { b.setLeft(m_axisX->min()); b.setRight(m_axisX->max()); }
     if (m_axisY) { b.setTop(m_axisY->min()); b.setBottom(m_axisY->max()); }
     return b;
-}
-
-void QChartLayer::setAxisX(QChartAxis* a) {
-    if (m_axisX && m_axisX != a) disconnect(m_axisX, nullptr, this, nullptr);
-    m_axisX = a;   // 4b：不再维护 m_dataBounds 缓存（范围由轴持有，按需组装）
-    if (a) {
-        // 轴属性变化 → 轴段必须重建（段内容依赖可见性/样式/刻度数/对齐）。
-        // ★ rangeChanged 不在此列：范围变化走"相机域同步"这一条独立通路，
-        //   两者语义不得混（见 QChartAxis.h 的信号注释）。
-        connect(a, &QChartAxis::visibleChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::styleChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::tickCountChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::subTickCountChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::alignmentChanged, this, &QChartAbstractLayer::invalidateData);
-    }
-    qCDebug(logLayer) << "setAxisX:" << (a ? "set" : "null");
-}
-
-void QChartLayer::setAxisY(QChartAxis* a) {
-    if (m_axisY && m_axisY != a) disconnect(m_axisY, nullptr, this, nullptr);
-    m_axisY = a;
-    if (a) {
-        connect(a, &QChartAxis::visibleChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::styleChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::tickCountChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::subTickCountChanged, this, &QChartAbstractLayer::invalidateData);
-        connect(a, &QChartAxis::alignmentChanged, this, &QChartAbstractLayer::invalidateData);
-    }
-    qCDebug(logLayer) << "setAxisY:" << (a ? "set" : "null");
 }
 
 bool QChartLayer::validateAxes() const {
@@ -180,46 +167,79 @@ void QChartLayer::borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,
 void QChartLayer::addSeries(QChartSeries* s) {
     if (!s || m_series.contains(s)) return;
     m_series.append(s);
-    connect(s, &QChartSeries::dataChanged, this, &QChartAbstractLayer::invalidateData);
-    connect(s, &QChartSeries::visibleChanged, this, &QChartAbstractLayer::invalidateData);
-    connect(s, &QChartSeries::colorChanged, this, &QChartAbstractLayer::invalidateData);
-    invalidateData();
+    // 系列信号 → 脏表对应行（只有这一行，不再全量置脏）
+    connect(s, &QChartSeries::dataChanged, this, [this, s]() { invalidateSeries(s); });
+    connect(s, &QChartSeries::visibleChanged, this, [this, s]() { invalidateSeries(s); });
+    connect(s, &QChartSeries::colorChanged, this, [this, s]() { invalidateSeries(s); });
+    invalidateSeries(s);   // 新增 = 该段需要建
 }
 
 void QChartLayer::removeSeries(QChartSeries* s) {
     if (!s || !m_series.removeOne(s)) return;
     disconnect(s, nullptr, this, nullptr);
-    invalidateData();
+    m_dirtySeries.remove(s);
+    // 段直接移除（归并规则：不在 m_series 里的段一律丢弃）
+    for (int i = m_scene.seriesSegments.size() - 1; i >= 0; --i)
+        if (m_scene.seriesSegments[i].owner == s) m_scene.seriesSegments.removeAt(i);
+    if (scheduleRepaint) scheduleRepaint();
 }
 
 void QChartLayer::clearSeries() {
     for (QChartSeries* s : m_series)
         disconnect(s, nullptr, this, nullptr);
     m_series.clear();
-    invalidateData();
+    m_dirtySeries.clear();
+    m_scene.seriesSegments.clear();
+    if (scheduleRepaint) scheduleRepaint();
 }
 
-void QChartLayer::collectPrimitives() {
-    QCHART_DIRTY_MSG(QStringLiteral("collect[2d]: FULL rebuild（清空 axisSegments + seriesSegments 后全量重建）"));
-    // 每次收集前复位段表（段序 = 绘制顺序，见契约 S1：轴段恒在系列段之前）
+void QChartLayer::collectAxisPrimitives() {
+    // 只清轴段：系列段不在本次重建范围内（脏表只标了 axis 行）
     m_scene.axisSegments.clear();
-    m_scene.seriesSegments.clear();
-    // ---- 绘制网格（先网格，后系列：系列覆盖在网格之上）----
     drawGrid(m_scene);
+    QCHART_DIRTY_MSG(QStringLiteral("  collectAxis: rebuilt=%1 段").arg(m_scene.axisSegments.size()));
+}
 
-    // ---- 系列：每条可见系列一段 ----
+void QChartLayer::collectSeriesPrimitives() {
+    int rebuilt = 0;
+    // 1) 只重建脏系列对应的段（未脏的段一个字节不动）
     for (QChartSeries* s : m_series) {
-        // 契约 S6①：作者意图（visible）在收集期就过滤——不可见的系列**压根不入场景**，
-        // 因此天然拾不到、也不上传 GPU。不要改成"先收集再标 visible=false"。
-        if (!s || !s->isVisible()) continue;
+        if (!s) continue;
+        const bool dirty = m_dirtySeries.contains(s);
+        int idx = -1;
+        for (int i = 0; i < m_scene.seriesSegments.size(); ++i)
+            if (m_scene.seriesSegments[i].owner == s) { idx = i; break; }
+
+        // 契约 S6①：作者意图在收集期过滤——不可见的系列压根不入场景
+        if (!s->isVisible()) {
+            if (idx >= 0) m_scene.seriesSegments.removeAt(idx);
+            continue;
+        }
+        if (!dirty && idx >= 0) continue;   // 未脏且已有段 → 保持原样
+
         QCHART_DIRTY_MSG(QStringLiteral("  series<'%1'> 被重新收集").arg(s->name()));
         QChartSegment seg;
         seg.owner = s;
         s->collectPrimitives(seg, m_axisX, m_axisY);
-        // 空段丢弃：不产生"零图元段"（历史坑：发号在前、产图元在后会留下空组）
-        if (seg.prims.isEmpty()) continue;
-        m_scene.seriesSegments.append(seg);
+        if (seg.prims.isEmpty()) {          // 空段丢弃（不产生"零图元段"）
+            if (idx >= 0) m_scene.seriesSegments.removeAt(idx);
+            continue;
+        }
+        if (idx >= 0) m_scene.seriesSegments[idx] = seg;
+        else m_scene.seriesSegments.append(seg);
+        ++rebuilt;
     }
+
+    // 2) 按 m_series 顺序归并：缺的补、多余的删、顺序对齐（增删系列走同一条路）
+    QVector<QChartSegment> ordered;
+    ordered.reserve(m_scene.seriesSegments.size());
+    for (QChartSeries* s : m_series) {
+        for (const QChartSegment& seg : m_scene.seriesSegments)
+            if (seg.owner == s) { ordered.append(seg); break; }
+    }
+    m_scene.seriesSegments = ordered;
+    QCHART_DIRTY_MSG(QStringLiteral("  collectSeries: rebuilt=%1 / %2 段")
+                         .arg(rebuilt).arg(m_scene.seriesSegments.size()));
 }
 
 void QChartLayer::drawGrid(QChartScene& scene) {

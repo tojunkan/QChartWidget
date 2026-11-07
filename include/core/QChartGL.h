@@ -17,9 +17,10 @@ class QChartAbstractProjection;
 
 /// 程序池键（扩展版）：包含 Shader 种类 + Projection 类型标识
 enum class ShaderKind {
-    Line,      // GL_LINES / GL_LINE_STRIP
+    Line,      // 折线：isolines 域细分（VS→TCS→TES→FS）
     Point,     // GL_POINTS（带点大小）
-    Triangle,  // GL_TRIANGLES / GL_TRIANGLE_FAN / GL_TRIANGLE_STRIP
+    Triangle,  // GL_TRIANGLES / GL_TRIANGLE_FAN / GL_TRIANGLE_STRIP（不细分）
+    Grid,      // 规则网格：quads 域细分，每格 4 个控制点（VS→TCS→TES→FS）
     Pick       // ID 帧拾取（复用 Line 顶点，输出 RGB24 ID）
 };
 

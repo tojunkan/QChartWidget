@@ -23,9 +23,10 @@ public:
     // ===== 图层管理（单层：转发基类；2D 只接受 QChartLayer）=====
     void addLayer(QChartAbstractLayer* layer);
 
-    // ===== 轴管理（便捷：加到首个图层；图层缺失时先挂起，addLayer 时补挂）=====
+    // ===== 轴管理（轴在 QChartLayer 构造时传入、运行期不可更换）=====
+    // addAxis 只做三件事：登记（参与外边距计算）、连接 widget 侧信号、必要时同步相机窗口。
     void addAxis(QChartAxis* a);
-    void removeAxis(QChartAxis* a);
+    void removeAxis(QChartAxis* a);   // 已绑定的轴不允许移除（会 qWarning 并返回）
     QList<QChartAxis*> axes() const { return m_axes; }
 
     // ===== Projection（容器唯一持有；访问器见 protected 基类覆写投影()）=====
@@ -101,7 +102,6 @@ protected:
     const QChartAbstractProjection* projection() const override { return m_projection.get(); }
 
 private:
-    void attachToLayer(QChartLayer* layer, QChartAxis* a);  // 便捷轴挂载（isHorizontal→axisX，否则→axisY）
     /// 轴范围变化 → 算 viewRect 交给 layer（m_cameraTriggered 期间忽略：那是本类写轴引起的）
     void onAxisRangeChanged(qreal min, qreal max);
     /// 接 layer 的 viewChanged：computeDataBounds(viewRect) → 写轴（m_cameraTriggered 防回环）

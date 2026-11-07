@@ -31,10 +31,7 @@ public:
     const QChartLayer3D* layer3D() const { return m_layer3D; }
     void addLayer3D(QChartLayer3D* g);   // 内部：基类 addLayer 接线（兼容旧调用名）
 
-    // ===== 三轴绑定（透传 layer3D；轴仍为 2D QValueAxis 实例，3D 数值化共用）=====
-    void setAxisX3D(QChartAxis* a);
-    void setAxisY3D(QChartAxis* a);
-    void setAxisZ3D(QChartAxis* a);
+    // ===== 三轴访问（轴由 layer 构造时绑定、运行期不可更换：setAxisX3D/Y3D/Z3D 已删除）=====
     QChartAxis* axisX3D() const;
     QChartAxis* axisY3D() const;
     QChartAxis* axisZ3D() const;
@@ -133,10 +130,9 @@ private:
     bool m_cameraTriggered = false;     // fitWorld 期间为 true → updateAxes 不回写轴（防外扩泄漏/回环）
     int  m_interactionFitCount = 0;     // 4f 诊断：滚轮 dolly + autoFit 触发的 fit 次数
 
-    // 4g：渲染场景缓存（renderer 就地变换/裁剪，故缓存保留“已变换”状态）——
-    //     仅当层重收集（ensureSceneCollected() 为真）时刷新缓存并置 renderer viewDirty；
-    //     无变化则复用缓存（跳过重收集与变换）✓ 避免每帧强制更新。
-    QChartScene m_sceneCache;
+    // 注：曾有 QChartScene m_sceneCache（每帧深拷贝 layer 场景）。已删除——
+    //     renderer 现在直接写 layer 的场景（cartValid / visible 等运行时状态必须留在段上，
+    //     拷贝会把"已算好"的状态每帧丢掉，部分变换失效）。
 
     // ===== 旧实体恢复点（注释保留；归属阶段见各注）=====
     // std::unique_ptr<QChartCamera3D> m_camera3D;        —— 相机归 layer3D（批次 B2 移除）

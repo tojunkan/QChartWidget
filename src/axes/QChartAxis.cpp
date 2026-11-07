@@ -295,9 +295,10 @@ void QChartAxis::drawAtPosition(qreal dimMin, qreal dimMax,
     QChartPrimitive axisLine;
     axisLine.color = axisColor;
     axisLine.penWidth = 1.0;
-    axisLine.type = QChartPrimitive::Type::Line;
-    axisLine.numA = spinePoint(dimMin);
-    axisLine.numB = spinePoint(dimMax);
+    // 折线只有一种表示（Path）：脊是"两点折线"，用 numVerts 承载，
+    // 不再有 Line，也就不存在"渲染期把 Line 提升成 Path"这种不可重入的形态转换（B1）。
+    axisLine.type = QChartPrimitive::Type::Path;
+    axisLine.numVerts = { spinePoint(dimMin), spinePoint(dimMax) };
     outPrims->append(axisLine);
 
     // 4. 对每个主刻度生成 7 个点 + 1 个标签

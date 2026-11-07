@@ -80,8 +80,9 @@ public:
     /// dimIndex: 0/1/2，表示本轴沿哪个维度变化
     /// 二维情况下，offset1表示z轴，恒为0，且dimIndex只能是0或1
     /// labelMode: 标签生成模式（默认 Tickwise = 现状"每刻度一标签"）
-    /// ★ 几何一律是 **Numeric 直线段**（Type::Line）：非线性投影下的加密采样归 renderer，
+    /// ★ 几何一律是 **Numeric 直线段**（`Type::Path`，两点折线）：非线性投影下的加密采样归 renderer，
     ///   收集期不判投影，因此这里不再需要 projection、也不再需要采样段数。
+    ///   （原 `Type::Line` 特例已删除：它逼出"渲染期把 Line 提升成 Path"这种不可重入的形态转换。）
     virtual void drawAtPosition(qreal dimMin, qreal dimMax,
                                 qreal offset0, qreal offset1,
                                 int dimIndex,

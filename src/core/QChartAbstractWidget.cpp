@@ -7,7 +7,7 @@
 #include "QChartGL.h"
 #include <QOpenGLWidget>
 #include <QOpenGLContext>
-#include <QOpenGLFunctions_3_3_Core>
+#include <QOpenGLFunctions_4_3_Core>
 #include <QOpenGLVersionFunctionsFactory>
 #include <QPainter>
 #include <QImage>
@@ -49,7 +49,7 @@ protected:
         // 分配：Windows DPR=1.5 时 FBO=498x416 而逻辑尺寸 332x277）。用逻辑尺寸会令
         // GL 内容只占 FBO 左下、中心采样落空。逻辑中心 → 设备中心由视口变换保证
         // （u_viewProj 的 aspect 与逻辑/设备一致——等比缩放不改变中心/几何比例）。
-        auto* f = QOpenGLVersionFunctionsFactory::get<QOpenGLFunctions_3_3_Core>(context());
+        auto* f = QOpenGLVersionFunctionsFactory::get<QOpenGLFunctions_4_3_Core>(context());
         if (!f) return;
         const int vpW = qRound(width() * devicePixelRatioF());
         const int vpH = qRound(height() * devicePixelRatioF());
@@ -91,6 +91,10 @@ QChartAbstractWidget::QChartAbstractWidget(QWidget* parent)
 
 QChartAbstractWidget::~QChartAbstractWidget()
 {
+    // ★ 解绑重绘回调：层是**非持有**的，可能比本 widget 活得久（栈上/单例层都合法）。
+    //   注入的 lambda 捕获了 this，若不解绑，层之后一置脏就会对已析构对象调成员函数（UB）。
+    if (m_layer)
+        m_layer->scheduleRepaint = nullptr;
     // 释放 GL 批次资源（上下文仍存活时），随后成员按声明逆序析构（glHost → glRenderer）
     if (m_glHost && m_glRenderer) {
         m_glHost->makeCurrent();
@@ -147,7 +151,13 @@ void QChartAbstractWidget::setRenderBackend(RenderBackend backend)
 void QChartAbstractWidget::addLayer(QChartAbstractLayer* layer)
 {
     if (!layer || m_layer == layer) return;
+    // 换层：先把旧层背上的"重绘请求"摘掉，免得它继续指向本 widget
+    if (m_layer)
+        m_layer->scheduleRepaint = nullptr;
     m_layer = layer;
+    // 注入重绘请求：layer 置脏后自己喊重画（"脏表非空 ⇒ 必须有一帧 paint 排队"）。
+    // 不给信号、不加 Q_OBJECT：layer 只需知道"我要重画"，不需要知道调用者是谁。
+    layer->scheduleRepaint = [this]() { QChartAbstractWidget::scheduleRepaint(); };
     m_layoutDirty = true;
     scheduleRepaint();
 }
@@ -208,9 +218,8 @@ void QChartAbstractWidget::renderLayers(QPaintDevice* device)
 {
     if (!m_cpuRenderer || !m_layer) return;
     pushContextToLayers();   // plotArea/投影/背景 → 层场景（渲染前恒同步，幂等）
-    // 4g：脏才重收集（背景随可见 numeric 范围更新）；无变化跳过 → 也不重算变换/裁剪
-    if (m_layer->ensureSceneCollected())
-        m_cpuRenderer->invalidateView();   // 场景快照重建（视图或数据变化）→ 重算变换与裁剪
+    // 收集只由脏表驱动；脏则重建相应段（新段 cartValid=false → renderer 只算这些段）
+    m_layer->ensureSceneCollected();
     m_cpuRenderer->render(m_layer->scene(), device);
 }
 
@@ -234,9 +243,8 @@ void QChartAbstractWidget::renderLayersGL(QPaintDevice* device)
     labelDev.setDevicePixelRatio(labelDpr);
     labelDev.fill(Qt::transparent);
 
-    // 4g：同 CPU 路径——脏才重收集；无变化跳过（也不重算变换/裁剪）
-    if (m_layer->ensureSceneCollected())
-        m_glRenderer->invalidateView();
+    // 同 CPU 路径：收集只由脏表驱动
+    m_layer->ensureSceneCollected();
     m_glRenderer->render(m_layer->scene(), &labelDev);   // 图元→当前 GL FBO；标签→labelDev
     QPainter overlay(device);
     overlay.setRenderHint(QPainter::Antialiasing, true);

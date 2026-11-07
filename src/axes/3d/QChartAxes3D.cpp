@@ -52,8 +52,10 @@ qreal QChartAxes3D::safeFixedValue(qreal lo, qreal hi) {
 
 QPair<QVector3D, QVector3D> QChartAxes3D::faceLineSegment(const QVector3D& dataMin,
                                                           const QVector3D& dataMax) {
-    const qreal fixed1 = safeFixedValue(dataMin.y(), dataMax.y());
-    const qreal fixed2 = safeFixedValue(dataMin.z(), dataMax.z());
-    return { QVector3D(dataMin.x(), fixed1, fixed2),
-             QVector3D(dataMax.x(), fixed1, fixed2) };
+    // 线**沿 dim2 轴**（面外/等值维；面就固定在它的中值上，所以线会穿过面），
+    // dim0 / dim1 取 degenerate-safe 固定值（球坐标 θ=φ=0 → 半径线，不碰极点）。
+    const qreal f0 = safeFixedValue(dataMin.x(), dataMax.x());
+    const qreal f1 = safeFixedValue(dataMin.y(), dataMax.y());
+    return { QVector3D(f0, f1, dataMin.z()),
+             QVector3D(f0, f1, dataMax.z()) };
 }

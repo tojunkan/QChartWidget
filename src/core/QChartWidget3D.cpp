@@ -13,29 +13,12 @@
 
 Q_LOGGING_CATEGORY(logWidget3D, "chart.widget3d")
 
-// 4g-fix（t58 F1）：把一根轴的范围/样式类信号统一接到层置脏（三维与二维同构；层为 QObject，
-// 其销毁自动断连）。定义在 .cpp 局部，避免改动头文件（t59 inScope 未含 QChartWidget3D.h）。
-static void wireAxisToLayerDirty(QChartAxis* a, QChartAbstractLayer* layer)
-{
-    if (!a || !layer) return;
-    auto mark = [layer]() { layer->invalidateData(); };
-    QObject::connect(a, &QChartAxis::rangeChanged, layer, [mark]() { mark(); });
-    QObject::connect(a, &QChartAxis::tickCountChanged, layer, [mark]() { mark(); });
-    QObject::connect(a, &QChartAxis::subTickCountChanged, layer, [mark]() { mark(); });
-    QObject::connect(a, &QChartAxis::styleChanged, layer, [mark]() { mark(); });
-    QObject::connect(a, &QChartAxis::visibleChanged, layer, [mark]() { mark(); });
-}
-
 // ===== 构造 / 析构 =====
 
 QChartWidget3D::QChartWidget3D(QWidget* parent)
     : QChartWidget(parent)
 {
-    // 单 layer3D 托管（QObject 子；基类 addLayer 接线——容器非持有列表）
-    m_layer3D = new QChartLayer3D(this);
-    QChartWidget::addLayer(m_layer3D);
-
-    // 默认三轴（2D QValueAxis 实例，3D 数值化共用；可经 setAxisX3D/Y3D/Z3D 替换）
+    // 默认三轴（2D QValueAxis 实例，3D 数值化共用）
     m_axisX3D = new QValueAxis(this, Qt::AlignBottom);
     m_axisY3D = new QValueAxis(this, Qt::AlignLeft);
     m_axisZ3D = new QValueAxis(this, Qt::AlignBottom);
@@ -44,14 +27,11 @@ QChartWidget3D::QChartWidget3D(QWidget* parent)
         a->setTickCount(5);
         a->setColor(Qt::black);
     }
-    m_layer3D->setAxisX(m_axisX3D);
-    m_layer3D->setAxisY(m_axisY3D);
-    m_layer3D->setAxisZ(m_axisZ3D);
-    // 4g：三维数值侧驱动 → 层置脏（三维轴范围变化不必然改相机，必须显式标记重收集）
-    // 4g-fix（t58 F1）：轴样式类信号（tickCount/subTickCount/style/visible）同样置脏（网格/刻度/标签依赖它们）
-    for (QChartAxis* a : { static_cast<QChartAxis*>(m_axisX3D), static_cast<QChartAxis*>(m_axisY3D),
-                           static_cast<QChartAxis*>(m_axisZ3D) })
-        wireAxisToLayerDirty(a, m_layer3D);
+    // 单 layer3D 托管（QObject 子；基类 addLayer 接线——容器非持有列表）
+    // ★ 轴**随构造传入**（构造期绑定、运行期不可更换）；轴信号→脏表的接线由 layer 自己在
+    //   构造里完成，widget 侧不再重复接一遍（旧 wireAxisToLayerDirty 已删）。
+    m_layer3D = new QChartLayer3D(m_axisX3D, m_axisY3D, m_axisZ3D, this);
+    QChartWidget::addLayer(m_layer3D);
     // 相机视野盒变化 → 反算三轴范围（信号版；不再由 onWheel/onMouseMove 手动调用）
     connect(m_layer3D, &QChartLayer3D::viewChanged, this, &QChartWidget3D::updateAxes);
 }
@@ -66,27 +46,7 @@ void QChartWidget3D::addLayer3D(QChartLayer3D* g)
     QChartWidget::addLayer(g);   // 基类容器接线（布局/渲染遍历均经基类 m_layers）
 }
 
-// ===== 三轴绑定（透传 layer3D；默认轴替换由调用方管理生命周期——非持有约定同基类 addAxis）=====
-
-// 4g：轴替换后同样接上“轴范围/样式变化 → 层置脏”（维度数值侧 → 重收集）
-void QChartWidget3D::setAxisX3D(QChartAxis* a)
-{
-    if (!m_layer3D) return;
-    m_layer3D->setAxisX(a);
-    wireAxisToLayerDirty(a, m_layer3D);
-}
-void QChartWidget3D::setAxisY3D(QChartAxis* a)
-{
-    if (!m_layer3D) return;
-    m_layer3D->setAxisY(a);
-    wireAxisToLayerDirty(a, m_layer3D);
-}
-void QChartWidget3D::setAxisZ3D(QChartAxis* a)
-{
-    if (!m_layer3D) return;
-    m_layer3D->setAxisZ(a);
-    wireAxisToLayerDirty(a, m_layer3D);
-}
+// ===== 三轴访问（轴在 layer 构造时绑定，运行期不可更换：setAxis*3D 已删除）=====
 QChartAxis* QChartWidget3D::axisX3D() const { return m_layer3D ? m_layer3D->axisX() : nullptr; }
 QChartAxis* QChartWidget3D::axisY3D() const { return m_layer3D ? m_layer3D->axisY() : nullptr; }
 QChartAxis* QChartWidget3D::axisZ3D() const { return m_layer3D ? m_layer3D->axisZ() : nullptr; }
@@ -117,9 +77,30 @@ void QChartWidget3D::clearDataBounds3D()
 
 void QChartWidget3D::setProjection3D(const QChartProjection3D* proj)
 {
+    // ★ "切换" = 原来已经有一个投影、现在换成另一个（构造期第一次设置不算）。
+    const bool isSwitch = (m_projection3D != nullptr && m_projection3D != proj);
+
     m_projection3D = proj;                 // widget 持有（供 computeDataBounds/computeViewCube 使用）
     if (m_layer3D)
         m_layer3D->setProjection3D(proj);  // layer 同步一份（采样提示）；scene3D.projection 仍由 pushContext 注入
+
+    if (isSwitch && m_layer3D) {
+        // ★★ 切换投影：**保相机、不保数据**（与 2D 同构）。
+        //   相机一个字节不动，用新投影从同一个视图反算 Numeric 写回三轴。
+        //   这三步是不可分的：只保相机不做失效/反算，会得到"轴按新投影、系列仍按旧投影"的
+        //   半新半旧状态（比全旧更糟）。
+        QChartScene& sc = m_layer3D->scene();
+        for (QChartSegment& s : sc.axisSegments) s.cartValid = false;
+        for (QChartSegment& s : sc.seriesSegments) s.cartValid = false;
+
+        const QCube cube = viewCube();     // 相机当前的视野盒（保持不动）
+        if (cube.isValid() && !m_cameraTriggered)
+            updateAxes(cube);              // 新投影: computeDataBounds(cube) → 写三轴
+        scheduleRepaint();
+        return;                            // 切换路径 **不** 走 fitWorld（那是"数据 → 相机"）
+    }
+
+    // 初始化（原来没有投影）：保持既有行为 —— 数据 → 相机
     fitWorld();
 }
 
@@ -127,10 +108,9 @@ void QChartWidget3D::setProjection3D(const QChartProjection3D* proj)
 
 void QChartWidget3D::setGridMode3D(QChartLayer3D::GridMode m)
 {
-    if (m_layer3D) {
+    // 置脏唯一通路：setGridMode 内 emit gridChanged → invalidateAxis
+    if (m_layer3D)
         m_layer3D->setGridMode(m);   // Box 仅 Cartesian3D：非直角投影时图层 qWarning 并回退 FaceLine
-        m_layer3D->invalidateData(); // 4g-fix（t58 F3）：模式切换 → 重收集（层 setter 已置脏，此处冗余保险）
-    }
 }
 
 QChartLayer3D::GridMode QChartWidget3D::gridMode3D() const
@@ -301,28 +281,8 @@ void QChartWidget3D::pushContextToLayers()
     m_layer3D->setScene3DProjection(proj3);
     m_layer3D->setScene3DPlotArea(m_plotArea);
     m_layer3D->setScene3DBackground(bg);
-    // 4g：视图状态指纹（相机视图投影 × plotArea × 投影 × 背景）→ 视图变化才置脏（重收集）
-    const qreal aspect = (m_plotArea.height() > 0.0) ? m_plotArea.width() / m_plotArea.height() : 1.0;
-    if (const QChartCamera3D* cam = m_layer3D->camera3D())
-        m_layer3D->setSceneViewState(cam->viewProjectionMatrix(aspect), m_plotArea, proj3, bg);
-    else
-        m_layer3D->setSceneViewState(QMatrix4x4(), m_plotArea, proj3, bg);
-    // 4g-fix（t58 F4）：内容贡献指纹（三轴范围/刻度/子刻度/可见性/颜色 + 网格模式/样式 + 数据版本）
-    quint64 key = 0;
-    for (const QChartAxis* a : { m_layer3D->axisX(), m_layer3D->axisY(), m_layer3D->axisZ() }) {
-        if (!a) { key = QChartAbstractLayer::contentHash(key, 0); continue; }
-        key = QChartAbstractLayer::contentHashReal(key, a->min());
-        key = QChartAbstractLayer::contentHashReal(key, a->max());
-        key = QChartAbstractLayer::contentHash(key, quint64(a->tickCount()));
-        key = QChartAbstractLayer::contentHash(key, quint64(a->subTickCount()));
-        key = QChartAbstractLayer::contentHash(key, a->isVisible() ? 1u : 2u);
-        key = QChartAbstractLayer::contentHash(key, quint64(a->color().rgba()));
-    }
-    key = QChartAbstractLayer::contentHash(key, quint64(m_layer3D->gridMode()));
-    key = QChartAbstractLayer::contentHash(key, m_layer3D->isGridVisible() ? 1u : 2u);
-    key = QChartAbstractLayer::contentHash(key, quint64(m_layer3D->gridColor().rgba()));
-    key = QChartAbstractLayer::contentHash(key, m_layer3D->contentRevision());
-    m_layer3D->setSceneContentState(key);
+    // 视图/内容指纹已全部删除：cull 每帧全量跑、cart 由段的 cartValid 判，
+    // 收集只由脏表驱动（轴走 invalidateAxis、系列走 invalidateSeries）。
 }
 
 void QChartWidget3D::onBeforePaint()
@@ -339,12 +299,10 @@ void QChartWidget3D::renderLayers(QPaintDevice* device)
 {
     if (!m_cpuRenderer || !m_layer3D) return;
     pushContextToLayers();
-    // 4g：脏才重收集（视图/数据变化 → 背景随可见范围更新）；无变化跳过 → 复用缓存（含已变换状态）
-    if (m_layer3D->ensureSceneCollected()) {
-        m_sceneCache = m_layer3D->scene3D();    // 刷新缓存（camera 指针指向 layer 成员，存活期渲染）
-        m_cpuRenderer->invalidateView();         // 快照重建 → 重算变换与裁剪
-    }
-    m_cpuRenderer->render(m_sceneCache, device);
+    // 直接渲染 layer 的场景（不再做全量深拷贝）：cartValid / visible 等运行时状态必须
+    // 留在段上，否则每次拷贝都会把"已算好"的状态丢掉 → 部分变换失效。
+    m_layer3D->ensureSceneCollected();
+    m_cpuRenderer->render(m_layer3D->scene(), device);
 }
 
 void QChartWidget3D::renderLayersGL(QPaintDevice* device)
@@ -362,16 +320,9 @@ void QChartWidget3D::renderLayersGL(QPaintDevice* device)
     labelDev.setDevicePixelRatio(labelDpr);
     labelDev.fill(Qt::transparent);
 
-    // 4g：脏才重收集（同 CPU 路径）——缓存保留已变换/已标 depth 的状态，无变化直接复用
-    if (m_layer3D->ensureSceneCollected()) {
-        m_sceneCache = m_layer3D->scene3D();
-        // 深度交给 GL 深度缓冲（深度测试开）：不再像线框冒烟阶段那样把所有图元 depth 置 2.0
-        // ——那会让 GL 批次把一切判成 decor（isDecor = depth > 1）→ depthTest=false，
-        // 遮挡退化为 pass 顺序（Triangle→Line→Point），散点会永远压在网格上面。
-        // depth 字段保留给 CPU 3D 的后排排序使用；GL 路径不依赖它。
-        m_glRenderer->invalidateView();
-    }
-    m_glRenderer->render(m_sceneCache, &labelDev);
+    // 直接渲染 layer 的场景（同 CPU 路径：运行时状态留在段上）
+    m_layer3D->ensureSceneCollected();
+    m_glRenderer->render(m_layer3D->scene(), &labelDev);
 
     QPainter overlay(device);
     overlay.setRenderHint(QPainter::Antialiasing, true);

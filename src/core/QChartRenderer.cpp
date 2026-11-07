@@ -67,59 +67,18 @@ void QChartRenderer::render(QChartScene& scene, QPaintDevice* device)
 
     onRenderBegin(device);
 
-    // ===== 脏变量观测：变换产物的分段校验和 =====
-    // 用途：camera / layout 单独变化时，投影没变 ⇒ 同一份 num* 应产出同一份 cart*。
-    // 所以 [seriesSegSum] 纹丝不动就证明"变换白跑了一遍"（浪费而非错误）。
-    // 注意：GL 后端的 transformNumericToCartesian 是空函数（变换在着色器里），
-    //       其 cart* 恒为 0 ⇒ 校验和在 GL 后端不具备判别力，只在 CPU 后端有意义。
-    auto cartSum = [](const QVector<QChartSegment>& segs) {
-        quint64 h = 0xcbf29ce484222325ULL;
-        auto mix = [&h](float f) {
-            quint32 bits = 0;
-            std::memcpy(&bits, &f, sizeof(bits));
-            h ^= bits;
-            h *= 0x100000001b3ULL;
-        };
-        for (const QChartSegment& s : segs) {
-            for (const QChartPrimitive& p : s.prims) {
-                mix(p.cartA.x()); mix(p.cartA.y()); mix(p.cartA.z());
-                mix(p.cartB.x()); mix(p.cartB.y()); mix(p.cartB.z());
-                mix(static_cast<float>(p.cartRect.x()));
-                mix(static_cast<float>(p.cartRect.y()));
-                mix(static_cast<float>(p.cartRect.width()));
-                mix(static_cast<float>(p.cartRect.height()));
-                for (const QVector3D& v : p.cartVerts) { mix(v.x()); mix(v.y()); mix(v.z()); }
-            }
-        }
-        return h;
-    };
+    // 无状态：三步每次渲染都走。
+    //   · transform 内部按段 cartValid 跳过有效段（只有重建过的段会被重算）
+    //   · cull 每帧全量（相机/plotArea 一动，所有图元的像素位置都变）
+    transformNumericToCartesian(scene);
+    cullAndResolveLabels(scene);
 
-    // ---- 步骤 2：变换与裁剪（4g：仅在场景快照重建后执行——widget 在层重收集时置 viewDirty；
-    //      视图变化必须重收集背景（网格/刻度/标签随可见 numeric 范围更新），
-    //      当前为粗粒度全量更新（重收集 + 变换 + 裁剪），背景/前景分级留待后续批次） ----
-    if (m_viewDirty) {
-        QCHART_DIRTY_MSG(QStringLiteral("renderer: viewDirty consumed -> 执行 transform + cull"));
-        transformNumericToCartesian(scene);
-
-        int axisPrims = 0, seriesPrims = 0;
-        for (const QChartSegment& s : scene.axisSegments) axisPrims += s.prims.size();
-        for (const QChartSegment& s : scene.seriesSegments) seriesPrims += s.prims.size();
-        QCHART_DIRTY_MSG(QStringLiteral("  transform: axisPrims=%1 seriesPrims=%2 axisSum=%3 seriesSegSum=%4")
-                             .arg(axisPrims).arg(seriesPrims)
-                             .arg(cartSum(scene.axisSegments), 0, 16)
-                             .arg(cartSum(scene.seriesSegments), 0, 16));
-
-        cullAndResolveLabels(scene);
-
-        int vis = 0, total = 0;
-        for (const QChartSegment& s : scene.axisSegments)
-            for (const QChartPrimitive& p : s.prims) { ++total; if (p.visible) ++vis; }
-        for (const QChartSegment& s : scene.seriesSegments)
-            for (const QChartPrimitive& p : s.prims) { ++total; if (p.visible) ++vis; }
-        QCHART_DIRTY_MSG(QStringLiteral("  cull: visible=%1/%2").arg(vis).arg(total));
-
-        m_viewDirty = false;
-    }
+    int vis = 0, total = 0;
+    for (const QChartSegment& s : scene.axisSegments)
+        for (const QChartPrimitive& p : s.prims) { ++total; if (p.visible) ++vis; }
+    for (const QChartSegment& s : scene.seriesSegments)
+        for (const QChartPrimitive& p : s.prims) { ++total; if (p.visible) ++vis; }
+    QCHART_DIRTY_MSG(QStringLiteral("renderer: cull 全量 -> visible=%1/%2").arg(vis).arg(total));
 
     // ---- 步骤 3：图元绘制（可见性已在步骤 2 写回每图元的 visible 字段）----
     drawPrimitives(scene, device);
@@ -155,7 +114,8 @@ bool QChartRenderer::anchorVisibleInPlotArea(const QChartScene& scene, const QVe
 // 组尾锚点助手（t73）：自由标签（同 sourceId 组）与 tier2 绑定标签的锚点取"组的末段代表点"，
 // 按图元类型分类——与 t29 hybrid 旁路既有分类一致，并由二维 CPU 后端（tier2/tier3）与 GL 后端
 // （tier2）共用同一实现，避免两后端语义分叉：
-//   Point → 自身；Line → **尾端**（numB/cartB）；Path/Polygon/三角族 → 末顶点；Rect/Ellipse → 中心
+//   Point → 自身；Path/Polygon/三角族 → 末顶点（2 点折线 ⇒ 即尾端）；Rect/Ellipse → 中心
+// 背景：脊线现在是两点 Path，取末顶点 = 尾端，等价于旧 Line 的 numB/cartB 语义。
 // 背景：4i 直线化后二维网格脊只剩一个两顶点 Line，旧实现一律取 cartA（**首端点**）恰落视图边界，
 // 绘制期的二次包含判定（见下方 drawLabels）会因 1e-5 px 级浮点噪声丢掉整组标签（t70 §3a）。
 // 说明：头文件不在本批 inScope，故两处调用方以相同签名的前置声明共用（定义唯一）。
@@ -165,13 +125,12 @@ QVector3D qchartGroupTailAnchorNumeric(const QChartPrimitive& p)
     switch (p.type) {
     case QChartPrimitive::Type::Point:
         return p.numA;
-    case QChartPrimitive::Type::Line:
-        return p.numB;
     case QChartPrimitive::Type::Polygon:
     case QChartPrimitive::Type::Path:
     case QChartPrimitive::Type::TriangleMesh:
     case QChartPrimitive::Type::TriangleFan:
     case QChartPrimitive::Type::TriangleStrip:
+    case QChartPrimitive::Type::Grid:
         return p.numVerts.isEmpty() ? p.numA : p.numVerts.last();
     case QChartPrimitive::Type::Rect:
     case QChartPrimitive::Type::Ellipse:
@@ -187,13 +146,12 @@ QVector3D qchartGroupTailAnchorCartesian(const QChartPrimitive& p)
     switch (p.type) {
     case QChartPrimitive::Type::Point:
         return p.cartA;
-    case QChartPrimitive::Type::Line:
-        return p.cartB;
     case QChartPrimitive::Type::Polygon:
     case QChartPrimitive::Type::Path:
     case QChartPrimitive::Type::TriangleMesh:
     case QChartPrimitive::Type::TriangleFan:
     case QChartPrimitive::Type::TriangleStrip:
+    case QChartPrimitive::Type::Grid:
         return p.cartVerts.isEmpty() ? p.cartA : p.cartVerts.last();
     case QChartPrimitive::Type::Rect:
     case QChartPrimitive::Type::Ellipse:

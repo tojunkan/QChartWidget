@@ -21,7 +21,7 @@ void QChartLineSeries3D::setCullingEnabled(bool v) {
 }
 
 // ===== 图元收集 =====
-// 连续的**有效**点组成一段折线：2 个点 → Line；>2 个点 → Path。NaN/Inf 断段。
+// 连续的**有效**点组成一段折线，一律是 Path（折线只有一种表示，没有 Line 特例）。NaN/Inf 断段。
 void QChartLineSeries3D::collectPrimitives(QChartSegment& seg,
                                            const QChartAxis* ax, const QChartAxis* ay,
                                            const QChartAxis* az) const {
@@ -31,14 +31,8 @@ void QChartLineSeries3D::collectPrimitives(QChartSegment& seg,
     auto flush = [&]() {
         if (run.isEmpty()) return;
         QChartPrimitive p;
-        if (run.size() == 2) {
-            p.type = QChartPrimitive::Type::Line;
-            p.numA = run.at(0);
-            p.numB = run.at(1);
-        } else {
-            p.type = QChartPrimitive::Type::Path;
-            p.numVerts = run;
-        }
+        p.type = QChartPrimitive::Type::Path;
+        p.numVerts = run;
         p.color = color();
         p.penWidth = static_cast<float>(m_lineWidth);
         seg.prims.append(p);

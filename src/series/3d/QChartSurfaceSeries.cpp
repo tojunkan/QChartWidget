@@ -48,13 +48,14 @@ void QChartSurfaceSeries::setParametricGrid(int rows, int cols,
 void QChartSurfaceSeries::collectPrimitives(QChartSegment& seg,
                                             const QChartAxis* ax, const QChartAxis* ay,
                                             const QChartAxis* az) const {
+    // ★ 吐 Grid（不是 TriangleMesh）：顶点表是 rows×cols 的**共享**控制点（1681 个，替代旧版
+    //   9600 个展开顶点），索引由渲染端按"每格 6 个"派生 —— 这样曲面控制点数与格点数一致，
+    //   才能喂 tessellation 的 4 控制点/格 patch。
     if (m_rows < 2 || m_cols < 2) return;
 
     const int n = m_rows * m_cols;
     QVector<QVector3D> verts;
-    QVector<bool> valid;
     verts.reserve(n);
-    valid.reserve(n);
 
     for (int i = 0; i < n; ++i) {
         // count()/at()：双存储统一访问（setGrid 走 QVariant 路径）
@@ -62,35 +63,23 @@ void QChartSurfaceSeries::collectPrimitives(QChartSegment& seg,
         const qreal nx = ax ? ax->toNumeric(d.x()) : d.x().toDouble();
         const qreal ny = ay ? ay->toNumeric(d.y()) : d.y().toDouble();
         const qreal nz = az ? az->toNumeric(d.z()) : d.z().toDouble();
-        const bool ok = std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz);
         verts.append(QVector3D(static_cast<float>(nx), static_cast<float>(ny),
                                static_cast<float>(nz)));
-        valid.append(ok);
     }
 
-    QVector<int> indices;
-    indices.reserve(6 * (m_rows - 1) * (m_cols - 1));
-    for (int r = 0; r + 1 < m_rows; ++r) {
-        for (int c = 0; c + 1 < m_cols; ++c) {
-            const int i00 = r * m_cols + c;          // 左上
-            const int i01 = i00 + 1;                 // 右上
-            const int i10 = i00 + m_cols;            // 左下
-            const int i11 = i10 + 1;                 // 右下
-            if (!valid.at(i00) || !valid.at(i01) || !valid.at(i10) || !valid.at(i11))
-                continue;
-            indices << i00 << i10 << i01;
-            indices << i01 << i10 << i11;
-        }
-    }
-    if (indices.isEmpty()) return;
+    // ★ 第 2 步（Numeric → 图元）走共用入口 generatePrimitive：surface 与坐标系面共用同一份
+    //   "Grid 图元怎么造"；网格连线也走共用的 generateWireframe（契约 C3 的注释见 QChartPrimitive.h）。
+    const QChartPrimitive grid =
+        generatePrimitive(QChartPrimitive::Type::Grid, verts, color(), m_rows, m_cols);
 
-    QChartPrimitive p;
-    p.type = QChartPrimitive::Type::TriangleMesh;
-    p.numVerts = verts;
-    p.numIndices = indices;
-    // 契约 C3：整张网格是**一个**图元，代表从数据下标 0 开始的整片网格数据。
-    // 精确到"第几个格点"必须在图元内部再判（顶点序 = r*cols+c，可反推），不能靠图元下标。
-    p.fillColor = color();
-    p.color = color();
-    seg.prims.append(p);
+    if (m_renderMode != RenderMode::GridOnly) seg.prims.append(grid);
+
+    if (m_renderMode != RenderMode::Surface) {
+        // 线只是辅助：①颜色要**比面深一档**，否则同色叠在同色面上等于看不见；
+        // ②半透明才能落进 3D 的"半透明趟"，从而画在面之后、压在面上。
+        QColor lineColor = color().darker(170);
+        lineColor.setAlpha(200);
+        for (const QChartPrimitive& p : generateWireframe(grid, lineColor))
+            seg.prims.append(p);
+    }
 }

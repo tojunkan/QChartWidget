@@ -14,6 +14,14 @@
 
 namespace QChartMath {
 
+    // ===== 线/面细分判据（唯一来源：CPU 变换阶段与 GLSL 的 GS/TCS 共用）=====
+    // 判据（纯 Cartesian，与相机无关）：把一条线段均分成 k 段后，每段的相对偏差
+    //   ≈ d / (k · L)，要求 ≤ ratio ⇒ k = ceil( d / (ratio · L) )
+    // 其中 d = |cart(中点) − (c0+c1)/2|（弓高），L = |c1 − c0|（弦长）。
+    // ★ 是**线性**关系，不是 sqrt —— 弓高随段数按 1/k² 下降、弦长按 1/k 下降。
+    constexpr double SUBDIV_RATIO       = 0.005;   // 允许的相对偏差（0.5%）
+    constexpr int    SUBDIV_MAX_SEGMENTS = 32;      // 一条线段最多切几段（= GS 的 max_vertices − 1）
+
     // ===== Clip → NDC → Screen（显式拆分，可测可复用；Phase 3 GL 同用）=====
     /// Clip → NDC：÷w。w<=0（相机背后/近平面外）→ 返回 NaN 哨兵（调用方跳过）
     inline QVector3D clipToNdc(const QVector4D& clip) {

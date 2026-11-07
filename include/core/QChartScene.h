@@ -44,6 +44,12 @@ struct QChartSegment
 
     QVector<QChartPrimitive> prims;     // 收集期填 Numeric，渲染期填 Cartesian
     QVector<QChartTextLabel> labels;    // 收集期填 Numeric 锚点，渲染期填 Cartesian
+
+    /// 本段的 cart* 是否仍是本段内容的有效映像（契约 S11）。
+    /// ★ 新建段一律 false（结构默认值），由 renderer 在变换后置 true。
+    /// ★ 判据只能看这个位，**不能拿 cart 的值去猜**——"没算过"和"算出来恰好是 0/NaN"无法区分。
+    /// ★ 失效只有两个来源：段被重建、投影变化（此时把**所有段**置 false）。
+    bool cartValid = false;
 };
 
 struct QChartScene

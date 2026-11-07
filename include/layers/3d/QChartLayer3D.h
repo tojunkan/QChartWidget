@@ -35,12 +35,11 @@ public:
     ///   Lattice  = 晶格：只画线（三主轴 + 三族网格 + 盒 12 边），LabelMode::None——无任何文字。
     enum class GridMode { Box, FaceLine, Lattice };
 
-    explicit QChartLayer3D(QObject* parent = nullptr);
+    /// ★ 三根轴在构造时绑定（layer = 相机 + 三轴 + 图元），**运行期不可更换**（换轴请重建 layer）
+    explicit QChartLayer3D(QChartAxis* axisX, QChartAxis* axisY, QChartAxis* axisZ,
+                           QObject* parent = nullptr);
 
-    // 轴（4a：三维层自持三轴绑定；setAxisX/Y 同步 axes3D 编排器）
-    void setAxisX(QChartAxis* a);
-    void setAxisY(QChartAxis* a);
-    void setAxisZ(QChartAxis* a);
+    // 轴（4a：三维层自持三轴绑定；构造时传入、只读）
     QChartAxis* axisX() const { return m_axisX; }
     QChartAxis* axisY() const { return m_axisY; }
     QChartAxis* axisZ() const { return m_axisZ; }
@@ -68,12 +67,12 @@ public:
     const QChartAxes3D* axes3D() const { return m_axes3D.get(); }
 
     // 网格模式
-    // 4g-fix（t58 F3）：网格模式直接影响收集内容 → setter 必须置脏（否则首帧后切换模式绘图区内保持陈旧）
+    // 网格模式直接影响收集内容 → setter 必须置脏；但**只走 gridChanged 一条通路**
+    //（构造里已把它连到 invalidateAxis）。再手调一次会让一次切换发三次重绘请求。
     void setGridMode(GridMode m)
     {
         if (m_gridMode == m) return;
         m_gridMode = m;
-        invalidateData();
         emit gridChanged();
     }
     GridMode gridMode() const { return m_gridMode; }
@@ -86,7 +85,8 @@ public:
     bool hasValidDataBounds() const;
 
     // 图元收集（纯 Numeric，无投影）
-    void collectPrimitives() override;                 // 4a：实现抽象层接口
+    void collectAxisPrimitives() override;             // 只重建轴段（脏表 axis 行驱动）
+    void collectSeriesPrimitives() override;           // 只重建脏系列段 + 按系列顺序归并
     void recomputeDataBounds() override;               // 4a：与迁移前继承的二维空默认一致（空实现）
     /// 4a：边框轴外边距占用（用本层 axisX/axisY；算术与迁移前经二维层继承的实现逐字一致）
     void borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,

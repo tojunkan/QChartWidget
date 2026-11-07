@@ -8,12 +8,9 @@
 #include <cmath>
 
 namespace {
-/// 批次2 B：Box 模式限定"三维直角坐标"投影
-bool isCartesian3DProjection(const QChartProjection3D* p)
-{
-    return p && p->type() == QChartAbstractProjection::CoordinateSystem::Cartesian3D;
-}
-
+// 注：这里**不再**有 isCartesian3DProjection 之类的类型特判辅助。
+// Box 模式需要"恒等映射"这一性质，直接用投影自带的 isIdentityMapping()；
+// FaceLine 的面固定最后一维（全坐标系统一约定），不需要任何"固定哪一维"的开关。
 QString projection3DTypeName(const QChartProjection3D* p)
 {
     if (!p) return QStringLiteral("null（无投影）");
@@ -27,21 +24,33 @@ QString projection3DTypeName(const QChartProjection3D* p)
 }
 } // namespace
 
-QChartLayer3D::QChartLayer3D(QObject* parent)
+// 前向声明：定义在文件下方（轴信号 → 脏表 axis 行）
+static void connectAxisPropertySignals(QChartAxis* a, QChartAbstractLayer* layer);
+
+QChartLayer3D::QChartLayer3D(QChartAxis* axisX, QChartAxis* axisY, QChartAxis* axisZ, QObject* parent)
     : QChartAbstractLayer(parent)
 {
-    // 4a：网格样式变化 → 数据脏标记（语义同原二维层构造内的同名连接）
-    connect(this, &QChartLayer3D::gridChanged, this, &QChartLayer3D::invalidateData);
+    // ★ layer = 相机 + 三根轴 + 图元：**轴在构造时绑定、运行期不可更换**（换轴请重建 layer）。
+    //   与 2D 同构的理由：换轴会改 Data→Numeric 映射 / range 权威 / 相机窗口（见 QChartWidget::removeAxis）。
+    m_axisX = axisX;
+    m_axisY = axisY;
+    m_axisZ = axisZ;
     m_axes3D = std::make_unique<QChartAxes3D>();
     // 4b：数据盒不再独立持有（由三根轴范围组装）；轴缺省范围 0..10 即迁移前的默认盒
     m_axes3D->axis(0).axis = m_axisX;
     m_axes3D->axis(1).axis = m_axisY;
     m_axes3D->axis(2).axis = m_axisZ;
+    // 轴的一切属性变化（含 rangeChanged 这个"域变了"的信号）→ 轴段重建（脏表 axis 行）
+    connectAxisPropertySignals(m_axisX, this);
+    connectAxisPropertySignals(m_axisY, this);
+    connectAxisPropertySignals(m_axisZ, this);
+    // 4a：网格样式/模式变化 → 脏表 axis 行（网格脊属于轴段）
+    connect(this, &QChartLayer3D::gridChanged, this, &QChartLayer3D::invalidateAxis);
     // ★ 批次 B1：3D 相机归 layer——scene3D.camera 恒指向本层相机值成员
     m_scene.camera = &m_camera3D;
-    // 相机变化 → 收集置脏（永远）；并转发给 widget（setViewCube 期间由 m_rangeTriggered 挡住，防回环）
-    connect(&m_camera3D, &QChartCamera3D::viewChanged, this, &QChartAbstractLayer::invalidateView);
-    connect(&m_camera3D, &QChartCamera3D::viewChanged, this, [this] {
+    // 相机变化 → 转发给 widget（setViewCube 期间由 m_rangeTriggered 挡住，防回环）。
+    // ★ 相机本身不再直接置脏表：它只负责"域可能变"，真正决定重建的是 rangeChanged → invalidateAxis。
+    connect(&m_camera3D, &QChartCamera3D::viewChanged, this, [this]() {
         if (!m_rangeTriggered) emit viewChanged(m_camera3D.viewCube());
     });
     // 4b：无独立工作副本——collect 时由 m_axes3D->dataBounds() 从三轴范围组装
@@ -56,32 +65,16 @@ void QChartLayer3D::setViewCube(const QCube& viewCube)
 }
 
 // ===== 轴重绑 =====
-// 轴属性变化 → 轴段必须重建（段内容依赖可见性/样式/刻度数/对齐）。
-// ★ rangeChanged 不在其中：范围变化走"相机域同步"这条独立通路，两者语义不得混。
+// 轴的一切属性变化（含 rangeChanged 这个"域变了"的信号）都导致轴段重建 —— 它们是脏表的输入。
 static void connectAxisPropertySignals(QChartAxis* a, QChartAbstractLayer* layer)
 {
     if (!a) return;
-    QObject::connect(a, &QChartAxis::visibleChanged, layer, &QChartAbstractLayer::invalidateData);
-    QObject::connect(a, &QChartAxis::styleChanged, layer, &QChartAbstractLayer::invalidateData);
-    QObject::connect(a, &QChartAxis::tickCountChanged, layer, &QChartAbstractLayer::invalidateData);
-    QObject::connect(a, &QChartAxis::subTickCountChanged, layer, &QChartAbstractLayer::invalidateData);
-    QObject::connect(a, &QChartAxis::alignmentChanged, layer, &QChartAbstractLayer::invalidateData);
-}
-
-void QChartLayer3D::setAxisX(QChartAxis* a) {
-    m_axisX = a;                                   // 4a：三维层自持轴绑定
-    if (m_axes3D) m_axes3D->axis(0).axis = a;
-    connectAxisPropertySignals(a, this);
-}
-void QChartLayer3D::setAxisY(QChartAxis* a) {
-    m_axisY = a;
-    if (m_axes3D) m_axes3D->axis(1).axis = a;
-    connectAxisPropertySignals(a, this);
-}
-void QChartLayer3D::setAxisZ(QChartAxis* a) {
-    m_axisZ = a;
-    if (m_axes3D) m_axes3D->axis(2).axis = a;
-    connectAxisPropertySignals(a, this);
+    QObject::connect(a, &QChartAxis::rangeChanged, layer, &QChartAbstractLayer::invalidateAxis);
+    QObject::connect(a, &QChartAxis::visibleChanged, layer, &QChartAbstractLayer::invalidateAxis);
+    QObject::connect(a, &QChartAxis::styleChanged, layer, &QChartAbstractLayer::invalidateAxis);
+    QObject::connect(a, &QChartAxis::tickCountChanged, layer, &QChartAbstractLayer::invalidateAxis);
+    QObject::connect(a, &QChartAxis::subTickCountChanged, layer, &QChartAbstractLayer::invalidateAxis);
+    QObject::connect(a, &QChartAxis::alignmentChanged, layer, &QChartAbstractLayer::invalidateAxis);
 }
 
 // ===== 数据盒 =====
@@ -146,48 +139,38 @@ void QChartLayer3D::clearGridColor()
 // 4a：与迁移前继承自二维层的空默认一致（3D 范围重算归后续批次）
 void QChartLayer3D::recomputeDataBounds() {}
 
-// 4a：边框轴外边距（用本层 axisX/axisY；算术与原二维层实现逐字一致）
-void QChartLayer3D::borderAxisSizeHint(const QFont& font, qreal& left, qreal& top,
-                                       qreal& right, qreal& bottom) const
+// 3D **没有边界轴**（轴是立体盒的棱，画在 plotArea 内部），因此不占用外边距。
+// 这里必须返回"什么都不加"：此前逐字沿用了二维层的算术，会让 3D 的 plotArea
+// 被 axisX/axisY 的 sizeHint 白挤掉一圈（AlignBottom/AlignLeft 默认值就会命中）。
+void QChartLayer3D::borderAxisSizeHint(const QFont&, qreal&, qreal&,
+                                       qreal&, qreal&) const
 {
-    const QChartAxis* axes[2] = { m_axisX, m_axisY };
-    for (const QChartAxis* a : axes) {
-        if (!a) continue;
-        const Qt::Alignment al = a->alignment();
-        if (al == Qt::AlignBottom || al == Qt::AlignTop) {
-            const qreal h = a->sizeHint(font).height();
-            if (al == Qt::AlignBottom) bottom += h; else top += h;
-        } else if (al == Qt::AlignLeft || al == Qt::AlignRight) {
-            const qreal w = a->sizeHint(font).width();
-            if (al == Qt::AlignLeft) left += w; else right += w;
-        }
-        // HCenter/VCenter（数据主脊）不占外边距
-    }
 }
 
 // ===== 3D 系列管理（非持有，与 2D 层同约定）=====
-// 数据/可见性/颜色变化 → 重收集（图元在收集时固化）
+// 数据/可见性/颜色变化 → 只置脏表的该系列行（不再全量置脏）
 void QChartLayer3D::addSeries3D(QChartSeries3D* s) {
     if (!s || m_series3D.contains(s)) return;
     m_series3D.append(s);
-    connect(s, &QChartSeries::dataChanged, this, &QChartAbstractLayer::invalidateData);
-    connect(s, &QChartSeries::visibleChanged, this, &QChartAbstractLayer::invalidateData);
-    connect(s, &QChartSeries::colorChanged, this, &QChartAbstractLayer::invalidateData);
-    invalidateData();
+    connect(s, &QChartSeries::dataChanged, this, [this, s]() { invalidateSeries(s); });
+    connect(s, &QChartSeries::visibleChanged, this, [this, s]() { invalidateSeries(s); });
+    connect(s, &QChartSeries::colorChanged, this, [this, s]() { invalidateSeries(s); });
+    invalidateSeries(s);   // 新增 = 该段需要建
 }
 
 void QChartLayer3D::removeSeries3D(QChartSeries3D* s) {
     if (!s || !m_series3D.removeOne(s)) return;
     disconnect(s, nullptr, this, nullptr);
-    invalidateData();
+    m_dirtySeries.remove(s);
+    for (int i = m_scene.seriesSegments.size() - 1; i >= 0; --i)
+        if (m_scene.seriesSegments[i].owner == s) m_scene.seriesSegments.removeAt(i);
+    if (scheduleRepaint) scheduleRepaint();
 }
 
 // ===== collectPrimitives —— 纯 Numeric 图元组装 =====
-void QChartLayer3D::collectPrimitives() {
-    QCHART_DIRTY_MSG(QStringLiteral("collect[3d]: FULL rebuild（清空 axisSegments + seriesSegments 后全量重建）"));
-    // 0a. 段表复位（段序 = 绘制顺序，契约 S1：轴段恒在系列段之前）
+void QChartLayer3D::collectAxisPrimitives() {
+    // 只清轴段：系列段不在本次重建范围内（脏表只标了 axis 行）
     m_scene.axisSegments.clear();
-    m_scene.seriesSegments.clear();
 
     // 0. 轴配置重同步
     if (m_axes3D) {
@@ -279,10 +262,12 @@ void QChartLayer3D::collectPrimitives() {
         };
 
         // ===== 模式解析（批次2 B）=====
-        // Box 仅三维直角坐标有效；其它投影 qWarning 并自动回退 FaceLine。
+        // Box 需要一个"恒等（仿射）"映射：只有这种映射下"盒 + 盒边网格"才有意义。
+        // ★ 判据用投影自己声明的 isIdentityMapping()，不要按具体类型（Cartesian3D）特判——
+        //   layer 不该认识任何具体坐标系。
         GridMode mode = m_gridMode;
-        if (mode == GridMode::Box && !isCartesian3DProjection(m_projection3D)) {
-            qWarning() << "QChartLayer3D: GridMode::Box 仅支持三维直角坐标（Cartesian3D）投影，"
+        if (mode == GridMode::Box && !(m_projection3D && m_projection3D->isIdentityMapping())) {
+            qWarning() << "QChartLayer3D: GridMode::Box 仅支持恒等映射（直角坐标）投影，"
                           "当前投影 ="
                        << projection3DTypeName(m_projection3D)
                        << "→ 自动回退 GridMode::FaceLine（批次2 B 契约）";
@@ -290,8 +275,45 @@ void QChartLayer3D::collectPrimitives() {
         }
         const bool boxMode = (mode == GridMode::Box);
         const bool faceLineMode = (mode == GridMode::FaceLine);
-        // FACE-DEFERRED（批次2 B）：面线模式本阶段只画一条退化安全轴线，不画任何面；
-        // 面/曲面绘制留待曲面系列阶段（几何入口见 QChartAxes3D::faceLineSegment 注释）。
+
+        // ===== 面线模式的"面"（FACE，此前 FACE-DEFERRED）=====
+        // ★ 面的定义：**固定最后一维于中值、前两维做参数网格**，即 Numeric 空间里的一张"平面"，
+        //   由投影决定它弯成什么。全坐标系统一约定：**"面外方向"永远是最后一维**
+        //     Cartesian   (x,y,z) → 固定 z → 平面
+        //     Cylindrical (r,θ,z) → 固定 z → 圆盘
+        //     Spherical   (θ,φ,r) → 固定 r → 球面   ← 球坐标已按同一约定把 r 挪到最后
+        //   采样密度不拍数字：用投影自己声明的 samplingSegmentsHint()（恒等→2，弯曲→32）。
+        //   段归 layer（坐标系装饰，不属于任何 series/axis），且**排在主轴之前**→线与标签压在面上。
+        if (faceLineMode && m_projection3D) {
+            const int fixedDim = 2;       // 统一约定：固定最后一维
+            const int sweepU = 0;         // 列方向
+            const int sweepV = 1;         // 行方向
+
+            const qreal lo[3] = {mn.x(), mn.y(), mn.z()};
+            const qreal hi[3] = {mx.x(), mx.y(), mx.z()};
+            const qreal fixedVal = 0.5 * (lo[fixedDim] + hi[fixedDim]);
+
+            const int cols = qMax(2, m_projection3D->samplingSegmentsHint());
+            const int rows = qMax(2, m_projection3D->samplingSegmentsHint());
+            QVector<QVector3D> faceVerts;
+            faceVerts.reserve(rows * cols);
+            for (int r = 0; r < rows; ++r) {
+                const qreal v = lo[sweepV] + (hi[sweepV] - lo[sweepV]) * r / (rows - 1);
+                for (int c = 0; c < cols; ++c) {
+                    const qreal u = lo[sweepU] + (hi[sweepU] - lo[sweepU]) * c / (cols - 1);
+                    qreal comp[3];
+                    comp[fixedDim] = fixedVal;
+                    comp[sweepU] = u;
+                    comp[sweepV] = v;
+                    faceVerts.append(QVector3D(float(comp[0]), float(comp[1]), float(comp[2])));
+                }
+            }
+            QChartSegment faceSeg;
+            faceSeg.owner = this;
+            faceSeg.prims.append(generatePrimitive(QChartPrimitive::Type::Grid, faceVerts,
+                                                   QColor(128, 128, 128, 90), rows, cols));
+            m_scene.axisSegments.append(faceSeg);
+        }
 
         // ===== 主轴 =====
         auto addSpine = [&](int d, QChartAxis::LabelMode labelMode) {
@@ -315,13 +337,14 @@ void QChartLayer3D::collectPrimitives() {
             // 盒模式：三条主轴按各自刻度逐个标注（Tickwise；显式坐标优先，退化走图元绑定回退）
             for (int d = 0; d < 3; ++d) addSpine(d, QChartAxis::LabelMode::Tickwise);
         } else if (faceLineMode) {
-            // 面线模式（默认）：只画那条退化安全的轴线（球坐标 θ=φ=0），按刻度逐个标注
-            const auto& cfg0 = m_axes3D->axis(0);
-            if (cfg0.visible && cfg0.axis) {
+            // 面线模式（默认）：轴线 = **dim2 轴**（面外/等值维，面固定在它的中值上，所以线穿过面），
+            // dim0/dim1 固定在退化安全值；刻度标签取 dim2 轴自己的（球坐标 r、柱坐标 z）。
+            const auto& cfg2 = m_axes3D->axis(2);
+            if (cfg2.visible && cfg2.axis) {
                 const QPair<QVector3D, QVector3D> safeSeg = QChartAxes3D::faceLineSegment(mn, mx);
-                addLine(cfg0.axis, 0, safeSeg.first.x(), safeSeg.second.x(),
-                        safeSeg.first.y(), safeSeg.first.z(), QChartAxis::LabelMode::Tickwise,
-                        spineCol[0], 2.0);
+                addLine(cfg2.axis, 2, safeSeg.first.z(), safeSeg.second.z(),
+                        safeSeg.first.x(), safeSeg.first.y(), QChartAxis::LabelMode::Tickwise,
+                        spineCol[2], 2.0);
             }
         } else {
             // 晶格模式：只画线，LabelMode::None —— 不生成任何文字
@@ -420,18 +443,48 @@ void QChartLayer3D::collectPrimitives() {
         // }
     }
 
-    // 3. 系列图元（只产 Numeric；投影/相机由 renderer 统一处理）
-    //    每条可见系列一段
+    QCHART_DIRTY_MSG(QStringLiteral("  collectAxis: rebuilt=%1 段").arg(m_scene.axisSegments.size()));
+}
+
+void QChartLayer3D::collectSeriesPrimitives() {
+    int rebuilt = 0;
+    // 1) 只重建脏系列对应的段（未脏的段一个字节不动）
     for (QChartSeries3D* s : m_series3D) {
+        if (!s) continue;
+        const bool dirty = m_dirtySeries.contains(s);
+        int idx = -1;
+        for (int i = 0; i < m_scene.seriesSegments.size(); ++i)
+            if (m_scene.seriesSegments[i].owner == s) { idx = i; break; }
+
         // 契约 S6①：作者意图在收集期过滤——不可见的系列压根不入场景
-        if (!s || !s->isVisible()) continue;
+        if (!s->isVisible()) {
+            if (idx >= 0) m_scene.seriesSegments.removeAt(idx);
+            continue;
+        }
+        if (!dirty && idx >= 0) continue;   // 未脏且已有段 → 保持原样
+
         QCHART_DIRTY_MSG(QStringLiteral("  series<'%1'> 被重新收集").arg(s->name()));
         QChartSegment seg;
         seg.owner = s;
         s->collectPrimitives(seg, m_axisX, m_axisY, m_axisZ);
-        // 空段丢弃：不产生"零图元段"
-        if (seg.prims.isEmpty()) continue;
-        m_scene.seriesSegments.append(seg);
+        if (seg.prims.isEmpty()) {          // 空段丢弃
+            if (idx >= 0) m_scene.seriesSegments.removeAt(idx);
+            continue;
+        }
+        if (idx >= 0) m_scene.seriesSegments[idx] = seg;
+        else m_scene.seriesSegments.append(seg);
+        ++rebuilt;
     }
+
+    // 2) 按 m_series3D 顺序归并（增删系列走同一条路）
+    QVector<QChartSegment> ordered;
+    ordered.reserve(m_scene.seriesSegments.size());
+    for (QChartSeries3D* s : m_series3D) {
+        for (const QChartSegment& seg : m_scene.seriesSegments)
+            if (seg.owner == s) { ordered.append(seg); break; }
+    }
+    m_scene.seriesSegments = ordered;
+    QCHART_DIRTY_MSG(QStringLiteral("  collectSeries: rebuilt=%1 / %2 段")
+                         .arg(rebuilt).arg(m_scene.seriesSegments.size()));
 }
 

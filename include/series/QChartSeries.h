@@ -81,7 +81,7 @@ signals:
     void visibleChanged();
     void opacityChanged();
     void colorChanged();
-    void dataChanged();  // 数据点数量/内容变化（触发 Layer 重绘）
+    void dataChanged();  // 数据点内容/数量**或产物集合**变化（触发 Layer 重收与重绘）
 
 protected:
     QString m_name;

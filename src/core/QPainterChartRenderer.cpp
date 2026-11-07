@@ -1,6 +1,7 @@
 // QPainterChartRenderer.cpp
 #include "QPainterChartRenderer.h"
 #include "QChartAbstractProjection.h"
+#include "QChartMath.h"   // 细分判据常量（与 GLSL 的 GS 同一份）
 #include "QChartCamera.h"
 #include "QChartCamera3D.h"
 #include "QCube.h"
@@ -24,23 +25,46 @@ void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
 
     const bool isIdentity = proj->isIdentityMapping();
 
-    // 段序展开：轴段在前、系列段在后（契约 S1）。变换与段序无关，但保持同一套遍历习惯。
+    // 细分判据（与 GLSL 的 GS 共用 QChartMath 里那一份常量）：
+    //   在 **Numeric** 上均匀取点、再逐点投影；判据本身只用 Cartesian 量（视图无关）。
+    //   k = ceil( d / (ratio·L) )，d = 弓高、L = 弦长；恒等投影直接不细分。
+    auto subdivide = [&](const QVector3D& n0, const QVector3D& n1,
+                         const QVector3D& c0, const QVector3D& c1,
+                         QVector<QVector3D>& out, bool skipFirst) {
+        int k = 1;
+        // ★ 闭环特例（角度维扫满一圈）：两端点在 Cartesian 里重合 ⇒ L≈0，但中点偏离极大（d≈2r）。
+        //   相对判据 d/(ratio·L) 此时趋于无穷，被上限截住 —— 这正是"圆环画成 32 边形"的来路。
+        //   所以**绝不能**用 `L > eps` 当门槛：那会把闭环整段跳过，环直接画不出来（踩过）。
+        const QVector3D cm = proj->toCartesian((n0 + n1) * 0.5f);
+        const qreal d = (cm - (c0 + c1) * 0.5f).length();
+        if (d > 1e-9) {
+            const qreal L = qMax((c1 - c0).length(), 1e-12);
+            const qreal need = d / (QChartMath::SUBDIV_RATIO * L);
+            k = int(qBound(1.0, std::ceil(need), double(QChartMath::SUBDIV_MAX_SEGMENTS)));
+        }
+        for (int i = (skipFirst ? 1 : 0); i <= k; ++i) {
+            const float t = float(i) / float(k);
+            out.append(proj->toCartesian(n0 + (n1 - n0) * t));
+        }
+    };
+
+    // ===== 部分变换的判据在这里 =====
+    // 只有 cartValid == false 的段才重算 cart*；其余段（视图变过、内容没变）一个字节不动。
+    // 失效来源只有两个：段被重建（新段默认 false）、投影变化（全体置 false）。
+    QVector<QChartSegment*> todo;
+    for (QChartSegment& s : scene.axisSegments) if (!s.cartValid) todo.append(&s);
+    for (QChartSegment& s : scene.seriesSegments) if (!s.cartValid) todo.append(&s);
+    const int skipped = scene.axisSegments.size() + scene.seriesSegments.size() - todo.size();
+
     QVector<QChartPrimitive*> flat;
-    for (QChartSegment& s : scene.axisSegments)
-        for (QChartPrimitive& p : s.prims) flat.append(&p);
-    for (QChartSegment& s : scene.seriesSegments)
-        for (QChartPrimitive& p : s.prims) flat.append(&p);
+    for (QChartSegment* s : todo)
+        for (QChartPrimitive& p : s->prims) flat.append(&p);
 
     for (QChartPrimitive* pp : flat) {
         QChartPrimitive& prim = *pp;
         switch (prim.type) {
         case QChartPrimitive::Type::Point:
             prim.cartA = proj->toCartesian(prim.numA);
-            break;
-
-        case QChartPrimitive::Type::Line:
-            prim.cartA = proj->toCartesian(prim.numA);
-            prim.cartB = proj->toCartesian(prim.numB);
             break;
 
         case QChartPrimitive::Type::Rect:
@@ -68,8 +92,26 @@ void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
             break;
         }
 
+        case QChartPrimitive::Type::Path: {
+            // 非线性投影下逐相邻段加密（Numeric 插点 → 逐点投影）
+            if (!isIdentity && prim.numVerts.size() >= 2) {
+                QVector<QVector3D> dense;
+                for (int j = 0; j + 1 < prim.numVerts.size(); ++j) {
+                    const QVector3D c0 = proj->toCartesian(prim.numVerts[j]);
+                    const QVector3D c1 = proj->toCartesian(prim.numVerts[j + 1]);
+                    subdivide(prim.numVerts[j], prim.numVerts[j + 1], c0, c1, dense, j > 0);
+                }
+                prim.cartVerts = dense;
+            } else {
+                prim.cartVerts.resize(prim.numVerts.size());
+                for (int j = 0; j < prim.numVerts.size(); ++j)
+                    prim.cartVerts[j] = proj->toCartesian(prim.numVerts[j]);
+            }
+            prim.cartIndices = prim.numIndices;
+            break;
+        }
+
         case QChartPrimitive::Type::Polygon:
-        case QChartPrimitive::Type::Path:
         case QChartPrimitive::Type::TriangleMesh:
         case QChartPrimitive::Type::TriangleFan:
         case QChartPrimitive::Type::TriangleStrip: {
@@ -80,8 +122,49 @@ void QPainterChartRenderer::transformNumericToCartesian(QChartScene& scene)
             prim.cartIndices = prim.numIndices;
             break;
         }
+
+        case QChartPrimitive::Type::Grid: {
+            // Grid：rows×cols 共享控制点表 → 逐点投影；**索引在这里一次性派生**
+            //（跳过控制点非有限的格子，与旧 TriangleMesh 收集期跳过的行为等价），
+            // 于是 draw 阶段可以与 TriangleMesh 共用同一条索引绘制路径。
+            prim.cartVerts.resize(prim.numVerts.size());
+            for (int j = 0; j < prim.numVerts.size(); ++j) {
+                prim.cartVerts[j] = proj->toCartesian(prim.numVerts[j]);
+            }
+            prim.cartIndices.clear();
+            const int rows = prim.rows;
+            const int cols = prim.cols;
+            if (rows >= 2 && cols >= 2 && prim.numVerts.size() == rows * cols) {
+                prim.cartIndices.reserve(6 * (rows - 1) * (cols - 1));
+                for (int r = 0; r + 1 < rows; ++r) {
+                    for (int c = 0; c + 1 < cols; ++c) {
+                        const int i00 = r * cols + c;      // 左上
+                        const int i01 = i00 + 1;           // 右上
+                        const int i10 = i00 + cols;        // 左下
+                        const int i11 = i10 + 1;           // 右下
+                        const QVector3D& a00 = prim.numVerts[i00];
+                        const QVector3D& a01 = prim.numVerts[i01];
+                        const QVector3D& a10 = prim.numVerts[i10];
+                        const QVector3D& a11 = prim.numVerts[i11];
+                        if (!std::isfinite(a00.x()) || !std::isfinite(a00.y()) || !std::isfinite(a00.z())
+                            || !std::isfinite(a01.x()) || !std::isfinite(a01.y()) || !std::isfinite(a01.z())
+                            || !std::isfinite(a10.x()) || !std::isfinite(a10.y()) || !std::isfinite(a10.z())
+                            || !std::isfinite(a11.x()) || !std::isfinite(a11.y()) || !std::isfinite(a11.z()))
+                            continue;
+                        prim.cartIndices << i00 << i10 << i01;
+                        prim.cartIndices << i01 << i10 << i11;
+                    }
+                }
+            }
+            break;
+        }
         }
     }
+
+    // 算完就把这些段标为有效；下一帧若内容没变，它们会被整体跳过。
+    for (QChartSegment* s : todo) s->cartValid = true;
+    QCHART_DIRTY_MSG(QStringLiteral("  transform: 重算 %1 段 / 跳过 %2 段（valid）")
+                         .arg(todo.size()).arg(skipped));
 }
 
 // 步骤 2b：裁剪 + 标签解析
@@ -192,24 +275,21 @@ void QPainterChartRenderer::drawPrimitives2D(QPainter& painter,
             painter.drawEllipse(pixelA, r, r);
             break;
         }
-        case QChartPrimitive::Type::Line: {
-            QPointF pixelB = cam2d->project(QVector3D(prim.cartB.x(), prim.cartB.y(), 0), plotArea).screen;
-            painter.setBrush(Qt::NoBrush);
-            painter.drawLine(pixelA, pixelB);
-            break;
-        }
         case QChartPrimitive::Type::Rect: {
+            // ★ 左上角必须从 cartRect 自己算。上面的 pixelA 来自 cartA，而 Rect/Ellipse 的变换
+            //   **从不写 cartA**（只写 cartRect），吃 pixelA 会把每个矩形画成
+            //   "从 Cartesian 原点到自己右下角" —— 柱状图糊成一整块阶梯（老 bug）。
+            QPointF pixelTL = cam2d->project(QVector3D(prim.cartRect.left(), prim.cartRect.top(), 0), plotArea).screen;
             QPointF pixelBR = cam2d->project(QVector3D(prim.cartRect.right(), prim.cartRect.bottom(), 0), plotArea).screen;
-            QRectF pixelRect(pixelA, pixelBR);
             painter.setBrush(prim.fillColor);
-            painter.drawRect(pixelRect);
+            painter.drawRect(QRectF(pixelTL, pixelBR));
             break;
         }
         case QChartPrimitive::Type::Ellipse: {
+            QPointF pixelTL = cam2d->project(QVector3D(prim.cartRect.left(), prim.cartRect.top(), 0), plotArea).screen;
             QPointF pixelBR = cam2d->project(QVector3D(prim.cartRect.right(), prim.cartRect.bottom(), 0), plotArea).screen;
-            QRectF pixelRect(pixelA, pixelBR);
             painter.setBrush(prim.fillColor);
-            painter.drawEllipse(pixelRect);
+            painter.drawEllipse(QRectF(pixelTL, pixelBR));
             break;
         }
         case QChartPrimitive::Type::Polygon: {
@@ -236,12 +316,15 @@ void QPainterChartRenderer::drawPrimitives2D(QPainter& painter,
         }
         case QChartPrimitive::Type::TriangleMesh:
         case QChartPrimitive::Type::TriangleFan:
-        case QChartPrimitive::Type::TriangleStrip: {
+        case QChartPrimitive::Type::TriangleStrip:
+        case QChartPrimitive::Type::Grid: {
             if (prim.cartVerts.isEmpty()) break;
             painter.setBrush(prim.fillColor);
             // 简单实现：按三角形绘制
             const auto& verts = prim.cartVerts;
-            if (prim.type == QChartPrimitive::Type::TriangleMesh && !prim.cartIndices.isEmpty()) {
+            if ((prim.type == QChartPrimitive::Type::TriangleMesh
+                 || prim.type == QChartPrimitive::Type::Grid)
+                && !prim.cartIndices.isEmpty()) {
                 for (int j = 0; j < prim.cartIndices.size(); j += 3) {
                     if (j + 2 >= prim.cartIndices.size()) break;
                     QPolygonF tri;
@@ -279,40 +362,39 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
     for (QChartSegment& s : scene.seriesSegments)
         for (QChartPrimitive& p : s.prims) if (p.visible) flat.append(&p);
 
-    for (QChartPrimitive* pp : flat) {
-        QChartPrimitive& prim = *pp;
+    // 1b. 逐图元算视图深度（只放在局部表里，不往 scene 上写任何东西）
+    QVector<QPair<qreal, const QChartPrimitive*>> ordered;
+    ordered.reserve(flat.size());
+    for (const QChartPrimitive* prim : flat) {
         qreal depth = 0;
-        switch (prim.type) {
+        switch (prim->type) {
         case QChartPrimitive::Type::Point:
-            depth = cam3d->project(prim.cartA, plotArea).depth;
-            break;
-        case QChartPrimitive::Type::Line:
-            depth = cam3d->project((prim.cartA + prim.cartB) * 0.5, plotArea).depth;
+            depth = cam3d->project(prim->cartA, plotArea).depth;
             break;
         case QChartPrimitive::Type::Rect:
         case QChartPrimitive::Type::Ellipse:
             break;
         case QChartPrimitive::Type::Polygon:
         case QChartPrimitive::Type::Path:
-            depth = cam3d->project(QCube(prim.cartVerts).center(), plotArea).depth;
-            break;
         case QChartPrimitive::Type::TriangleMesh:
         case QChartPrimitive::Type::TriangleFan:
         case QChartPrimitive::Type::TriangleStrip:
-            depth = cam3d->project(QCube(prim.cartVerts).center(), plotArea).depth;
+        case QChartPrimitive::Type::Grid:
+            depth = cam3d->project(QCube(prim->cartVerts).center(), plotArea).depth;
             break;
         }
-        prim.depth = depth;
+        ordered.append(qMakePair(depth, prim));
     }
 
-    // 2. 按 depth 降序排序（远→近）
-    std::sort(flat.begin(), flat.end(),
-        [](const QChartPrimitive* a, const QChartPrimitive* b) {
-            return a->depth > b->depth;
+    // 2. 按 depth 降序排序（远→近）= painter's algorithm
+    std::sort(ordered.begin(), ordered.end(),
+        [](const QPair<qreal, const QChartPrimitive*>& a,
+           const QPair<qreal, const QChartPrimitive*>& b) {
+            return a.first > b.first;
         });
 
-    for (QChartPrimitive* pp : flat) {
-        const QChartPrimitive& prim = *pp;
+    for (const QPair<qreal, const QChartPrimitive*>& item : ordered) {
+        const QChartPrimitive& prim = *item.second;
         if (!prim.visible) continue;
 
         QChartProjectedPoint ppA = cam3d->project(prim.cartA, plotArea);
@@ -325,14 +407,6 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
             painter.setBrush(prim.color);
             qreal r = prim.markerSize * 0.5;
             painter.drawEllipse(ppA.screen, r, r);
-            break;
-        }
-        case QChartPrimitive::Type::Line: {
-            QChartProjectedPoint ppB = cam3d->project(prim.cartB, plotArea);
-            if (!std::isfinite(ppB.screen.x()) || !std::isfinite(ppB.screen.y())) break;
-            painter.setBrush(Qt::NoBrush);
-            painter.drawLine(ppA.screen, ppB.screen);
-
             break;
         }
         case QChartPrimitive::Type::Rect: {
@@ -381,14 +455,17 @@ void QPainterChartRenderer::drawPrimitives3D(QPainter& painter,
         }
         case QChartPrimitive::Type::TriangleMesh:
         case QChartPrimitive::Type::TriangleFan:
-        case QChartPrimitive::Type::TriangleStrip: {
+        case QChartPrimitive::Type::TriangleStrip:
+        case QChartPrimitive::Type::Grid: {
             if (prim.cartVerts.isEmpty()) break;
             painter.setBrush(prim.fillColor);
             const auto& verts = prim.cartVerts;
             auto project = [&](const QVector3D& v) -> QPointF {
                 return cam3d->project(v, plotArea).screen;
             };
-            if (prim.type == QChartPrimitive::Type::TriangleMesh && !prim.cartIndices.isEmpty()) {
+            if ((prim.type == QChartPrimitive::Type::TriangleMesh
+                 || prim.type == QChartPrimitive::Type::Grid)
+                && !prim.cartIndices.isEmpty()) {
                 for (int j = 0; j < prim.cartIndices.size(); j += 3) {
                     if (j + 2 >= prim.cartIndices.size()) break;
                     QPolygonF tri;
@@ -517,26 +594,6 @@ bool QPainterChartRenderer::isPrimitiveVisible2D(const QChartPrimitive& prim, co
     case QChartPrimitive::Type::Point:
         return viewRect.contains(prim.cartA.x(), prim.cartA.y());
 
-    case QChartPrimitive::Type::Line: {
-        const QPointF a(prim.cartA.x(), prim.cartA.y());
-        const QPointF b(prim.cartB.x(), prim.cartB.y());
-        if (viewRect.contains(a) || viewRect.contains(b)) return true;
-        QLineF line(a, b);
-        QRectF rect = viewRect;
-        QLineF edges[4] = {
-            QLineF(rect.topLeft(), rect.topRight()),
-            QLineF(rect.topRight(), rect.bottomRight()),
-            QLineF(rect.bottomRight(), rect.bottomLeft()),
-            QLineF(rect.bottomLeft(), rect.topLeft())
-        };
-        for (const auto& edge : edges) {
-            QPointF inter;
-            if (line.intersects(edge, &inter) == QLineF::BoundedIntersection)
-                return true;
-        }
-        return false;
-    }
-
     case QChartPrimitive::Type::Rect:
     case QChartPrimitive::Type::Ellipse:
         return viewRect.intersects(prim.cartRect);
@@ -545,7 +602,8 @@ bool QPainterChartRenderer::isPrimitiveVisible2D(const QChartPrimitive& prim, co
     case QChartPrimitive::Type::Path:
     case QChartPrimitive::Type::TriangleMesh:
     case QChartPrimitive::Type::TriangleFan:
-    case QChartPrimitive::Type::TriangleStrip: {
+    case QChartPrimitive::Type::TriangleStrip:
+    case QChartPrimitive::Type::Grid: {
         if (prim.cartVerts.isEmpty()) return false;
         qreal minX = prim.cartVerts[0].x(), maxX = minX;
         qreal minY = prim.cartVerts[0].y(), maxY = minY;
@@ -574,12 +632,6 @@ bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, co
     case QChartPrimitive::Type::Point:
         return viewCube.contains(prim.cartA);
 
-    case QChartPrimitive::Type::Line: {
-        // 用线段两端点形成包围盒
-        QCube lineCube(prim.cartA, prim.cartB);
-        return viewCube.intersects(lineCube);
-    }
-
     case QChartPrimitive::Type::Rect:
     case QChartPrimitive::Type::Ellipse: {
         qWarning() << "QPainterChartRenderer: isPrimitiveVisible3D: Rect/Ellipse 3D 裁剪未实现，使用包围盒近似";
@@ -594,7 +646,8 @@ bool QPainterChartRenderer::isPrimitiveVisible3D(const QChartPrimitive& prim, co
     case QChartPrimitive::Type::Path:
     case QChartPrimitive::Type::TriangleMesh:
     case QChartPrimitive::Type::TriangleFan:
-    case QChartPrimitive::Type::TriangleStrip: {
+    case QChartPrimitive::Type::TriangleStrip:
+    case QChartPrimitive::Type::Grid: {
         if (prim.cartVerts.isEmpty()) return false;
         // 构建 AABB
         qreal minX = prim.cartVerts[0].x(), maxX = minX;

@@ -60,18 +60,8 @@ public:
     /// 步骤 3（图元绘制）和步骤 4（标签绘制）由子类实现
     void render(QChartScene& scene, QPaintDevice* device);
 
-    /// 数据变化（Series 增删改、颜色变化等）→ 下一次 render 重算变换
-    // void invalidateData() { m_dataDirty = true; }
-
-    /// 场景快照重建（视图变化：Camera 操作 / resize 经 plotArea / 投影切换；或数据变化）→
-    /// 下一次 render 重算变换与裁剪。
-    /// 4g：本标记由 widget 在“层重收集（ensureSceneCollected() 为真）”时调用——不再每帧无条件置位；
-    /// 规则更正：**视图变化必须重收集背景**（网格脊/刻度/标签由轴持有的可见 numeric 范围生成），
-    /// 本阶段为**粗粒度 viewDirty = 全量更新（重收集 + 变换 + 裁剪）**，背景/前景分级留待后续批次。
-    void invalidateView() {
-        m_viewDirty = true;
-        QCHART_DIRTY_MSG(QStringLiteral("renderer: invalidateView() -> m_viewDirty=true"));
-    }
+    /// 渲染器**无状态**：没有"要不要重跑某一步"的旗标。
+    /// 变换由每段的 `cartValid` 决定要不要算（见 QChartScene.h / 契约 S11），裁剪每帧全量。
 
     // ===== t75：标签自动避让状态（迟滞）只读查询（测试/诊断入口；契约见下方 drawLabel 注释）=====
     /// 标签稳定身份键（当前实现 = 字号 + 文字；图层已按契约把组号盖进 label.sourceId，
@@ -162,13 +152,9 @@ protected:
     virtual void onRenderBegin(QPaintDevice* device) { Q_UNUSED(device); }
     virtual void onRenderEnd(QPaintDevice* device) { Q_UNUSED(device); }
 
-    // 内部状态
-    // bool m_dataDirty = true;          // 数据变化 → 需要重算变换 数据变化应该在构建scene的时候判定，这是widget的活
-    // 4g：视图/数据变化（= 场景快照重建）→ 需要重算变换与裁剪；无变化则不重算（缓存有效）。
-    // 粗粒度全量更新语义见 invalidateView() 注释（背景/前景分级留待后续批次）。
-    bool m_viewDirty = true;
-    // m_visibilityCache 已删除：裁剪结果直接写回 QChartPrimitive::visible（契约 C5/C6）。
-    // 不要在渲染器里再重建一份"与 primitives 一一对应的可见性数组"——那是两份需要同步的状态。
+    // 内部状态：**没有**。渲染器不持有任何"脏/no-脏"状态——
+    // 要不要重算由段的 cartValid 决定，裁剪每帧全量。m_visibilityCache 也已删除
+    // （裁剪结果直接写回 QChartPrimitive::visible，契约 S6）。
 
     /// t75：避让状态 LRU 裁剪（超过 kAvoidMaxEntries 时丢弃最久未更新条目）
     void pruneAvoidState();

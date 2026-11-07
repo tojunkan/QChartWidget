@@ -23,14 +23,10 @@ void QLineSeries::collectPrimitives(QChartSegment& seg,
     auto flush = [&]() {
         if (run.isEmpty()) return;
         QChartPrimitive p;
-        if (run.size() == 2) {
-            p.type = QChartPrimitive::Type::Line;
-            p.numA = run.at(0);
-            p.numB = run.at(1);
-        } else {
-            p.type = QChartPrimitive::Type::Path;
-            p.numVerts = run;
-        }
+        // 折线只有一种表示（Path）：2 点也发 Path，不再有 Line 特例。
+        // 这样"渲染期把 Line 提升成 Path"这类不可重入的形态转换不存在（B1）。
+        p.type = QChartPrimitive::Type::Path;
+        p.numVerts = run;
         p.color = color();
         p.penWidth = static_cast<float>(m_lineWidth);
         seg.prims.append(p);

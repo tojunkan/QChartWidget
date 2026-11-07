@@ -41,12 +41,13 @@ public:
     static QVector<int> spineEdgeIndices();
 
     /// FaceLine 模式（批次2 B）：退化安全的固定值——0 落在 [lo,hi] 内取 0，否则取区间中点。
-    /// 对球坐标（dim1=θ、dim2=φ）即优先取 θ=φ=0（赤道/本初子午线，远离极点与 r=0 奇点）。
+    /// 用于角度维等"0 是安全值"的方向（球坐标的 θ=φ=0：赤道/本初子午线，远离极点）。
     static qreal safeFixedValue(qreal lo, qreal hi);
 
-    /// FaceLine 模式（批次2 B）：退化安全的轴线端点——沿 dim0 的线段，其余两维固定在
-    /// safeFixedValue（球坐标即 θ=φ=0 那条半径线；直角坐标即过 0/中点的 x 轴线）。
-    /// FACE-DEFERRED：面（曲面）绘制留待曲面系列阶段实现，本函数只给线。
+    /// FaceLine 模式的安全轴线：**沿 dim2 轴**（即"面外/等值"那一维，面就固定在它的中值上），
+    /// dim0 / dim1 固定在 safeFixedValue（远离极点/奇点）。
+    /// 于是：球坐标 = θ=φ=0 的**半径线**（穿过 r=mid 的球面）；柱坐标 = r=θ=0 的 **z 轴线**；
+    ///       直角坐标 = x=y=0 的 **z 轴线**。刻度标签取 dim2 轴自己的。
     static QPair<QVector3D, QVector3D> faceLineSegment(const QVector3D& dataMin,
                                                        const QVector3D& dataMax);
 

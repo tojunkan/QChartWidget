@@ -194,9 +194,48 @@ void scheduleSummary2D(QChartLayer* layer, DemoBackend backend)
     tick->start();
 }
 
-/// QCHART_DEMO_SHOT=1：按模式名额外出图（GL 后端另存 GL 宿主 FBO）
-void scheduleModeShot(QChartWidget3D* w3, QChartLayer3D::GridMode mode, DemoBackend backend)
+// ===== 运行期动作钩子（QCHART_DEMO_SWITCH=1）=====
+// 为什么需要它：B1（2D Line→Path 不可重入）/ B2（3D 投影切换不失效）这两个 bug 的触发条件都是
+//   **运行中再切一次**投影，而常规 demo 只在启动时设一次，所以它们永远不暴露。
+// 时间线：30s 切到另一种投影 → 45s 再切一次；每次切换后 ~400ms 抓图存盘。
+//   demo_switch_<tag>.png          —— widget->grab()
+//   demo_switch_<tag>_glhost.png   —— GL 后端另抓光栅化的宿主 FBO
+bool demoSwitchEnabled()
 {
+    return qEnvironmentVariableIsSet("QCHART_DEMO_SWITCH");
+}
+
+/// 抓一张图（GL 后端优先抓宿主 FBO，因为 widget->grab() 拿不到 GL 的光栅内容）
+void captureSwitchShot(QChartAbstractWidget* w, const QString& tag)
+{
+    const QString base = QStringLiteral("demo_switch_%1").arg(tag);
+    if (auto* host = w->findChild<QOpenGLWidget*>()) {
+        const QString fboFile = base + QStringLiteral("_glhost.png");
+        qInfo().noquote() << QString("shot-switch %1 saved=%2")
+                                 .arg(fboFile).arg(host->grabFramebuffer().save(fboFile));
+    }
+    qInfo().noquote() << QString("shot-switch %1 saved=%2")
+                             .arg(base + ".png").arg(w->grab().save(base + ".png"));
+    QCHART_DIRTY_MSG(QStringLiteral("switch: 已抓图 %1").arg(base + QStringLiteral(".png")));
+}
+
+/// 安排一次"延时切换 + 抓图"。fn 做切换动作；tag 用于文件名。
+template <typename Fn>
+void scheduleSwitch(QChartAbstractWidget* w, int atMs, const QString& tag, Fn fn)
+{
+    auto* t = new QTimer(w);
+    t->setSingleShot(true);
+    t->setInterval(atMs);
+    QObject::connect(t, &QTimer::timeout, w, [w, tag, fn]() {
+        fn();
+        QCHART_DIRTY_MSG(QStringLiteral("switch: %1s 已切换").arg(tag));
+        QTimer::singleShot(420, w, [w, tag]() { captureSwitchShot(w, tag); });
+    });
+    t->start();
+}
+
+/// QCHART_DEMO_SHOT=1：按模式名额外出图（GL 后端另存 GL 宿主 FBO）
+void scheduleModeShot(QChartWidget3D* w3, QChartLayer3D::GridMode mode, DemoBackend backend){
     if (!qEnvironmentVariableIsSet("QCHART_DEMO_SHOT")) return;
     // 等首帧收集完成再出图/记录（GL 宿主首帧可能晚于 300ms；最迟 360ms，早于框架 400ms 截图）
     auto* tick = new QTimer(w3);
@@ -242,7 +281,7 @@ QWidget* buildDemoAxis(DemoBackend backend)
         radial->setRange(0.0, 5.0);
         radial->setTickCount(6);
         radial->setColor(Qt::black);
-        auto* layer = new QChartLayer(w);
+        auto* layer = new QChartLayer(angle, radial, w);
         layer->setGridVisible(true);
         w->addAxis(angle);
         w->addAxis(radial);
@@ -265,7 +304,7 @@ QWidget* buildDemoAxis(DemoBackend backend)
     y->setTickCount(9);
     y->setColor(Qt::black);
 
-    auto* layer = new QChartLayer(w);     // QObject 子，基类容器非持有
+    auto* layer = new QChartLayer(x, y, w);     // QObject 子，基类容器非持有
     layer->setGridVisible(true);
     w->addAxis(x);
     w->addAxis(y);
@@ -300,7 +339,7 @@ QWidget* buildDemoScatter(DemoBackend backend)
     y->setTickCount(5);
     y->setColor(Qt::black);
 
-    auto* layer = new QChartLayer(w);
+    auto* layer = new QChartLayer(x, y, w);
     layer->setGridVisible(true);
     w->addAxis(x);
     w->addAxis(y);
@@ -381,7 +420,7 @@ QWidget* buildDemoLine(DemoBackend backend)
     y->setTickCount(7);
     y->setColor(Qt::black);
 
-    auto* layer = new QChartLayer(w);
+    auto* layer = new QChartLayer(x, y, w);
     layer->setGridVisible(true);
     w->addAxis(x);
     w->addAxis(y);
@@ -412,6 +451,21 @@ QWidget* buildDemoLine(DemoBackend backend)
     }
     layer->addSeries(wave);
 
+    // ③ 穿过极点的曲线（仅 polar）：r = cos 2θ —— 在 θ=45°/135°/225°/315° 处 r=0，
+    //    曲线**正好经过原点**（极坐标的极点）。用来检查：
+    //      a) 中点弓高判据在极点附近会不会把段判错；b) 原点处是否出现横跨全图的异常边。
+    if (polar) {
+        auto* rose = new QLineSeries(QStringLiteral("cos2θ"), w);
+        rose->setLineWidth(2.0);
+        rose->setColor(QColor("#43A047"));
+        for (int i = 0; i <= 720; ++i) {
+            const qreal th = 360.0 * static_cast<qreal>(i) / 720.0;   // 角度轴单位 = 度
+            const qreal r = 1.2 * std::cos(2.0 * qDegreesToRadians(th));
+            rose->append(th, r);                                     // 负半径 → 反向穿过原点
+        }
+        layer->addSeries(rose);
+    }
+
     // ===== 脏变量验证钩子（QCHART_DEMO_DIRTY=1 时启用）=====
     // 程序跑到第 60 秒改一次 series 数据（y 整体 +1.5），用来观察：
     //   dataDirty 是否真的驱动了「收集 + 变换 + 裁剪 + 绘制」，以及图像是否随之更新。
@@ -430,6 +484,20 @@ QWidget* buildDemoLine(DemoBackend backend)
             QCHART_DIRTY_MSG(QStringLiteral("demo: series<'sin'> 数据已改动（200 点 y 整体 +1.5）"));
         });
         timer->start();
+    }
+
+    // ===== 运行期动作钩子：投影切换（暴露 B1：Line→Path 提升不可重入）=====
+    // 30s 切 polar（第一次把 Line 提升成 Path，画得出来）；45s 切回 cartesian（段不重建，
+    // 只把 cartValid 置 false → 再进 Path 分支时 numVerts 为空 → 线类几何应当**消失**）。
+    if (demoSwitchEnabled()) {
+        // 切换前的基准快照（不切换，只抓图）：用来验证"切回原投影后数据是否回到原位"
+        scheduleSwitch(w, 28000, QStringLiteral("2d_28s_baseline_cartesian"), []() {});
+        scheduleSwitch(w, 30000, QStringLiteral("2d_30s_polar"), [w]() {
+            w->setProjection(std::make_unique<QPolarProjection>());
+        });
+        scheduleSwitch(w, 45000, QStringLiteral("2d_45s_cartesian"), [w]() {
+            w->setProjection(std::make_unique<QCartesianProjection>());
+        });
     }
 
     applyBackend(w, backend);
@@ -512,6 +580,20 @@ QWidget* buildDemoLine3D(DemoBackend backend)
         timer->start();
     }
 
+    // ===== 运行期动作钩子：3D 投影切换（暴露 B2：切换后既不失效也不重绘）=====
+    // 若 B2 成立，30s/45s 之后日志里**不会出现任何** chart.dirty 行（没有 invalidateAxis、
+    // 没有重绘请求），几何仍按旧投影摆放。
+    if (demoSwitchEnabled()) {
+        // 切换前基准快照（不切换，只抓图）
+        scheduleSwitch(w3, 28000, QStringLiteral("3d_28s_baseline"), []() {});
+        scheduleSwitch(w3, 30000, QStringLiteral("3d_30s_cylindrical"), [w3]() {
+            w3->setProjection3D(&s_cyl);
+        });
+        scheduleSwitch(w3, 45000, QStringLiteral("3d_45s_spherical"), [w3]() {
+            w3->setProjection3D(&s_sph);
+        });
+    }
+
     applyBackend(w3, backend);
     w3->setWindowTitle(QStringLiteral("demo_line3d [%1|%2|%3]")
                        .arg(backend == DemoBackend::Gl ? "gl" : "cpu")
@@ -541,7 +623,7 @@ QWidget* buildDemoPolygon(DemoBackend backend)
     y->setTickCount(7);
     y->setColor(Qt::black);
 
-    auto* layer = new QChartLayer(w);
+    auto* layer = new QChartLayer(x, y, w);
     layer->setGridVisible(true);
     w->addAxis(x);
     w->addAxis(y);
@@ -562,7 +644,7 @@ QWidget* buildDemoPolygon(DemoBackend backend)
     // ② 两个三角形用 NaN 隔开 → 两个独立多边形（纯填充）
     auto* two = new QPolygonSeries(QStringLiteral("two"), w);
     two->setColor(QColor("#E53935"));
-    two->setFillColor(QColor(229, 57, 53));
+    two->setFillColor(QColor(229, 57, 53, 120));   // TEMP-BLENDTEST：半透明红（原本是不透明）
     two->append(-5.0, -5.0);
     two->append(-2.0, -5.0);
     two->append(-3.5, -1.5);
@@ -601,7 +683,7 @@ QWidget* buildDemoBar(DemoBackend backend)
     y->setTickCount(7);
     y->setColor(Qt::black);
 
-    auto* layer = new QChartLayer(w);
+    auto* layer = new QChartLayer(x, y, w);
     layer->setGridVisible(true);
     w->addAxis(x);
     w->addAxis(y);
@@ -632,6 +714,8 @@ QWidget* buildDemoBar(DemoBackend backend)
 QWidget* buildDemoSurface3D(DemoBackend backend)
 {
     static QCartesianProjection3D s_cart;
+    static QCylindricalProjection3D s_cyl;
+    static QSphericalProjection3D s_sph;
 
     auto* w3 = new QChartWidget3D;
     w3->setProjection3D(&s_cart);
@@ -653,6 +737,8 @@ QWidget* buildDemoSurface3D(DemoBackend backend)
         }
     }
     surface->setGrid(R, C, pts);
+    // 演示"网格连线"作为曲面的辅助显示（RenderMode 默认是 Surface，画面与以前完全一致）
+    surface->setRenderMode(QChartSurfaceSeries::RenderMode::SurfaceWithGrid);
     w3->layer3D()->addSeries3D(surface);
 
     applyBackend(w3, backend);
@@ -660,6 +746,45 @@ QWidget* buildDemoSurface3D(DemoBackend backend)
                        .arg(backend == DemoBackend::Gl ? "gl" : "cpu")
                        .arg(gridModeKey(w3->gridMode3D())));
     w3->resize(720, 540);
+
+    // 曲面细分只有**非仿射投影**才看得出来（笛卡尔下格内无弯曲，判据给 k=1）。
+    // 时间线：30s 柱面、45s 球面，各抓一张图。
+    // 交叉验证：同一时间线跑 `surface3d cpu`，CPU 不做曲面细分 ⇒ 两者差异就是细分效果。
+    if (demoSwitchEnabled()) {
+        const QString bk = (backend == DemoBackend::Gl) ? QStringLiteral("gl") : QStringLiteral("cpu");
+        scheduleSwitch(w3, 28000, QStringLiteral("surf_%1_28s_baseline_cartesian").arg(bk), []() {});
+        scheduleSwitch(w3, 30000, QStringLiteral("surf_%1_30s_cylindrical").arg(bk), [w3, bk]() {
+            w3->setProjection3D(&s_cyl);
+        });
+        scheduleSwitch(w3, 45000, QStringLiteral("surf_%1_45s_spherical").arg(bk), [w3, bk]() {
+            w3->setProjection3D(&s_sph);
+        });
+    }
+    // ===== QCHART_DEMO_ZOOM=1：放大前后各抓一张 =====
+    // 目的：验证"放大时盒子/裁剪体随视角缩放"的行为——viewCube 减半 = 视景体减半（放大两倍），
+    //   而曲面数据是固定的，所以要看曲面在盒子外是**被裁掉**还是**照旧画出来**。
+    // 日志里同时打 viewCube 尺寸与三轴范围，用于对照（轴是范围的唯一持有者）。
+    if (qEnvironmentVariableIsSet("QCHART_DEMO_ZOOM")) {
+        const QString bk = (backend == DemoBackend::Gl) ? QStringLiteral("gl") : QStringLiteral("cpu");
+        auto dumpState = [w3](const QString& when) {
+            QChartCamera3D* cam = w3->camera3D();
+            const QVector3D sz = cam ? cam->viewCubeSize() : QVector3D();
+            auto rng = [w3](QChartAxis* a) {
+                if (auto* v = dynamic_cast<QValueAxis*>(a)) return QString("%1..%2").arg(v->min()).arg(v->max());
+                return QStringLiteral("<non-value>");
+            };
+            qInfo().noquote() << QString("[ZOOM] %1 viewCubeSize=(%2,%3,%4) axisX=%5 axisY=%6 axisZ=%7")
+                                     .arg(when).arg(sz.x()).arg(sz.y()).arg(sz.z())
+                                     .arg(rng(w3->axisX3D()), rng(w3->axisY3D()), rng(w3->axisZ3D()));
+        };
+        scheduleSwitch(w3, 4000, QStringLiteral("zoom_%1_before").arg(bk), [dumpState]() {
+            dumpState(QStringLiteral("before"));
+        });
+        scheduleSwitch(w3, 6500, QStringLiteral("zoom_%1_after").arg(bk), [w3, dumpState]() {
+            if (QChartCamera3D* cam = w3->camera3D()) cam->dolly(0.5);   // viewCube 减半 = 放大两倍
+            dumpState(QStringLiteral("after"));
+        });
+    }
     return w3;
 }
 
@@ -683,18 +808,22 @@ QWidget* buildDemoAxis3D(DemoBackend backend)
     w3->setProjection3D(proj);
     w3->setGridMode3D(mode);                                        // 转发 layer3D（Box 仅直角投影，否则回退）
 
-    // 各坐标系按 Numeric 语义设域盒（球：(r,θ,φ)；柱：(r,θ,z)）
+    // 各坐标系按 Numeric 语义设域盒（统一约定：**面外方向是最后一维**；球：(θ,φ,r)；柱：(r,θ,z)）
     QCube domain;
     switch (projKind) {
-    case Proj3D::Spherical:   domain = QCube(QVector3D(0, 0, -90), QVector3D(2, 360, 90)); break;
+    case Proj3D::Spherical:   domain = QCube(QVector3D(0, -90, 0), QVector3D(360, 90, 2)); break;
     case Proj3D::Cylindrical: domain = QCube(QVector3D(0, 0, -2),  QVector3D(2, 360, 2));  break;
     case Proj3D::Cartesian:   domain = QCube(QVector3D(-3, -3, -3), QVector3D(3, 3, 3));  break;
     }
     w3->setDataBounds3D(domain);
 
     // 球/柱坐标：θ 轴显式 45° 间隔（niceStep 不整除 360 → 环不闭合、接缝错位；角度轴需要能整除的步长）
-    if (projKind != Proj3D::Cartesian) {
+    // ★ θ 所在的维随投影而变：柱坐标 (r,θ,z) → dim1；球坐标 (θ,φ,r) → dim0
+    if (projKind == Proj3D::Cylindrical) {
         if (auto* a = dynamic_cast<QValueAxis*>(w3->axisY3D()))
+            a->setTickInterval(45.0);
+    } else if (projKind == Proj3D::Spherical) {
+        if (auto* a = dynamic_cast<QValueAxis*>(w3->axisX3D()))
             a->setTickInterval(45.0);
     }
 

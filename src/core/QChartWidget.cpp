@@ -31,10 +31,13 @@ void QChartWidget::addLayer(QChartAbstractLayer* layer)
     QChartLayer* l2 = dynamic_cast<QChartLayer*>(layer);
     if (!l2) return;
     connect(l2, &QChartLayer::viewChanged, this, &QChartWidget::updateAxes);
+    // ★ 轴在 layer 构造时就已绑定（layer = 相机 + 两根轴 + 图元），这里只做一致性校验。
+    //   不一致说明调用方把轴传给了另一层 / 忘了传给 layer 构造 —— 让问题当场可见。
     for (QChartAxis* a : m_axes) {
-        if (!isAxisAttached(a)) attachToLayer(l2, a);
+        if (a != l2->axisX() && a != l2->axisY())
+            qWarning() << "QChartWidget::addLayer: 登记的轴不是该 layer 的轴（轴应在 QChartLayer 构造时传入）";
     }
-    // 图层/轴绑定变化 → 数值侧同步一次（轴范围 → 相机窗口）
+    // 数值侧同步一次（轴范围 → 相机窗口）
     if (m_projection) {
         const QRectF db = dataBounds();
         if (!db.isEmpty()) l2->setViewRect(m_projection->computeViewRect(db));
@@ -59,7 +62,7 @@ void QChartWidget::addAxis(QChartAxis* a)
     // 逐信号接线 + 内容指纹（下方 onBeforePaint 注入）双保险；addAxis 对同一轴只连一次（m_axes 去重）。
     // （lambda 内联：QChartWidget.h 不在本任务 inScope，故不新增成员函数）
     auto markContentDirty = [this]() {
-        if (QChartLayer* l = layer2D()) l->invalidateData();
+        if (QChartLayer* l = layer2D()) l->invalidateAxis();
         scheduleRepaint();
     };
     connect(a, &QChartAxis::tickCountChanged, this, [markContentDirty]() { markContentDirty(); });
@@ -74,7 +77,8 @@ void QChartWidget::addAxis(QChartAxis* a)
     });
     connect(a, &QChartAxis::visibleChanged, this, [this]() { m_layoutDirty = true; });
     if (QChartLayer* l = layer2D()) {
-        attachToLayer(l, a);
+        // ★ 不再"往 layer 上绑轴"：轴在 QChartLayer 构造时就传入、运行期不可更换。
+        //   这里只做登记（参与外边距计算）+ 连接相机侧信号；层已存在时顺带同步一次窗口。
         if (m_projection) {
             const QRectF db = dataBounds();
             if (!db.isEmpty()) l->setViewRect(m_projection->computeViewRect(db));
@@ -85,21 +89,21 @@ void QChartWidget::addAxis(QChartAxis* a)
 
 void QChartWidget::removeAxis(QChartAxis* a)
 {
+    if (!a) return;
+    // ★ 轴在 layer 构造时绑定、**运行期不可更换**：
+    //   换轴会同时改变 Data→Numeric 映射、range 的权威、相机窗口与外边距，
+    //   而且既有系列数据未必还能被新轴映射（典型：分类轴 "苹果" → 数值轴 → 全 NaN → 空图）。
+    //   要换轴请重建 layer（轴随构造传入）。
+    if (QChartLayer* l = layer2D()) {
+        if (l->axisX() == a || l->axisY() == a) {
+            qWarning() << "QChartWidget::removeAxis: 该轴已绑定到图层，运行期不可移除（请重建图层）";
+            return;
+        }
+    }
     disconnect(a, nullptr, this, nullptr);   // 4e：解除范围变化监听（轴非持有，防悬挂连接）
     m_axes.removeAll(a);
-    if (QChartLayer* l = layer2D()) {
-        if (l->axisX() == a) l->setAxisX(nullptr);
-        if (l->axisY() == a) l->setAxisY(nullptr);
-    }
-}
-
-void QChartWidget::attachToLayer(QChartLayer* layer, QChartAxis* a)
-{
-    if (a->isHorizontal()) {
-        if (!layer->axisX()) layer->setAxisX(a);
-    } else {
-        if (!layer->axisY()) layer->setAxisY(a);
-    }
+    m_layoutDirty = true;
+    scheduleRepaint();
 }
 
 bool QChartWidget::isAxisAttached(QChartAxis* a) const
@@ -113,13 +117,38 @@ bool QChartWidget::isAxisAttached(QChartAxis* a) const
 void QChartWidget::setProjection(std::unique_ptr<QChartProjection> proj)
 {
     if (!proj) return;
+
+    // ★ "切换" = 原来已经有一个投影、现在换成另一个。构造期第一次设置不算切换。
+    //   判据用"旧投影是否存在"，不用相机状态（相机构造即有默认值，判不出来）。
+    const bool isSwitch = (m_projection != nullptr && m_projection.get() != proj.get());
+
     m_projection = std::move(proj);
     emit projectionChanged(m_projection.get());
     m_layoutDirty = true;
-    // 投影变化 → 用新投影重算相机窗口
-    if (QChartLayer* l = layer2D()) {
-        const QRectF db = dataBounds();
-        if (!db.isEmpty()) l->setViewRect(m_projection->computeViewRect(db));
+
+    QChartLayer* l = layer2D();
+    if (l) {
+        // 契约 S11：投影变化 = 映射改了 ⇒ 所有段的 cart 全部失效
+        //（段内容没变、不需要重建，只是算出来的 Cartesian 全过时了）
+        QChartScene& sc = l->scene();
+        for (QChartSegment& s : sc.axisSegments) s.cartValid = false;
+        for (QChartSegment& s : sc.seriesSegments) s.cartValid = false;
+
+        if (isSwitch) {
+            // ★★ 切换投影：**保相机、不保数据**。
+            //   Numeric 的语义随投影变（(θ,r) vs (x,y)），所以旧 Numeric 不能拿去喂新投影；
+            //   两个投影之间唯一能连起来的公共量是 **Cartesian 视图** ——
+            //   相机一个字节不动，用新投影从同一个视图反算 Numeric 写回轴。
+            //   （反向做法 computeViewRect(dataBounds) 会把旧语义的数字当新语义用，
+            //     实测把 −6..6 污染成 −8..4.5 且切回来也不还原。）
+            const QRectF vr = l->camera() ? l->camera()->viewRect() : QRectF();
+            if (vr.width() > 0.0 && vr.height() > 0.0)
+                updateAxes(vr);
+        } else {
+            // 初始化（原来没有投影）：保持既有行为 —— 数据 → 相机
+            const QRectF db = dataBounds();
+            if (!db.isEmpty()) l->setViewRect(m_projection->computeViewRect(db));
+        }
     }
     scheduleRepaint();
 }
@@ -289,28 +318,12 @@ void QChartWidget::layoutAxes()
     relayout();   // calculatePlotArea → 广播 plotAreaChanged + 摆放 GL 子控件
 }
 
-// ===== 渲染前：内容指纹注入（视图变化由相机 viewChanged 驱动收集，不再靠指纹）=====
+// ===== 渲染前（指纹机制已删除）=====
 
 void QChartWidget::onBeforePaint()
 {
-    if (!m_projection) return;
-    // 4g-fix（t58 F4）：内容贡献指纹注入（轴范围/刻度/子刻度/可见性/颜色 + 网格样式 + 数据版本）
-    if (QChartLayer* l = layer2D()) {
-        quint64 key = 0;
-        for (const QChartAxis* a : { l->axisX(), l->axisY() }) {
-            if (!a) { key = QChartAbstractLayer::contentHash(key, 0); continue; }
-            key = QChartAbstractLayer::contentHashReal(key, a->min());
-            key = QChartAbstractLayer::contentHashReal(key, a->max());
-            key = QChartAbstractLayer::contentHash(key, quint64(a->tickCount()));
-            key = QChartAbstractLayer::contentHash(key, quint64(a->subTickCount()));
-            key = QChartAbstractLayer::contentHash(key, a->isVisible() ? 1u : 2u);
-            key = QChartAbstractLayer::contentHash(key, quint64(a->color().rgba()));
-        }
-        key = QChartAbstractLayer::contentHash(key, l->isGridVisible() ? 1u : 2u);
-        key = QChartAbstractLayer::contentHash(key, quint64(l->gridColor().rgba()));
-        key = QChartAbstractLayer::contentHash(key, l->contentRevision());
-        l->setSceneContentState(key);
-    }
+    // 视图/内容指纹已全部删除：cull 每帧全量跑、cart 由段的 cartValid 判，
+    // 收集只由脏表驱动（轴走 invalidateAxis、系列走 invalidateSeries）。
 }
 
 // ===== 像素侧驱动（2D）：plotArea 变化 → layer 相机按 fit 模式适配宽比 =====
